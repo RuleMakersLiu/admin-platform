@@ -1013,19 +1013,19 @@ class DevPipelineManager:
             current_stage = pipe.current_stage
 
             if not confirmed:
+                # 用户拒绝，退回该阶段并重新生成
                 stages[current_stage]["status"] = "pending"
+                stages[current_stage]["output"] = ""
+                stages[current_stage]["structured_output"] = {}
+                stages[current_stage]["preview_html"] = ""
                 pipe.status = PipelineStatus.PENDING.value
                 if feedback:
                     pipe.user_request = feedback
                 pipe.stages_data = json.dumps(stages, ensure_ascii=False)
                 pipe.update_time = int(time.time() * 1000)
                 await session.commit()
-                return {
-                    "pipeline_id": pipeline_id,
-                    "stage": current_stage,
-                    "status": "revised",
-                    "message": "已退回，请重新执行",
-                }
+                # 自动重新执行该阶段（带 feedback 作为用户输入）
+                return await self.execute_stage(pipeline_id, feedback)
 
             # 确认通过，推进到下一阶段
             idx = STAGE_KEYS.index(current_stage)
@@ -1112,27 +1112,38 @@ class DevPipelineManager:
             prev_stage = STAGE_KEYS[idx - 1]
             stages = self._parse_stages(pipe)
 
-            # 重置从 prev_stage 到原 current_stage 之间的所有阶段
-            prev_idx = idx - 1
-            for i in range(prev_idx, idx + 1):
-                key = STAGE_KEYS[i]
-                stages[key]["status"] = "pending"
-                stages[key]["output"] = ""
-                stages[key]["structured_output"] = {}
-                stages[key]["error"] = ""
-                stages[key]["completed_at"] = None
+            # 重置当前阶段（清空输出）
+            current_key = STAGE_KEYS[idx]
+            stages[current_key]["status"] = "pending"
+            stages[current_key]["output"] = ""
+            stages[current_key]["structured_output"] = {}
+            stages[current_key]["error"] = ""
+            stages[current_key]["completed_at"] = None
+
+            # 回退阶段：保留输出，允许用户编辑/确认
+            stages[prev_stage]["status"] = "completed"
+            stages[prev_stage]["error"] = ""
 
             pipe.current_stage = prev_stage
-            pipe.status = PipelineStatus.PENDING.value
-            pipe.stages_data = json.dumps(stages, ensure_ascii=False)
             pipe.retry_count = 0
             pipe.update_time = int(time.time() * 1000)
+
+            # 如果回退到的阶段需要确认，设为 waiting_confirm
+            if _stage_needs_confirm(prev_stage):
+                pipe.status = PipelineStatus.WAITING_CONFIRM.value
+            else:
+                pipe.status = PipelineStatus.PENDING.value
+
+            pipe.stages_data = json.dumps(stages, ensure_ascii=False)
             await session.commit()
 
             return {
                 "pipeline_id": pipeline_id,
                 "rolled_back_to": prev_stage,
-                "status": "pending",
+                "status": pipe.status,
+                "need_confirm": _stage_needs_confirm(prev_stage),
+                "output": stages[prev_stage].get("output", ""),
+                "preview_html": stages[prev_stage].get("preview_html", ""),
             }
 
 
