@@ -180,7 +180,17 @@ def _build_prompt(stage_key: str, state: PipelineState) -> str:
 需求文档:
 {prev.get('requirement', {}).get('output', '未提供')}
 
-请输出完整的 HTML 页面（用 ```html 包裹），使用 Ant Design CDN 样式，内联 CSS，包含交互元素和响应式布局。""",
+请输出一个完整的单 HTML 文件预览（用 ```html 包裹），要求：
+1. 使用 Vue 2 + antd-vue 1.x 的 CDN 资源
+2. 通过 `<script src="https://cdn.jsdelivr.net/npm/vue@2.7.16/dist/vue.min.js"></script>` 引入 Vue
+3. 通过 `<script src="https://cdn.jsdelivr.net/npm/ant-design-vue@1.7.8/dist/antd.min.js"></script>` 引入 antd-vue
+4. 通过 `<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ant-design-vue@1.7.8/dist/antd.min.css">` 引入样式
+5. 使用 a-table、a-form、a-modal、a-card、a-button 等 antd-vue 组件
+6. 使用 a-layout（a-layout-sider + a-layout-content + a-layout-header）构建管理后台布局
+7. 包含完整的增删改查交互（列表、搜索、新增弹窗、编辑、删除确认）
+8. 页面要精致美观，有合理的间距、阴影、圆角
+9. 数据使用 mock 数据填充，表格至少 5 条记录
+10. 所有代码写在单个 HTML 文件中，可直接在浏览器打开预览""",
 
         "development_be": f"""基于以下需求和 UI 设计，生成后端代码。
 
@@ -205,9 +215,10 @@ UI 设计:
 UI 设计:
 {prev.get('ui_preview', {}).get('output', '未提供')}
 
-请输出:
-1. 前端页面代码（用 ```tsx 包裹）
-2. 组件代码
+请输出 Vue 2 + antd-vue 1.x 的前端代码:
+1. 页面 .vue 单文件组件代码（用 ```vue 包裹）
+2. 使用 antd-vue 1.x 组件: a-table, a-form, a-modal, a-card, a-button, a-input, a-select 等
+3. API 请求封装（使用 axios）
 
 每个代码块前用 `### 文件: 路径/文件名` 标注。""",
 

@@ -81,8 +81,10 @@ AGENT_PROMPTS = {
 3. 状态管理：管理应用状态
 
 ## 技术栈
-- React 18 + TypeScript + Ant Design 5
-- Vite 构建工具""",
+- Vue 2.x + JavaScript
+- antd-vue 1.x (Ant Design Vue)
+- 组件: a-table, a-form, a-modal, a-card, a-button 等
+- 样式: scoped CSS / Less""",
 
     AgentType.QA: """你是专业的测试工程师(QA)，负责质量保障。
 

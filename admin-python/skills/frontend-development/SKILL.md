@@ -1,13 +1,13 @@
 ---
 id: frontend_development
 name: frontend-development
-description: "根据需求生成前端页面代码，支持 React + Ant Design 5 组件开发。"
+description: "根据需求生成前端页面代码，使用 Vue 2 + antd-vue 1.x 组件开发。"
 version: 1.0.0
 category: development
 agent_type: FE
 metadata:
   hermes:
-    tags: [frontend, react, ant-design, code-generation]
+    tags: [frontend, vue2, antd-vue, code-generation]
     related_skills: [requirement-analysis, ui-preview, code-review]
 ---
 
@@ -15,17 +15,17 @@ metadata:
 
 ## When to Use
 - 需要根据需求生成前端页面代码
-- 需要创建 React 组件和页面
+- 需要创建 Vue 2 组件和页面
 - 需要实现表单、列表、详情等标准页面
 
 ## Instructions
 1. 接收需求描述和 UI 规范（如有）
 2. 分析页面类型（列表页 / 详情页 / 表单页 / 仪表盘）
-3. 生成页面组件代码（React + TypeScript）
-4. 使用 Ant Design 5 组件库
-5. 实现状态管理（Zustand）
-6. 生成 API 调用层代码
-7. 确保路径别名 `@/` 映射正确
+3. 生成 .vue 单文件组件代码
+4. 使用 antd-vue 1.x 组件: a-table, a-form, a-modal, a-card, a-button, a-input, a-select, a-date-picker 等
+5. 使用 Vue 2 Options API (data, methods, computed, watch, mounted)
+6. 使用 axios 进行 API 调用
+7. 使用 scoped style 编写样式
 
 ## Input
 - `requirement` (string, required): 需求描述
@@ -34,7 +34,7 @@ metadata:
 
 ## Output
 - `code` (object): 生成的前端代码，包含:
-  - `page`: 页面组件代码
+  - `page`: .vue 页面组件代码
   - `components`: 子组件代码
-  - `service`: API 调用层代码
-  - `store`: 状态管理代码
+  - `api`: API 调用层代码
+  - `router`: 路由配置代码

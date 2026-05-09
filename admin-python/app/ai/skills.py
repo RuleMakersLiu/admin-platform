@@ -430,7 +430,7 @@ async def ui_preview(requirement: str, **kwargs) -> Dict[str, Any]:
     agent = AgentService()
     result = await agent.chat(
         agent_type=AgentType.FE,
-        message=f"请根据以下需求生成UI预览HTML（使用Ant Design风格）:\n\n{requirement}",
+        message=f"请根据以下需求生成UI预览HTML（使用Vue 2 + antd-vue 1.x风格，包含CDN引用，可直接浏览器打开）:\n\n{requirement}",
         session_id=kwargs.get("session_id", ""),
     )
     return {"html": result}
