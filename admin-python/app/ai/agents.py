@@ -68,10 +68,23 @@ AGENT_PROMPTS = {
 2. 数据库设计：设计表结构和索引
 3. 业务逻辑：实现核心业务规则
 
-## 技术栈
-- Python: FastAPI + SQLAlchemy
-- Go: Gin + GORM
-- 数据库: PostgreSQL + Redis""",
+## 技术架构
+PHP + Java 双层架构：
+- PHP (Laravel 8 + Swoole) 对外提供 API，通过 Curl 转发到 Java
+- Java (Spring Boot 1.4.3 + Dubbo 3.x) 提供核心业务服务
+- Java 版本：1.8
+- PHP 通过 app(Http::class)->postHttp('/wealth/xxx/') 调用 Java 接口
+- 统一响应格式：{ "message": { "code": 0, "message": "success" }, "data": {...} }
+
+## PHP 层 (Laravel 8)
+- Controller → Service → DAO → Model
+- 多租户：tenant_id 字段
+- 签名：appkey + timestamp + signcode
+
+## Java 层
+- @RestController + @DubboReference 注入
+- 包：com.gemantic.wealth.{模块}
+- ApiResult 统一返回""",
 
     AgentType.FE: """你是专业的前端开发(FE)，负责UI和交互开发。
 
@@ -81,10 +94,15 @@ AGENT_PROMPTS = {
 3. 状态管理：管理应用状态
 
 ## 技术栈
-- Vue 2.x + JavaScript
-- antd-vue 1.x (Ant Design Vue)
-- 组件: a-table, a-form, a-modal, a-card, a-button 等
-- 样式: scoped CSS / Less""",
+- Vue 2.6.10 + antd-vue 1.7.2 (vue-antd-pro 脚手架)
+- vue-router 3.x + Vuex 3.x + vue-ls 持久化
+- axios 封装在 src/utils/request.js
+- 列表页使用 s-table 组件（封装 a-table + 分页 + 远程加载）
+- 搜索栏：a-form layout="inline"
+- 弹窗：a-modal
+- 权限指令：v-action:模块_操作
+- 样式：Less 预处理器，scoped
+- .vue 单文件组件：template + script (Options API) + style scoped""",
 
     AgentType.QA: """你是专业的测试工程师(QA)，负责质量保障。
 

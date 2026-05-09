@@ -134,33 +134,58 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 UI 设计参考:
 {{ui_preview_output}}
 
-## 后端技术栈（二选一，根据需求类型选择）
+## 系统架构（PHP 转发到 Java）
 
-### Java 后端（适用于企业级系统）
-- Spring Boot 2.x + MyBatis Plus
-- Dubbo 微服务：core 接口模块 + service 实现模块
-- 分层：Controller → Service → DAO → Model
-- 包结构：com.gemantic.wealth.glsw.{model,dto,service,controller}
+本系统采用 PHP + Java 双层架构：
+- PHP (Laravel 8 + Swoole) 对外提供 API，负责认证、参数校验、数据转发
+- Java (Spring Boot 1.4.3 + Dubbo 3.x) 提供核心业务服务
+- PHP 通过 Curl 调用 Java 的 HTTP 接口（非 Dubbo 直连），使用 app.java_api_url 配置的服务地址
+- 请求/响应格式统一：{ "message": { "code": 0, "message": "success" }, "data": {...} }
 
-### PHP 后端（适用于快速开发、SaaS 平台）
-- Laravel 8 + Swoole/LaravelS
-- 分层：Controller → Service → DAO → Model
-- 多租户隔离：tenant_id 字段
-- 包结构：app/Http/Controllers/{Feature}/ + app/Services/ + app/Http/Dao/
+### PHP 层 (Laravel 8 + Swoole/LaravelS)
+- 版本：PHP 7.4+, Laravel 8.83, Swoole/LaravelS
+- 分层：Controller → Service → DAO (Http\Models) → Model
+- HTTP 客户端：使用 Ixudra/Curl 封装，通过 app(Http::class)->postHttp() / getHttp() 调用 Java
+- 签名机制：appkey + timestamp + signcode (MD5)
+- 多租户：tenant_id 字段隔离
+- 控制器路径：app/Http/Controllers/Api/{Feature}Controller.php
+- 服务层路径：app/Http/Services/{Feature}Service.php
+- DAO层路径：app/Http/Dao/{Feature}Dao.php (直接操作数据库)
+- 模型路径：app/Http/Models/{Feature}.php
 
-## 前端技术栈（固定）
-- Vue 2.6.10 + antd-vue 1.7.2（基于 vue-antd-pro 脚手架）
+### Java 层 (Spring Boot 1.4.3 + Dubbo 3.x)
+- 版本：Java 1.8, Spring Boot 1.4.3.RELEASE, Dubbo 3.2.16
+- 模块结构：
+  - wealth-glsw-core: 接口定义 (model/dto/service/枚举)
+  - wealth-glsw-service: Dubbo 服务实现
+  - wealth-admin-home: Web 层 (Controller + DubboReference 调用)
+- 控制器：@RestController + @RequestMapping + @DubboReference 注入服务
+- 返回值：统一使用 ApiResult 封装
+- ORM：无 MyBatis，使用 Dubbo 服务接口操作数据
+- 包结构：com.gemantic.wealth.{模块}.controller/service/model/dto
+
+## 前端技术栈
+- Vue 2.6.10 + antd-vue 1.7.2 (vue-antd-pro 脚手架)
 - 路由：vue-router 3.x，配置在 src/router/
-- 状态管理：Vuex 3.x
-- 网络请求：axios，封装在 src/utils/request.js
-- 组件：使用 ant-design-vue 1.7.2 的 a-table, a-form, a-modal, a-card 等组件
-- 样式：Less 预处理器
+- 状态管理：Vuex 3.x + vue-ls 持久化
+- 网络请求：axios，封装在 src/utils/request.js，baseURL 通过环境变量配置
+- 列表页使用 s-table 组件（封装了 a-table + 分页 + 加载）
+- 表单使用 a-form (layout="inline" 搜索, 垂直布局编辑)
+- 弹窗使用 a-modal
+- 权限指令：v-action:xxx
+- 样式：Less 预处理器，scoped 样式
 
-请分别输出:
-1. 后端 API 代码（Java 用 ```java 包裹，PHP 用 ```php 包裹）
-2. 前端页面代码（用 ```vue 包裹，.vue 单文件组件格式）
-3. 数据库建表 SQL（用 ```sql 包裹）
-4. API 接口文档（用 ```json 包裹 OpenAPI 格式）
+请输出以下内容:
+1. PHP Controller（用 ```php 包裹）
+2. PHP Service（用 ```php 包裹）
+3. PHP DAO（如果需要直接数据库操作）（用 ```php 包裹）
+4. Java Controller（用 ```java 包裹）
+5. Java Service 接口 + 实现（用 ```java 包裹）
+6. Java Model/DTO（用 ```java 包裹）
+7. 前端列表页 .vue（用 ```vue 包裹）
+8. 前端表单页 .vue（用 ```vue 包裹）
+9. 前端 API 服务（用 ```js 包裹）
+10. 数据库建表 SQL（用 ```sql 包裹）
 
 每个代码块前用 `### 文件: 路径/文件名` 标注。""",
 
