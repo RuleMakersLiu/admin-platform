@@ -6,6 +6,7 @@ import {
   ClearOutlined,
   AudioOutlined,
   BulbOutlined,
+  StopOutlined,
 } from '@ant-design/icons';
 import type { ChatSettings } from '@/types/chat';
 import { useKeyboardShortcut } from '@/hooks/useChat';
@@ -17,8 +18,10 @@ const { Text } = Typography;
 // 聊天输入组件 Props
 interface ChatInputProps {
   onSend: (message: string) => void;
+  onCancel?: () => void;
   onClear?: () => void;
   disabled?: boolean;
+  isStreaming?: boolean;
   placeholder?: string;
   maxLength?: number;
   settings?: ChatSettings;
@@ -36,8 +39,10 @@ const QUICK_SUGGESTIONS = [
 
 const ChatInput: React.FC<ChatInputProps> = memo(({
   onSend,
+  onCancel,
   onClear,
   disabled = false,
+  isStreaming = false,
   placeholder = '输入消息，按 Enter 发送，Shift + Enter 换行',
   maxLength = 4000,
   settings,
@@ -91,9 +96,9 @@ const ChatInput: React.FC<ChatInputProps> = memo(({
         key: 'model',
         label: '模型',
         children: [
-          { key: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' },
-          { key: 'gpt-4', label: 'GPT-4' },
-          { key: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
+          { key: 'glm-4-flash', label: 'GLM-4 Flash' },
+          { key: 'glm-4-plus', label: 'GLM-4 Plus' },
+          { key: 'glm-4', label: 'GLM-4' },
         ],
         onClick: ({ key }: { key: string }) => {
           onSettingsChange?.({ ...settings!, model: key });
@@ -187,13 +192,13 @@ const ChatInput: React.FC<ChatInputProps> = memo(({
             </Tooltip>
           </Space>
 
-          <Tooltip title={canSend ? '发送消息' : '请输入内容'}>
+          <Tooltip title={isStreaming ? '停止生成' : canSend ? '发送消息' : '请输入内容'}>
             <Button
               type="primary"
-              icon={<SendOutlined />}
-              onClick={handleSend}
-              disabled={!canSend}
-              loading={disabled}
+              icon={isStreaming ? <StopOutlined /> : <SendOutlined />}
+              onClick={isStreaming ? onCancel : handleSend}
+              disabled={!isStreaming && !canSend}
+              danger={isStreaming}
               className="send-button"
             />
           </Tooltip>

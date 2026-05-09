@@ -9,6 +9,7 @@ from app.api.tasks import router as tasks_router
 from app.api.ai_upgrade import router as ai_upgrade_router
 from app.api.knowledge import router as knowledge_router
 from app.api.skills import router as skills_router
+from app.api.chat import router as chat_router
 from app.messaging.api import router as messaging_router
 
 api_router = APIRouter()
@@ -27,3 +28,4 @@ api_router.include_router(messaging_router)  # 多渠道消息路由
 api_router.include_router(ai_upgrade_router)  # AI自动升级路由
 api_router.include_router(knowledge_router)  # 知识库管理路由
 api_router.include_router(skills_router)  # Skills技能系统路由
+api_router.include_router(chat_router)  # 流式聊天路由

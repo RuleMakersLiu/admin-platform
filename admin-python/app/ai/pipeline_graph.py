@@ -1,36 +1,34 @@
-"""基于 LangGraph 的开发流水线引擎
+"""基于 LangGraph 的开发流水线引擎 - 优化版
 
 特性:
-  - StateGraph 编排 8 个阶段
+  - 原生 async node（无同步包装器）
+  - 模型路由（复杂推理用高性能模型，简单任务用快速模型）
+  - Token 使用量追踪
+  - 上下文窗口管理
   - 并行 BE + FE 开发
-  - 条件边：Code Review FAIL → 回退修复，Test FAIL → 回退修复
-  - Human-in-the-loop：需求/UI 预览使用 interrupt() 等待确认
-  - LLM 调用自动重试（指数退避）
-  - AgentMemory 记忆集成
-  - DevPipeline 数据库持久化
+  - 条件边：Code Review FAIL → 回退修复
+  - Human-in-the-loop：需求/UI 预览使用 interrupt()
 """
-import asyncio
 import json
 import logging
 import operator
 import time
 import uuid
 from datetime import datetime
-from enum import Enum
 from typing import Annotated, Any, Dict, List, Optional, TypedDict
 
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.types import interrupt, Command, Send, RetryPolicy
+from langgraph.types import interrupt, Command, Send
 
 from app.ai.agents import AgentService, AgentType
+from app.ai.model_router import model_router
 from app.models.agent_models import DevPipeline
 from app.services.memory_service import MemoryService, MemoryType
 from app.services.memory_manager import memory_manager
 from app.services.builtin_memory_provider import BuiltinMemoryProvider
 from app.core.database import async_session_maker
 
-# Initialize memory manager with built-in provider
 _builtin_memory = BuiltinMemoryProvider()
 _builtin_memory.initialize(session_id="", tenant_id=1)
 memory_manager.add_provider(_builtin_memory)
@@ -53,11 +51,9 @@ STAGE_DEFINITIONS = [
 ]
 
 
-# ==================== State 定义 ====================
+# ==================== State ====================
 
 class PipelineState(TypedDict, total=False):
-    """流水线状态（LangGraph 共享状态）"""
-    # 元信息
     pipeline_id: str
     project_id: str
     user_request: str
@@ -66,22 +62,12 @@ class PipelineState(TypedDict, total=False):
     status: str
     retry_count: int
     fix_feedback: str
-
-    # 阶段输出（每个阶段写入自己的 key）
     stages: Dict[str, Any]
-
-    # 并行开发结果
     be_output: str
     fe_output: str
-
-    # 条件分支标志
     review_passed: bool
     tests_passed: bool
-
-    # 消息累积
     messages: Annotated[list, operator.add]
-
-    # 中断控制
     confirmed: Optional[bool]
     feedback: str
 
@@ -99,6 +85,7 @@ def _init_stages() -> Dict[str, Any]:
             "error": "",
             "started_at": None,
             "completed_at": None,
+            "token_usage": {},
         }
         for s in STAGE_DEFINITIONS
     }
@@ -113,6 +100,7 @@ def _is_retriable(e: Exception) -> bool:
 
 async def _call_agent(agent_service: AgentService, session_id: str,
                        message: str, agent_type: str) -> str:
+    import asyncio
     last_error = None
     for attempt in range(MAX_LLM_RETRIES):
         try:
@@ -185,7 +173,7 @@ def _build_prompt(stage_key: str, state: PipelineState) -> str:
 请输出 Markdown 格式的 PRD 文档，包含:
 1. 项目概述  2. 功能需求列表（P0/P1/P2/P3）  3. 用户故事  4. 非功能需求  5. 验收标准
 
-用 ```prg 开始和 ``` 结束包裹整个 PRD 文档。""",
+用 ```prd 开始和 ``` 结束包裹整个 PRD 文档。""",
 
         "ui_preview": f"""基于以下需求文档，设计并生成 UI 界面预览。
 
@@ -318,10 +306,13 @@ def _parse_output(stage_key: str, raw: str) -> Dict[str, Any]:
             result["code_files"] = files
 
     if stage_key == "requirement":
-        for part in raw.split("```prg")[1:]:
-            end = part.find("```")
-            if end > 0:
-                result["prd_document"] = part[:end].strip()
+        for tag in ["```prd", "```"]:
+            parts = raw.split(tag)
+            if len(parts) > 1:
+                end = parts[1].find("```")
+                if end > 0:
+                    result["prd_document"] = parts[1][:end].strip()
+                    break
 
     if stage_key == "code_review":
         result["review_passed"] = "PASS" in raw and "FAIL" not in raw
@@ -341,7 +332,7 @@ def _parse_output(stage_key: str, raw: str) -> Dict[str, Any]:
     return result
 
 
-# ==================== Node 函数 ====================
+# ==================== Async Node 函数 ====================
 
 _agent_service = AgentService()
 
@@ -353,7 +344,7 @@ def _update_stage(stages: Dict, key: str, **kwargs) -> Dict:
 
 
 async def _run_stage(state: PipelineState, stage_key: str, agent_type: str) -> Dict:
-    """通用阶段执行函数"""
+    """通用异步阶段执行"""
     pipeline_id = state["pipeline_id"]
     session_id = f"{pipeline_id}_{stage_key}_{state.get('retry_count', 0)}"
     prompt = _build_prompt(stage_key, state)
@@ -368,6 +359,7 @@ async def _run_stage(state: PipelineState, stage_key: str, agent_type: str) -> D
         preview_html=parsed.get("preview_html", ""),
         code_files=parsed.get("code_files", {}),
         completed_at=now, started_at=now,
+        token_usage=model_router.get_usage_stats(hours=1),
     )
 
     await _save_memory(pipeline_id, stage_key, agent_type, raw[:300], state.get("tenant_id", 0))
@@ -379,15 +371,13 @@ async def _run_stage(state: PipelineState, stage_key: str, agent_type: str) -> D
     }
 
 
-def requirement_node(state: PipelineState) -> Dict:
+async def requirement_node(state: PipelineState) -> Dict:
     """需求分析节点（使用 interrupt 等待确认）"""
     pipeline_id = state["pipeline_id"]
-
-    # 检查是否已有输出（从 checkpoint 恢复）
     stages = state.get("stages", _init_stages())
     req_stage = stages.get("requirement", {})
+
     if req_stage.get("status") == "completed" and state.get("confirmed") is None:
-        # 首次完成，等待用户确认
         decision = interrupt({
             "stage": "requirement",
             "message": "需求文档已生成，请确认",
@@ -396,20 +386,19 @@ def requirement_node(state: PipelineState) -> Dict:
         })
         return {"confirmed": decision.get("confirmed", True), "feedback": decision.get("feedback", "")}
 
-    # 如果已确认，直接推进
     if state.get("confirmed") is True:
         return {"current_stage": "requirement", "status": "confirmed"}
 
-    # 否则执行 Agent
-    import asyncio
-    raw = asyncio.get_event_loop().run_until_complete(
-        _call_agent(_agent_service, f"{pipeline_id}_requirement", _build_prompt("requirement", state), AgentType.PM)
+    prompt = _build_prompt("requirement", state)
+    raw = await _call_agent(
+        _agent_service, f"{pipeline_id}_requirement", prompt, AgentType.PM,
     )
     parsed = _parse_output("requirement", raw)
+    now = datetime.now().isoformat()
     stages = _update_stage(stages, "requirement",
-                           status="completed", output=raw, structured_output=parsed, completed_at=datetime.now().isoformat())
+                           status="completed", output=raw,
+                           structured_output=parsed, completed_at=now)
 
-    # 等待用户确认
     decision = interrupt({
         "stage": "requirement",
         "message": "需求文档已生成，请确认",
@@ -425,28 +414,54 @@ def requirement_node(state: PipelineState) -> Dict:
     }
 
 
-# 由于 LangGraph nodes 不支持直接 async（部分版本），用 sync wrapper
-def _make_sync_node(stage_key: str, agent_type: str, check_interrupt: bool = False):
-    """创建同步 node 函数"""
-    def node(state: PipelineState) -> Dict:
-        loop = asyncio.new_event_loop()
-        try:
-            result = loop.run_until_complete(_run_stage(state, stage_key, agent_type))
-        finally:
-            loop.close()
+async def ui_preview_node(state: PipelineState) -> Dict:
+    """UI 预览节点（带确认）"""
+    result = await _run_stage(state, "ui_preview", "FE")
+    decision = interrupt({
+        "stage": "ui_preview",
+        "message": "UI预览已生成，请确认",
+        "output": result.get("stages", {}).get("ui_preview", {}).get("output", ""),
+        "need_confirm": True,
+    })
+    result["confirmed"] = decision.get("confirmed", True)
+    result["feedback"] = decision.get("feedback", "")
+    return result
 
-        if check_interrupt:
-            decision = interrupt({
-                "stage": stage_key,
-                "message": f"{stage_key} 已完成，请确认",
-                "output": result.get("stages", {}).get(stage_key, {}).get("output", ""),
-                "need_confirm": True,
-            })
-            result["confirmed"] = decision.get("confirmed", True)
-            result["feedback"] = decision.get("feedback", "")
 
-        return result
-    return node
+async def development_be_node(state: PipelineState) -> Dict:
+    """后端开发节点"""
+    result = await _run_stage(state, "development_be", "BE")
+    be_output = result.get("stages", {}).get("development_be", {}).get("output", "")
+    result["be_output"] = be_output
+    return result
+
+
+async def development_fe_node(state: PipelineState) -> Dict:
+    """前端开发节点"""
+    result = await _run_stage(state, "development_fe", "FE")
+    fe_output = result.get("stages", {}).get("development_fe", {}).get("output", "")
+    result["fe_output"] = fe_output
+    return result
+
+
+async def code_review_node(state: PipelineState) -> Dict:
+    return await _run_stage(state, "code_review", "QA")
+
+
+async def testing_node(state: PipelineState) -> Dict:
+    return await _run_stage(state, "testing", "QA")
+
+
+async def commit_node(state: PipelineState) -> Dict:
+    return await _run_stage(state, "commit", "PJM")
+
+
+async def deploy_node(state: PipelineState) -> Dict:
+    return await _run_stage(state, "deploy", "PJM")
+
+
+async def report_node(state: PipelineState) -> Dict:
+    return await _run_stage(state, "report", "RPT")
 
 
 # ==================== 条件边 ====================
@@ -458,7 +473,6 @@ def after_requirement(state: PipelineState) -> str:
 
 
 def after_ui_preview(state: PipelineState) -> list:
-    """UI 预览确认后，并行启动 BE 和 FE 开发"""
     if state.get("confirmed") is False:
         return [END]
     return [Send("development_be", state), Send("development_fe", state)]
@@ -493,14 +507,11 @@ def after_testing(state: PipelineState) -> str:
 # ==================== 构建图 ====================
 
 def build_pipeline_graph():
-    """构建 LangGraph 流水线图"""
     builder = StateGraph(PipelineState)
 
-    # 添加节点
-    builder.add_node("requirement", _make_sync_node("requirement", "PM", check_interrupt=True))
-    builder.add_node("ui_preview", _make_sync_node("ui_preview", "FE", check_interrupt=True))
+    builder.add_node("requirement", requirement_node)
+    builder.add_node("ui_preview", ui_preview_node)
 
-    # 并行开发
     def start_dev(state: PipelineState) -> Dict:
         return {
             "retry_count": state.get("retry_count", 0) + 1,
@@ -512,8 +523,8 @@ def build_pipeline_graph():
         }
 
     builder.add_node("start_dev", start_dev)
-    builder.add_node("development_be", _make_sync_node("development_be", "BE"))
-    builder.add_node("development_fe", _make_sync_node("development_fe", "FE"))
+    builder.add_node("development_be", development_be_node)
+    builder.add_node("development_fe", development_fe_node)
 
     def merge_dev(state: PipelineState) -> Dict:
         be = state.get("be_output", "")
@@ -529,14 +540,12 @@ def build_pipeline_graph():
 
     builder.add_node("merge_dev", merge_dev)
 
-    # 后续阶段
-    builder.add_node("code_review", _make_sync_node("code_review", "QA"))
-    builder.add_node("testing", _make_sync_node("testing", "QA"))
-    builder.add_node("commit", _make_sync_node("commit", "PJM"))
-    builder.add_node("deploy", _make_sync_node("deploy", "PJM"))
-    builder.add_node("report", _make_sync_node("report", "RPT"))
+    builder.add_node("code_review", code_review_node)
+    builder.add_node("testing", testing_node)
+    builder.add_node("commit", commit_node)
+    builder.add_node("deploy", deploy_node)
+    builder.add_node("report", report_node)
 
-    # 添加边
     builder.add_edge(START, "requirement")
     builder.add_conditional_edges("requirement", after_requirement)
     builder.add_conditional_edges("ui_preview", after_ui_preview)
@@ -553,11 +562,9 @@ def build_pipeline_graph():
     return builder
 
 
-# ==================== 持久化检查点 ====================
+# ==================== 持久化 ====================
 
 class PipelineCheckpointer:
-    """将 LangGraph 状态同步到 DevPipeline 数据库模型"""
-
     @staticmethod
     async def save_to_db(state: PipelineState):
         async with async_session_maker() as session:
@@ -599,18 +606,14 @@ class PipelineCheckpointer:
             }
 
 
-# ==================== 流水线管理器（对外接口） ====================
+# ==================== 流水线管理器 ====================
 
 class DevPipelineManager:
-    """流水线管理器（LangGraph 驱动）"""
-
     def __init__(self):
-        self.graph = build_pipeline_graph().compile(
-            checkpointer=MemorySaver(),
-        )
+        self.graph = build_pipeline_graph().compile(checkpointer=MemorySaver())
 
     async def create_pipeline(self, project_id: str = "", user_request: str = "",
-                              tenant_id: int = 0, creator_id: int = 0) -> str:
+                              tenant_id: int = 0, creator_id: int = 0, **kwargs) -> str:
         pipeline_id = f"pipe_{uuid.uuid4().hex[:12]}"
         now = int(time.time() * 1000)
 
@@ -629,12 +632,10 @@ class DevPipelineManager:
         return pipeline_id
 
     async def execute_stage(self, pipeline_id: str, user_input: str = "") -> Dict[str, Any]:
-        """执行流水线（运行 LangGraph）"""
         state = await PipelineCheckpointer.load_from_db(pipeline_id)
         if not state:
             raise ValueError(f"流水线不存在: {pipeline_id}")
 
-        # 补充运行时状态
         state.update({
             "be_output": "", "fe_output": "",
             "review_passed": False, "tests_passed": False,
@@ -652,7 +653,6 @@ class DevPipelineManager:
             return self._format_result(result)
         except Exception as e:
             logger.error(f"Pipeline {pipeline_id} failed: {e}")
-            # Persist failure status to DB
             state["status"] = "failed"
             stages = state.get("stages", {})
             current = state.get("current_stage", "")
@@ -661,15 +661,10 @@ class DevPipelineManager:
                 stages[current]["error"] = str(e)
             state["stages"] = stages
             await PipelineCheckpointer.save_to_db(state)
-            return {
-                "pipeline_id": pipeline_id,
-                "status": "failed",
-                "error": str(e),
-            }
+            return {"pipeline_id": pipeline_id, "status": "failed", "error": str(e)}
 
     async def confirm_stage(self, pipeline_id: str, confirmed: bool,
                             feedback: str = "") -> Dict[str, Any]:
-        """用户确认当前阶段（通过 Command resume）"""
         config = {"configurable": {"thread_id": pipeline_id}}
 
         try:
@@ -681,7 +676,6 @@ class DevPipelineManager:
             return self._format_result(result)
         except Exception as e:
             logger.error(f"Pipeline {pipeline_id} confirm failed: {e}")
-            # Persist failure status to DB
             state = await PipelineCheckpointer.load_from_db(pipeline_id) or {}
             state["status"] = "failed"
             stages = state.get("stages", {})

@@ -65,9 +65,9 @@ export const useChatStore = create<ChatState>()(
       messagesMap: {},
       connectionStatus: 'disconnected',
       settings: {
-        model: 'gpt-3.5-turbo',
+        model: 'glm-4-flash',
         temperature: 0.7,
-        maxTokens: 2000,
+        maxTokens: 4096,
         streamEnabled: true,
       },
       theme: 'light',

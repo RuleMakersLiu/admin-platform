@@ -7,7 +7,7 @@ from typing import AsyncGenerator, Dict, List, Optional
 from datetime import datetime
 import uuid
 
-from app.ai.glm_provider_streaming import ChatGLM
+from app.ai.glm_provider import ChatGLM
 from app.core.config import settings
 from app.core.redis import get_redis_client
 

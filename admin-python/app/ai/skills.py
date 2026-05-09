@@ -190,8 +190,8 @@ class SkillRegistry:
             skills = [s for s in skills if s.agent_type == agent_type]
         return skills
 
-    async def execute(self, skill_id: str, **kwargs) -> SkillResult:
-        """执行一个 Skill"""
+    async def execute(self, skill_id: str, timeout_seconds: int = 120, **kwargs) -> SkillResult:
+        """执行一个 Skill，支持超时控制"""
         execution_id = f"SKEX-{uuid.uuid4().hex[:12].upper()}"
 
         if skill_id not in self._handlers:
@@ -207,7 +207,7 @@ class SkillRegistry:
         try:
             result = handler(**kwargs)
             if asyncio.iscoroutine(result):
-                result = await result
+                result = await asyncio.wait_for(result, timeout=timeout_seconds)
 
             return SkillResult(
                 skill_id=skill_id,
@@ -216,9 +216,65 @@ class SkillRegistry:
                 output=result,
                 execution_time_ms=int((time.time() - start) * 1000),
             )
+        except asyncio.TimeoutError:
+            logger.error(f"Skill execution timed out: {skill_id} ({timeout_seconds}s)")
+            return SkillResult(
+                skill_id=skill_id,
+                execution_id=execution_id,
+                status=SkillStatus.FAILED,
+                error=f"Execution timed out after {timeout_seconds}s",
+                execution_time_ms=int((time.time() - start) * 1000),
+            )
         except Exception as e:
             logger.error(f"Skill execution failed: {skill_id} - {e}")
             return SkillResult(
+                skill_id=skill_id,
+                execution_id=execution_id,
+                status=SkillStatus.FAILED,
+                error=str(e),
+                execution_time_ms=int((time.time() - start) * 1000),
+            )
+
+    async def execute_stream(self, skill_id: str, **kwargs):
+        """流式执行 Skill，yield 中间结果"""
+        if skill_id not in self._handlers:
+            yield SkillResult(
+                skill_id=skill_id,
+                execution_id=f"SKEX-{uuid.uuid4().hex[:12].upper()}",
+                status=SkillStatus.FAILED,
+                error=f"Skill not found: {skill_id}",
+            )
+            return
+
+        handler = self._handlers[skill_id]
+        start = time.time()
+        execution_id = f"SKEX-{uuid.uuid4().hex[:12].upper()}"
+
+        try:
+            result = handler(**kwargs)
+            if asyncio.iscoroutine(result):
+                # 如果 handler 是 async generator，逐个 yield
+                if hasattr(result, '__aiter__'):
+                    async for chunk in result:
+                        yield SkillResult(
+                            skill_id=skill_id,
+                            execution_id=execution_id,
+                            status=SkillStatus.RUNNING,
+                            output=chunk,
+                            execution_time_ms=int((time.time() - start) * 1000),
+                        )
+                else:
+                    result = await result
+
+            yield SkillResult(
+                skill_id=skill_id,
+                execution_id=execution_id,
+                status=SkillStatus.COMPLETED,
+                output=result,
+                execution_time_ms=int((time.time() - start) * 1000),
+            )
+        except Exception as e:
+            yield SkillResult(
                 skill_id=skill_id,
                 execution_id=execution_id,
                 status=SkillStatus.FAILED,

@@ -1,136 +1,179 @@
-"""GLM LLM Provider（支持 GLM-4 和 GLM-5）"""
-from typing import Optional
-import httpx
+"""GLM LLM Provider - 统一版本，支持流式和非流式响应
+
+支持的模型: GLM-4, GLM-4-Plus, GLM-4-Flash, GLM-5
+"""
 import json
+import logging
+from typing import AsyncGenerator, Optional
+
+import httpx
 
 from app.core.config import settings
 
+logger = logging.getLogger(__name__)
 
-class GLMChatMessage:
-    """GLM 聊天消息"""
-    def __init__(self, role: str, content: str):
-        self.role = role
-        self.content = content
-    
-    def to_dict(self):
-        return {"role": self.role, "content": self.content}
+GLM_API_URL = "https://open.bigmodel.cn/api/paas/v4"
+
+# 模型配置: model_name -> (max_tokens_default, supports_tools)
+MODEL_CONFIG = {
+    "glm-4": (4096, False),
+    "glm-4-plus": (4096, True),
+    "glm-4-flash": (4096, True),
+    "glm-4-long": (16384, False),
+    "glm-5": (4096, True),
+}
 
 
-class GLMChatCompletion:
-    """GLM 聊天补全"""
-    
-    API_URL = "https://open.bigmodel.cn/api/coding/paas/v4"
-    
-    def __init__(
-        self,
-        model: str = "glm-4",
-        api_key: Optional[str] = None,
-        max_tokens: int = 4096,
-        temperature: float = 0.7,
-    ):
-        self.model = model
-        self.api_key = api_key or settings.glm_api_key
-        self.max_tokens = max_tokens
-        self.temperature = temperature
-        
-        if not self.api_key:
-            raise ValueError("GLM API Key 未配置")
-    
-    async def ainvoke(self, messages: list) -> "GLMMessage":
-        """异步调用 GLM API"""
-        # 转换消息格式
-        glm_messages = [
-            GLMChatMessage(msg.get("role", "user"), msg.get("content", "")).to_dict()
-            for msg in messages
-        ]
-        
-        # 准备请求
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "model": self.model,
-            "messages": glm_messages,
-            "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
-            "stream": False
-        }
-        
-        # 发送请求（增加超时时间到120秒）
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(
-                f"{self.API_URL}/chat/completions",
-                headers=headers,
-                json=payload
-            )
-            response.raise_for_status()
-            result = response.json()
-        
-        # 提取响应（content 可能是字符串或 content blocks 数组）
-        content = result["choices"][0]["message"]["content"]
-        if isinstance(content, list):
-            # GLM 多模态格式: [{"type": "text", "text": "..."}]
-            parts = []
-            for item in content:
-                if isinstance(item, dict):
-                    parts.append(item.get("text", str(item)))
-                else:
-                    parts.append(str(item))
-            content = "\n".join(parts)
-        elif not isinstance(content, str):
-            content = str(content)
-        return GLMMessage(content)
-    
-    def invoke(self, messages: list) -> "GLMMessage":
-        """同步调用 GLM API"""
-        import asyncio
-        return asyncio.run(self.ainvoke(messages))
+def _parse_content(raw) -> str:
+    """统一处理 content 字段（字符串或 content blocks 数组）"""
+    if isinstance(raw, str):
+        return raw
+    if isinstance(raw, list):
+        parts = []
+        for item in raw:
+            if isinstance(item, dict):
+                parts.append(item.get("text", str(item)))
+            else:
+                parts.append(str(item))
+        return "\n".join(parts)
+    return str(raw) if raw is not None else ""
 
 
 class GLMMessage:
-    """GLM 响应消息"""
-    def __init__(self, content: str):
-        self.content = content
-    
+    """GLM 响应消息，兼容 LangChain 接口"""
+
+    def __init__(self, content: str, usage: Optional[dict] = None):
+        self._content = content
+        self.usage = usage or {}
+
     @property
     def content(self) -> str:
         return self._content
-    
+
     @content.setter
     def content(self, value: str):
         self._content = value
 
 
 class ChatGLM:
-    """GLM 聊天类（兼容 LangChain 接口）"""
-    
+    """GLM 聊天类（兼容 LangChain 接口），统一支持流式和非流式"""
+
     def __init__(
         self,
-        model: str = "glm-5",
-        max_tokens: int = 4096,
+        model: str = "glm-4-flash",
+        max_tokens: Optional[int] = None,
         api_key: Optional[str] = None,
         temperature: float = 0.7,
     ):
         self.model = model
-        self.max_tokens = max_tokens
-        self.api_key = api_key
+        self.api_key = api_key or settings.zai_api_key
+        config = MODEL_CONFIG.get(model, (4096, False))
+        self.max_tokens = max_tokens or config[0]
         self.temperature = temperature
-        self._client = None
-    
+        self._client: Optional[httpx.AsyncClient] = None
+
+        if not self.api_key:
+            raise ValueError("GLM API Key 未配置")
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=120.0)
+        return self._client
+
+    async def close(self):
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
+
+    def _build_headers(self) -> dict:
+        return {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+    def _build_payload(self, messages: list, stream: bool = False) -> dict:
+        glm_messages = []
+        for msg in messages:
+            if isinstance(msg, dict):
+                glm_messages.append({
+                    "role": msg.get("role", "user"),
+                    "content": msg.get("content", ""),
+                })
+            elif hasattr(msg, "role") and hasattr(msg, "content"):
+                glm_messages.append({"role": msg.role, "content": msg.content})
+            else:
+                glm_messages.append({"role": "user", "content": str(msg)})
+
+        return {
+            "model": self.model,
+            "messages": glm_messages,
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
+            "stream": stream,
+        }
+
     async def ainvoke(self, messages: list) -> GLMMessage:
-        """异步调用"""
-        if self._client is None:
-            self._client = GLMChatCompletion(
-                model=self.model,
-                api_key=self.api_key,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-            )
-        return await self._client.ainvoke(messages)
-    
+        """异步非流式调用"""
+        client = await self._get_client()
+        payload = self._build_payload(messages, stream=False)
+
+        response = await client.post(
+            f"{GLM_API_URL}/chat/completions",
+            headers=self._build_headers(),
+            json=payload,
+        )
+        response.raise_for_status()
+        result = response.json()
+
+        content = _parse_content(result["choices"][0]["message"]["content"])
+        usage = result.get("usage", {})
+        return GLMMessage(content=content, usage=usage)
+
+    async def astream(self, messages: list) -> AsyncGenerator[str, None]:
+        """异步流式调用，yield SSE 格式的 JSON 字符串"""
+        client = await self._get_client()
+        payload = self._build_payload(messages, stream=True)
+
+        full_content = ""
+
+        async with client.stream(
+            "POST",
+            f"{GLM_API_URL}/chat/completions",
+            headers=self._build_headers(),
+            json=payload,
+        ) as response:
+            response.raise_for_status()
+
+            async for line in response.aiter_lines():
+                if not line or line == "data: [DONE]":
+                    continue
+                if not line.startswith("data: "):
+                    continue
+
+                try:
+                    data = json.loads(line[6:])
+                    choices = data.get("choices", [])
+                    if not choices:
+                        continue
+
+                    delta = choices[0].get("delta", {})
+                    chunk = delta.get("content", "")
+                    if chunk:
+                        full_content += chunk
+                        yield json.dumps({
+                            "type": "chunk",
+                            "content": chunk,
+                            "done": False,
+                        }, ensure_ascii=False)
+                except json.JSONDecodeError:
+                    continue
+
+        yield json.dumps({
+            "type": "done",
+            "content": full_content,
+            "done": True,
+        }, ensure_ascii=False)
+
     def invoke(self, messages: list) -> GLMMessage:
-        """同步调用"""
+        """同步调用（阻塞，仅用于简单场景）"""
         import asyncio
         return asyncio.run(self.ainvoke(messages))
