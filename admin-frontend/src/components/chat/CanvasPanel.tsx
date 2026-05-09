@@ -192,7 +192,7 @@ const HtmlPreview: React.FC<{
           ref={iframeRef}
           className="html-preview-iframe"
           title="HTML Preview"
-          sandbox="allow-same-origin allow-popups allow-forms"
+          sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
           onError={handleError}
         />
       </div>

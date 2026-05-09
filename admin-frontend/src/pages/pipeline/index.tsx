@@ -1021,7 +1021,7 @@ const PipelinePage: React.FC = () => {
                         border: '1px solid rgba(0, 212, 255, 0.15)',
                         borderRadius: 8,
                       }}
-                      sandbox="allow-same-origin"
+                      sandbox="allow-same-origin allow-scripts"
                       title="UI Preview"
                     />
                   ) : (
@@ -1029,7 +1029,6 @@ const PipelinePage: React.FC = () => {
                   )}
                 </div>
               )}
-
               {/* UI Preview Button */}
               {(activeStageKey === 'ui_preview' && (currentStage?.status === 'completed' || isWaitingConfirm)) && (
                 <Button
@@ -1283,7 +1282,7 @@ const PipelinePage: React.FC = () => {
               border: '1px solid rgba(0, 212, 255, 0.15)',
               borderRadius: 10,
             }}
-            sandbox="allow-same-origin"
+            sandbox="allow-same-origin allow-scripts"
             title="UI Preview"
           />
         ) : (
