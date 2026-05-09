@@ -286,13 +286,21 @@ def _parse_agent_output(stage_key: str, raw_output: str) -> Dict[str, Any]:
 
     if stage_key == "ui_preview":
         html_blocks = []
-        parts = raw_output.split("```html")
-        for part in parts[1:]:
-            end = part.find("```")
-            if end > 0:
-                html_blocks.append(part[:end].strip())
-        if html_blocks:
-            result["preview_html"] = html_blocks[0]
+        import re
+        # 匹配 ```html 或 ```HTML 后面的内容，直到下一个 ```
+        pattern = re.compile(r"```(?:html|HTML)\s*\n(.*?)```", re.DOTALL)
+        matches = pattern.findall(raw_output)
+        if matches:
+            result["preview_html"] = matches[0].strip()
+        else:
+            # fallback: 尝试找 <!DOCTYPE html> 或 <html 标签
+            doctype_idx = raw_output.find("<!DOCTYPE")
+            html_idx = raw_output.find("<html")
+            start = min(i for i in [doctype_idx, html_idx] if i >= 0) if any(i >= 0 for i in [doctype_idx, html_idx]) else -1
+            if start >= 0:
+                end = raw_output.rfind("</html>")
+                if end > start:
+                    result["preview_html"] = raw_output[start:end + len("</html>")].strip()
 
     if stage_key == "development":
         files = {}

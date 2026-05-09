@@ -286,13 +286,19 @@ def _parse_output(stage_key: str, raw: str) -> Dict[str, Any]:
     result = {"output": raw}
 
     if stage_key == "ui_preview":
-        html_blocks = []
-        for part in raw.split("```html")[1:]:
-            end = part.find("```")
-            if end > 0:
-                html_blocks.append(part[:end].strip())
-        if html_blocks:
-            result["preview_html"] = html_blocks[0]
+        import re
+        pattern = re.compile(r"```(?:html|HTML)\s*\n(.*?)```", re.DOTALL)
+        matches = pattern.findall(raw)
+        if matches:
+            result["preview_html"] = matches[0].strip()
+        else:
+            doctype_idx = raw.find("<!DOCTYPE")
+            html_idx = raw.find("<html")
+            start = min(i for i in [doctype_idx, html_idx] if i >= 0) if any(i >= 0 for i in [doctype_idx, html_idx]) else -1
+            if start >= 0:
+                end = raw.rfind("</html>")
+                if end > start:
+                    result["preview_html"] = raw[start:end + len("</html>")].strip()
 
     if stage_key in ("development_be", "development_fe", "development"):
         files = {}
