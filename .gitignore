@@ -1,0 +1,84 @@
+# Environment files (NEVER commit secrets)
+.env
+.env.*
+!.env.example
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+
+# Go
+vendor/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+# Compiled Go binaries
+admin-gateway/gateway
+admin-gateway/bin/
+admin-deploy/deploy
+admin-agent/admin-agent
+admin-agent/agent
+admin-config/config
+admin-config/bin/
+admin-ws/bin/
+admin-generator/cmd/server
+admin-deploy/cmd/server
+admin-agent/cmd/server
+admin-gateway/cmd/server
+admin-config/cmd/main
+admin-ws/cmd/server
+
+# Java
+target/
+*.class
+*.jar
+
+# Docker
+docker/data/
+
+# Logs
+*.log
+logs/
+
+# Runtime artifacts
+*.pid
+service.pid
+ai_news_state.json
+
+# Session/completion reports (regenerated)
+*_REPORT_*.md
+*_COMPLETION_*.md
+FIX_REPORT_*.md
+COMPLETION_SUMMARY_*.md
+agent_test_report.json
+ai_optimization_report.json
+flow_test_report.json
+test_report.json
+test-results.json
+
+# Serena
+.serena/memories/

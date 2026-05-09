@@ -1,0 +1,157 @@
+.agent-column {
+  flex: 0 0 300px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #fafafa;
+  border-radius: 8px;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.agent-column-drag-over {
+  background: #e6f7ff;
+  box-shadow: 0 0 0 2px #1890ff inset;
+}
+
+.agent-header {
+  margin: 12px;
+  border-radius: 8px;
+}
+
+.agent-header-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 8px;
+}
+
+.agent-avatar {
+  flex-shrink: 0;
+}
+
+.agent-name {
+  margin: 0 !important;
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.agent-status-tag {
+  margin: 0;
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.agent-load {
+  font-size: 11px;
+}
+
+.agent-stats {
+  margin: 8px 0;
+}
+
+.stat-tag {
+  margin: 0;
+  padding: 0 8px;
+  font-size: 11px;
+  line-height: 20px;
+  border-radius: 10px;
+}
+
+.agent-specialties {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.specialty-tag {
+  margin: 0;
+  padding: 0 6px;
+  font-size: 10px;
+  line-height: 16px;
+  background: transparent;
+  border: 1px dashed #d9d9d9;
+}
+
+.agent-tasks {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 12px 12px;
+}
+
+.empty-tasks {
+  margin-top: 40px;
+}
+
+.empty-tasks .ant-empty-description {
+  font-size: 12px;
+  color: #8c8c8c;
+}
+
+.add-task-btn {
+  margin: 12px;
+  border-radius: 6px;
+  border-style: dashed;
+  color: #8c8c8c;
+}
+
+.add-task-btn:hover {
+  color: #1890ff;
+  border-color: #1890ff;
+}
+
+/* 滚动条样式 */
+.agent-tasks::-webkit-scrollbar {
+  width: 6px;
+}
+
+.agent-tasks::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.agent-tasks::-webkit-scrollbar-thumb {
+  background: #d9d9d9;
+  border-radius: 3px;
+}
+
+.agent-tasks::-webkit-scrollbar-thumb:hover {
+  background: #bfbfbf;
+}
+
+/* 暗色主题 */
+.dark .agent-column {
+  background: #141414;
+}
+
+.dark .agent-column-drag-over {
+  background: #111d2c;
+}
+
+.dark .agent-header {
+  background: #1f1f1f;
+}
+
+.dark .specialty-tag {
+  border-color: #434343;
+  color: #8c8c8c;
+}
+
+.dark .add-task-btn {
+  color: #8c8c8c;
+  border-color: #434343;
+}
+
+.dark .add-task-btn:hover {
+  color: #1890ff;
+  border-color: #1890ff;
+}
+
+.dark .agent-tasks::-webkit-scrollbar-thumb {
+  background: #434343;
+}
+
+.dark .agent-tasks::-webkit-scrollbar-thumb:hover {
+  background: #595959;
+}

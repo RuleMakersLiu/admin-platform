@@ -1,0 +1,113 @@
+/* 消息列表容器 */
+.message-list {
+  height: 100%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--message-list-bg, #ffffff);
+}
+
+/* 加载更多指示器 */
+.load-more-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  color: var(--text-color-secondary, rgba(0, 0, 0, 0.45));
+  font-size: 14px;
+}
+
+/* 错误提示 */
+.message-list-error {
+  margin: 16px;
+}
+
+/* 加载中 */
+.message-list-loading {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 32px;
+}
+
+/* 空状态 */
+.message-list-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 40px;
+  text-align: center;
+  color: var(--text-color-secondary, rgba(0, 0, 0, 0.45));
+}
+
+.message-list-empty .empty-icon {
+  font-size: 64px;
+  color: var(--primary-color, #1890ff);
+  margin-bottom: 24px;
+  opacity: 0.6;
+}
+
+.message-list-empty h3 {
+  margin: 0 0 8px 0;
+  font-size: 20px;
+  font-weight: 500;
+  color: var(--text-color, rgba(0, 0, 0, 0.88));
+}
+
+.message-list-empty p {
+  margin: 0;
+  font-size: 14px;
+}
+
+/* 暗色主题 */
+[data-theme='dark'] .message-list {
+  background: var(--message-list-bg-dark, #1e1e1e);
+}
+
+[data-theme='dark'] .message-list-empty h3 {
+  color: var(--text-color-dark, #e0e0e0);
+}
+
+/* 滚动条样式 */
+.message-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.message-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.message-list::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb, #d9d9d9);
+  border-radius: 4px;
+}
+
+.message-list::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover, #bfbfbf);
+}
+
+[data-theme='dark'] .message-list::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb-dark, #4a4a4a);
+}
+
+[data-theme='dark'] .message-list::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover-dark, #5a5a5a);
+}
+
+/* 响应式 */
+@media (max-width: 768px) {
+  .message-list-empty {
+    padding: 24px;
+  }
+
+  .message-list-empty .empty-icon {
+    font-size: 48px;
+  }
+
+  .message-list-empty h3 {
+    font-size: 18px;
+  }
+}

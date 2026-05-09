@@ -1,0 +1,398 @@
+/* CanvasPanel 组件样式 */
+
+/* ========== 主容器 ========== */
+.canvas-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--canvas-bg, #ffffff);
+  border: 1px solid var(--border-color, #f0f0f0);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.canvas-panel.dark {
+  --canvas-bg: #1e1e1e;
+  --toolbar-bg: #252525;
+  --border-color: #434343;
+  --text-color: #e0e0e0;
+  --text-secondary: rgba(255, 255, 255, 0.45);
+}
+
+/* ========== 工具栏 ========== */
+.canvas-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 16px;
+  background: var(--toolbar-bg, #fafafa);
+  border-bottom: 1px solid var(--border-color, #f0f0f0);
+  min-height: 48px;
+  flex-shrink: 0;
+}
+
+.canvas-panel.dark .canvas-toolbar {
+  background: #252525;
+  border-bottom-color: #434343;
+}
+
+.toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.canvas-title {
+  font-size: 14px;
+  color: var(--text-color, #333);
+}
+
+.canvas-panel.dark .canvas-title {
+  color: #e0e0e0;
+}
+
+/* 视图切换标签 */
+.view-tabs {
+  margin-bottom: -8px;
+}
+
+.view-tabs .ant-tabs-nav {
+  margin-bottom: 0;
+}
+
+.view-tabs .ant-tabs-tab {
+  padding: 4px 12px;
+  font-size: 13px;
+}
+
+.view-tabs .ant-tabs-tab span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.toolbar-right {
+  display: flex;
+  align-items: center;
+}
+
+/* ========== 内容区域 ========== */
+.canvas-content {
+  flex: 1;
+  overflow: auto;
+  position: relative;
+}
+
+/* 空状态 */
+.canvas-empty {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100%;
+  min-height: 200px;
+}
+
+/* ========== 代码查看器 ========== */
+.code-viewer {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #f6f8fa;
+}
+
+.code-viewer.dark {
+  background: #1e1e1e;
+}
+
+.code-viewer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 16px;
+  background: #e8e8e8;
+  border-bottom: 1px solid #d9d9d9;
+}
+
+.code-viewer.dark .code-viewer-header {
+  background: #2d2d2d;
+  border-bottom-color: #434343;
+}
+
+.code-viewer-content {
+  flex: 1;
+  margin: 0;
+  padding: 16px;
+  overflow: auto;
+  font-family: 'SF Mono', 'Fira Code', 'Fira Mono', Consolas, Monaco, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #333;
+}
+
+.code-viewer.dark .code-viewer-content {
+  color: #e0e0e0;
+}
+
+/* ========== HTML 预览 ========== */
+.html-preview-wrapper {
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  background: #f5f5f5;
+  padding: 16px;
+}
+
+.canvas-panel.dark .html-preview-wrapper {
+  background: #141414;
+}
+
+.html-preview-loading {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 10;
+}
+
+.html-preview-container {
+  width: 100%;
+  height: 100%;
+  background: #ffffff;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+}
+
+.canvas-panel.dark .html-preview-container {
+  background: #1e1e1e;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.html-preview-iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: #ffffff;
+}
+
+.html-preview-error {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100%;
+  min-height: 200px;
+}
+
+/* ========== 分屏视图 ========== */
+.canvas-split-view {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+}
+
+.canvas-split-preview {
+  flex: 1;
+  border-right: 1px solid var(--border-color, #f0f0f0);
+  overflow: auto;
+}
+
+.canvas-panel.dark .canvas-split-preview {
+  border-right-color: #434343;
+}
+
+.canvas-split-code {
+  flex: 1;
+  overflow: auto;
+}
+
+/* ========== Markdown 渲染区域 ========== */
+.canvas-markdown {
+  padding: 24px;
+  max-width: 100%;
+  overflow: auto;
+}
+
+.canvas-markdown.dark {
+  color: #e0e0e0;
+}
+
+/* ========== 全屏抽屉 ========== */
+.canvas-drawer .ant-drawer-header {
+  padding: 0 16px;
+  height: 56px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.canvas-drawer.dark .ant-drawer-header {
+  background: #1e1e1e;
+  border-bottom-color: #434343;
+}
+
+.canvas-drawer .ant-drawer-title {
+  width: 100%;
+}
+
+.canvas-drawer .ant-drawer-body {
+  padding: 0;
+  background: #ffffff;
+}
+
+.canvas-drawer.dark .ant-drawer-body {
+  background: #141414;
+}
+
+/* ========== 响应式布局 ========== */
+@media (max-width: 768px) {
+  .canvas-toolbar {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 12px;
+  }
+
+  .toolbar-left {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .toolbar-right {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .canvas-split-view {
+    flex-direction: column;
+  }
+
+  .canvas-split-preview {
+    border-right: none;
+    border-bottom: 1px solid var(--border-color, #f0f0f0);
+    min-height: 300px;
+  }
+
+  .canvas-panel.dark .canvas-split-preview {
+    border-bottom-color: #434343;
+  }
+}
+
+/* ========== 按钮样式覆盖 ========== */
+.canvas-toolbar .ant-btn-text:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.canvas-panel.dark .canvas-toolbar .ant-btn-text:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* ========== Select 下拉框样式 ========== */
+.canvas-toolbar .ant-select-selector {
+  border-radius: 4px;
+}
+
+.canvas-panel.dark .canvas-toolbar .ant-select-selector {
+  background: #2d2d2d !important;
+  border-color: #434343 !important;
+  color: #e0e0e0;
+}
+
+/* ========== Tabs 样式覆盖 ========== */
+.canvas-panel.dark .view-tabs .ant-tabs-tab {
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.canvas-panel.dark .view-tabs .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: #40a9ff;
+}
+
+.canvas-panel.dark .view-tabs .ant-tabs-ink-bar {
+  background: #40a9ff;
+}
+
+/* ========== Markdown 内容样式增强 ========== */
+.canvas-markdown .markdown-body {
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.canvas-markdown.dark .markdown-body {
+  color: #e0e0e0;
+}
+
+.canvas-markdown.dark .markdown-body code {
+  background: #2d2d2d;
+  color: #e0e0e0;
+}
+
+.canvas-markdown.dark .markdown-body pre {
+  background: #2d2d2d;
+}
+
+.canvas-markdown.dark .markdown-body blockquote {
+  border-left-color: #40a9ff;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.canvas-markdown.dark .markdown-body table th {
+  background: #2d2d2d;
+}
+
+.canvas-markdown.dark .markdown-body table th,
+.canvas-markdown.dark .markdown-body table td {
+  border-color: #434343;
+}
+
+.canvas-markdown.dark .markdown-body a {
+  color: #40a9ff;
+}
+
+/* ========== 动画 ========== */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.canvas-content {
+  animation: fadeIn 0.3s ease;
+}
+
+/* ========== 滚动条样式 ========== */
+.canvas-content::-webkit-scrollbar,
+.code-viewer-content::-webkit-scrollbar,
+.html-preview-wrapper::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.canvas-content::-webkit-scrollbar-track,
+.code-viewer-content::-webkit-scrollbar-track,
+.html-preview-wrapper::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.canvas-content::-webkit-scrollbar-thumb,
+.code-viewer-content::-webkit-scrollbar-thumb,
+.html-preview-wrapper::-webkit-scrollbar-thumb {
+  background: #d9d9d9;
+  border-radius: 4px;
+}
+
+.canvas-content::-webkit-scrollbar-thumb:hover,
+.code-viewer-content::-webkit-scrollbar-thumb:hover,
+.html-preview-wrapper::-webkit-scrollbar-thumb:hover {
+  background: #bfbfbf;
+}
+
+.canvas-panel.dark .canvas-content::-webkit-scrollbar-thumb,
+.canvas-panel.dark .code-viewer-content::-webkit-scrollbar-thumb {
+  background: #4a4a4a;
+}
+
+.canvas-panel.dark .canvas-content::-webkit-scrollbar-thumb:hover,
+.canvas-panel.dark .code-viewer-content::-webkit-scrollbar-thumb:hover {
+  background: #5a5a5a;
+}

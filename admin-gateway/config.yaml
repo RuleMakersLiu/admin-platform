@@ -1,0 +1,58 @@
+server:
+  port: 8080
+  mode: debug
+
+jwt:
+  # IMPORTANT: 生产环境必须通过环境变量 JWT_SECRET 覆盖此值
+  # 使用: export JWT_SECRET=$(openssl rand -hex 32)
+  secret: admin-platform-jwt-secret-key-2026-dev-only
+  expiration: 86400
+
+redis:
+  host: 127.0.0.1
+  port: 6379
+  password: ""
+  db: 0
+  pool_size: 10
+
+# 后端服务配置
+services:
+  python:
+    host: 127.0.0.1
+    port: 8081
+    prefix: ""
+  generator:
+    host: 127.0.0.1
+    port: 8082
+    prefix: /generator
+  deploy:
+    host: 127.0.0.1
+    port: 8083
+    prefix: /deploy
+  config:
+    host: 127.0.0.1
+    port: 8085
+    prefix: /config
+  ws:
+    host: 127.0.0.1
+    port: 8086
+    prefix: ""
+
+# 限流配置
+rate_limit:
+  enabled: false
+  requests_per_second: 100
+  burst: 200
+
+# Kafka配置
+kafka:
+  brokers:
+    - ${KAFKA_BROKER:localhost:9092}
+  topic: ${KAFKA_TRACKING_TOPIC:tracking-events}
+  queue_size: 10000
+  batch_size: 100
+  flush_period_ms: 100
+
+log:
+  level: debug
+  format: console

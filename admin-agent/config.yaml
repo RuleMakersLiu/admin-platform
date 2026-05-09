@@ -1,0 +1,63 @@
+server:
+  port: 8084
+  mode: debug  # debug/release
+
+database:
+  host: localhost
+  port: 5432
+  username: postgres
+  password: postgres
+  database: admin_platform
+  sslmode: disable
+  max_idle_conns: 10
+  max_open_conns: 100
+  conn_max_lifetime: 3600
+
+redis:
+  host: localhost
+  port: 6379
+  password: ""
+  db: 4
+  pool_size: 10
+
+claude:
+  api_key: ${CLAUDE_API_KEY}
+  base_url: https://api.anthropic.com
+  default_model: claude-sonnet-4-20250514
+  max_tokens: 4096
+  timeout: 120
+
+jwt:
+  # IMPORTANT: 生产环境必须通过环境变量 JWT_SECRET 覆盖此值
+  secret: ${JWT_SECRET:admin-agent-jwt-secret-key-dev-only}
+  expire: 86400
+
+log:
+  level: debug
+  format: console  # console/json
+  output: stdout
+
+services:
+  backend_url: http://localhost:8081
+  generator_url: http://localhost:8082
+  deploy_url: http://localhost:8083
+
+# 语音服务配置
+voice:
+  # TTS (文本转语音) 配置
+  tts_enabled: true
+  tts_provider: edge-tts          # edge-tts 或 openai
+  tts_cache_dir: /tmp/voice_cache
+  tts_default_lang: zh-CN         # 默认语言: zh-CN, en-US, ja-JP, ko-KR
+
+  # STT (语音转文本) 配置
+  stt_enabled: true
+  stt_provider: whisper-api       # whisper-api 或 whisper-local
+  whisper_api_key: ${OPENAI_API_KEY}
+  whisper_model: whisper-1        # whisper-1 (API) 或 tiny/base/small/medium/large (本地)
+  whisper_api_url: https://api.openai.com/v1/audio/transcriptions
+
+  # 通用配置
+  max_text_length: 5000           # 最大文本长度
+  max_audio_size: 26214400        # 最大音频大小 (25MB)
+  request_timeout: 60             # 请求超时(秒)

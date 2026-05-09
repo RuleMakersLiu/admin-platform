@@ -1,0 +1,62 @@
+server:
+  port: 8083
+  mode: debug
+
+database:
+  host: localhost
+  port: 5432
+  user: postgres
+  password: postgres
+  dbname: admin_platform
+  max_idle_conns: 10
+  max_open_conns: 100
+
+redis:
+  host: localhost
+  port: 6379
+  password: ""
+  db: 2
+
+# Docker配置
+docker:
+  host: unix:///var/run/docker.sock
+  api_version: "1.43"
+  registry_url: registry.example.com
+  registry_user: ""
+  registry_password: ""
+
+# 项目配置
+projects:
+  admin-python:
+    type: python
+    build_cmd: pip install -e . && python -m pytest
+    dockerfile: Dockerfile
+    image: admin-python
+    ports:
+      - "8081:8081"
+
+  admin-gateway:
+    type: go
+    build_cmd: go build -o main ./cmd
+    dockerfile: Dockerfile
+    image: admin-gateway
+    ports:
+      - "8080:8080"
+
+  admin-frontend:
+    type: node
+    build_cmd: npm run build
+    dockerfile: Dockerfile
+    image: admin-frontend
+    ports:
+      - "80:80"
+
+# 部署配置
+deploy:
+  work_dir: /data/deploy
+  backup_dir: /data/backup
+  max_backups: 5
+
+log:
+  level: debug
+  format: json

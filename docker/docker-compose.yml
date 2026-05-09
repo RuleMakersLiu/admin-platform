@@ -1,0 +1,136 @@
+# Admin Platform - Docker Compose配置
+# 后端服务: Python (FastAPI) + Go (Gateway/Generator/Deploy)
+# 数据库: PostgreSQL 15 + Redis 7
+
+version: '3.8'
+
+services:
+  # PostgreSQL数据库
+  postgres:
+    image: postgres:15-alpine
+    container_name: admin-postgres
+    restart: always
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: admin_platform
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    networks:
+      - admin-network
+
+  # Redis缓存
+  redis:
+    image: redis:7-alpine
+    container_name: admin-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - admin-network
+
+  # Python后端服务 (AI Agents)
+  admin-python:
+    build:
+      context: ../admin-python
+      dockerfile: Dockerfile
+    container_name: admin-python
+    restart: always
+    ports:
+      - "8081:8081"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/admin_platform
+      - REDIS_URL=redis://redis:6379/5
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - admin-network
+
+  # Go网关
+  admin-gateway:
+    build:
+      context: ../admin-gateway
+      dockerfile: Dockerfile
+    container_name: admin-gateway
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      - GIN_MODE=release
+      - REDIS_HOST=redis
+    depends_on:
+      - redis
+      - admin-python
+    networks:
+      - admin-network
+
+  # Go代码生成服务
+  admin-generator:
+    build:
+      context: ../admin-generator
+      dockerfile: Dockerfile
+    container_name: admin-generator
+    restart: always
+    ports:
+      - "8082:8082"
+    environment:
+      - GIN_MODE=release
+      - DB_HOST=postgres
+      - REDIS_HOST=redis
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - admin-network
+
+  # Go部署服务
+  admin-deploy:
+    build:
+      context: ../admin-deploy
+      dockerfile: Dockerfile
+    container_name: admin-deploy
+    restart: always
+    ports:
+      - "8083:8083"
+    environment:
+      - GIN_MODE=release
+      - DB_HOST=postgres
+      - REDIS_HOST=redis
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - deploy_data:/data/deploy
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - admin-network
+
+  # React前端 (Nginx)
+  admin-frontend:
+    build:
+      context: ../admin-frontend
+      dockerfile: Dockerfile
+    container_name: admin-frontend
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      - admin-gateway
+    networks:
+      - admin-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  deploy_data:
+
+networks:
+  admin-network:
+    driver: bridge

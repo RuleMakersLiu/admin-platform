@@ -1,0 +1,35 @@
+server:
+  port: 8082
+  mode: debug
+
+database:
+  host: ${DB_HOST:localhost}
+  port: ${DB_PORT:5432}
+  user: ${DB_USER:postgres}
+  password: ${DB_PASSWORD:postgres}
+  dbname: ${DB_NAME:admin_platform}
+  max_idle_conns: 10
+  max_open_conns: 100
+
+redis:
+  host: localhost
+  port: 6379
+  password: ""
+  db: 5
+
+# Claude API配置
+claude:
+  api_key: ""
+  api_url: https://api.anthropic.com/v1/messages
+  model: claude-sonnet-4-20250514
+  max_tokens: 4096
+  timeout: 60
+
+# 模板配置
+template:
+  dir: ./templates
+  cache_enabled: true
+
+log:
+  level: debug
+  format: console

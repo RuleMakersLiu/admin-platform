@@ -1,0 +1,48 @@
+server:
+  port: 8086
+  mode: debug  # debug, release, test
+
+websocket:
+  # 连接配置
+  read_buffer_size: 1024
+  write_buffer_size: 1024
+  max_message_size: 65536  # 64KB
+
+  # 超时配置
+  ping_period: 30s         # 心跳间隔
+  pong_wait: 60s           # 等待客户端心跳响应超时
+  write_wait: 10s          # 写超时
+
+  # 连接限制
+  max_connections: 10000   # 最大连接数
+
+  # 消息配置
+  message_queue_size: 256  # 每个客户端消息队列大小
+
+redis:
+  host: localhost
+  port: 6379
+  password: ""
+  db: 3
+  pool_size: 100
+
+jwt:
+  # IMPORTANT: 生产环境必须通过环境变量 JWT_SECRET 覆盖此值
+  secret: ${JWT_SECRET:admin-ws-jwt-secret-key-dev-only}
+  issuer: admin-platform
+
+log:
+  level: debug
+  format: console  # console, json
+
+# admin-agent 服务配置
+agent:
+  enabled: true
+  address: localhost:8087
+  timeout: 10s
+
+# admin-gateway 服务配置
+gateway:
+  enabled: true
+  address: localhost:8080
+  timeout: 5s

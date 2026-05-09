@@ -1,0 +1,81 @@
+.kanban-board {
+  height: 100vh;
+  background: #f0f2f5;
+}
+
+.kanban-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #fff;
+  padding: 0 24px;
+  height: 64px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  z-index: 10;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.header-title {
+  margin: 0 !important;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+}
+
+.kanban-content {
+  overflow: hidden;
+  padding: 16px;
+}
+
+.kanban-columns {
+  display: flex;
+  gap: 16px;
+  height: 100%;
+  overflow-x: auto;
+  padding-bottom: 16px;
+}
+
+/* 滚动条样式 */
+.kanban-columns::-webkit-scrollbar {
+  height: 8px;
+}
+
+.kanban-columns::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.kanban-columns::-webkit-scrollbar-thumb {
+  background: #d9d9d9;
+  border-radius: 4px;
+}
+
+.kanban-columns::-webkit-scrollbar-thumb:hover {
+  background: #bfbfbf;
+}
+
+/* 暗色主题 */
+.dark .kanban-board {
+  background: #0a0a0a;
+}
+
+.dark .kanban-header {
+  background: #141414;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.dark .kanban-columns::-webkit-scrollbar-thumb {
+  background: #434343;
+}
+
+.dark .kanban-columns::-webkit-scrollbar-thumb:hover {
+  background: #595959;
+}

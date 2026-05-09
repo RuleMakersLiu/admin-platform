@@ -1,0 +1,472 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  font-family: 'Orbitron', 'Rajdhani', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: #0a0a0f;
+  color: #e0e0e0;
+}
+
+/* 科技风滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #00d4ff 0%, #7b2fff 100%);
+  border-radius: 4px;
+  box-shadow: 0 0 10px rgba(0, 212, 255, 0.5);
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+}
+
+/* 科技风变量 */
+:root {
+  --primary-cyan: #00d4ff;
+  --primary-purple: #7b2fff;
+  --primary-pink: #ff2a6d;
+  --bg-dark: #0a0a0f;
+  --bg-card: rgba(20, 20, 30, 0.8);
+  --border-glow: rgba(0, 212, 255, 0.3);
+  --text-primary: #e0e0e0;
+  --text-secondary: #888;
+}
+
+/* 玻璃拟态效果 */
+.glass-card {
+  background: rgba(20, 20, 30, 0.6);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  border-radius: 16px;
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+/* 霓虹发光效果 */
+.neon-glow {
+  box-shadow:
+    0 0 5px rgba(0, 212, 255, 0.5),
+    0 0 20px rgba(0, 212, 255, 0.3),
+    0 0 40px rgba(0, 212, 255, 0.1);
+}
+
+.neon-text {
+  text-shadow:
+    0 0 5px rgba(0, 212, 255, 0.8),
+    0 0 20px rgba(0, 212, 255, 0.5);
+}
+
+/* 渐变边框效果 */
+.gradient-border {
+  position: relative;
+  background: linear-gradient(#0a0a0f, #0a0a0f) padding-box,
+              linear-gradient(135deg, #00d4ff, #7b2fff, #ff2a6d) border-box;
+  border: 1px solid transparent;
+}
+
+/* 动态背景动画 */
+@keyframes gradientShift {
+  0%, 100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+/* 网格背景 */
+.grid-bg {
+  background-image:
+    linear-gradient(rgba(0, 212, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 212, 255, 0.03) 1px, transparent 1px);
+  background-size: 50px 50px;
+}
+
+/* Ant Design 暗色主题覆盖 */
+.ant-layout {
+  background: #0a0a0f !important;
+}
+
+.ant-layout-sider {
+  background: linear-gradient(180deg, rgba(10, 10, 20, 0.95) 0%, rgba(20, 20, 40, 0.95) 100%) !important;
+  border-right: 1px solid rgba(0, 212, 255, 0.15) !important;
+}
+
+.ant-menu-dark {
+  background: transparent !important;
+}
+
+.ant-menu-dark .ant-menu-item-selected {
+  background: linear-gradient(90deg, rgba(0, 212, 255, 0.2), transparent) !important;
+  border-left: 3px solid #00d4ff;
+}
+
+.ant-menu-dark .ant-menu-item:hover,
+.ant-menu-dark .ant-menu-submenu-title:hover {
+  background: rgba(0, 212, 255, 0.1) !important;
+}
+
+.ant-layout-header {
+  background: rgba(15, 15, 25, 0.9) !important;
+  border-bottom: 1px solid rgba(0, 212, 255, 0.15) !important;
+}
+
+.ant-layout-content {
+  background: transparent !important;
+}
+
+/* 表格科技风 */
+.ant-table {
+  background: rgba(15, 15, 25, 0.8) !important;
+  border: 1px solid rgba(0, 212, 255, 0.15) !important;
+  border-radius: 12px !important;
+}
+
+.ant-table-thead > tr > th {
+  background: rgba(0, 212, 255, 0.1) !important;
+  border-bottom: 1px solid rgba(0, 212, 255, 0.2) !important;
+  color: #00d4ff !important;
+}
+
+.ant-table-tbody > tr > td {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
+}
+
+.ant-table-tbody > tr:hover > td {
+  background: rgba(0, 212, 255, 0.05) !important;
+}
+
+/* 按钮科技风 */
+.ant-btn-primary {
+  background: linear-gradient(135deg, #00d4ff, #7b2fff) !important;
+  border: none !important;
+  box-shadow: 0 4px 15px rgba(0, 212, 255, 0.4) !important;
+}
+
+.ant-btn-primary:hover {
+  background: linear-gradient(135deg, #33ddff, #9050ff) !important;
+  box-shadow: 0 6px 20px rgba(0, 212, 255, 0.6) !important;
+}
+
+/* 输入框科技风 */
+.ant-input,
+.ant-input-password,
+.ant-input-number,
+.ant-select-selector {
+  background: rgba(20, 20, 30, 0.8) !important;
+  border: 1px solid rgba(0, 212, 255, 0.2) !important;
+  color: #e0e0e0 !important;
+}
+
+.ant-input:focus,
+.ant-input-focused,
+.ant-input-password:focus,
+.ant-input-affix-wrapper-focused {
+  border-color: #00d4ff !important;
+  box-shadow: 0 0 0 2px rgba(0, 212, 255, 0.2) !important;
+}
+
+.ant-input::placeholder {
+  color: #666 !important;
+}
+
+/* 卡片科技风 */
+.ant-card {
+  background: rgba(15, 15, 25, 0.9) !important;
+  border: 1px solid rgba(0, 212, 255, 0.15) !important;
+  border-radius: 12px !important;
+}
+
+.ant-card-head {
+  background: transparent !important;
+  border-bottom: 1px solid rgba(0, 212, 255, 0.15) !important;
+  color: #00d4ff !important;
+}
+
+/* 模态框科技风 */
+.ant-modal-content {
+  background: rgba(15, 15, 25, 0.95) !important;
+  border: 1px solid rgba(0, 212, 255, 0.2) !important;
+  border-radius: 16px !important;
+  backdrop-filter: blur(20px);
+}
+
+.ant-modal-header {
+  background: transparent !important;
+  border-bottom: 1px solid rgba(0, 212, 255, 0.15) !important;
+}
+
+.ant-modal-title {
+  color: #00d4ff !important;
+}
+
+/* 分页器科技风 */
+.ant-pagination-item {
+  background: rgba(20, 20, 30, 0.8) !important;
+  border: 1px solid rgba(0, 212, 255, 0.2) !important;
+}
+
+.ant-pagination-item a {
+  color: #e0e0e0 !important;
+}
+
+.ant-pagination-item-active {
+  background: linear-gradient(135deg, rgba(0, 212, 255, 0.3), rgba(123, 47, 255, 0.3)) !important;
+  border-color: #00d4ff !important;
+}
+
+.ant-pagination-item-active a {
+  color: #00d4ff !important;
+}
+
+/* 标签科技风 */
+.ant-tag {
+  background: rgba(0, 212, 255, 0.1) !important;
+  border: 1px solid rgba(0, 212, 255, 0.3) !important;
+  color: #00d4ff !important;
+}
+
+/* 下拉菜单科技风 */
+.ant-dropdown-menu {
+  background: rgba(15, 15, 25, 0.95) !important;
+  border: 1px solid rgba(0, 212, 255, 0.2) !important;
+  border-radius: 8px !important;
+  backdrop-filter: blur(20px);
+}
+
+.ant-dropdown-menu-item {
+  color: #e0e0e0 !important;
+}
+
+.ant-dropdown-menu-item:hover {
+  background: rgba(0, 212, 255, 0.1) !important;
+}
+
+/* 表单标签 */
+.ant-form-item-label > label {
+  color: #a0a0a0 !important;
+}
+
+/* 消息提示科技风 */
+.ant-message-notice-content {
+  background: rgba(15, 15, 25, 0.95) !important;
+  border: 1px solid rgba(0, 212, 255, 0.2) !important;
+  border-radius: 8px !important;
+  backdrop-filter: blur(20px);
+  color: #e0e0e0 !important;
+}
+
+/* 选择器下拉 */
+.ant-select-dropdown {
+  background: rgba(15, 15, 25, 0.95) !important;
+  border: 1px solid rgba(0, 212, 255, 0.2) !important;
+  border-radius: 8px !important;
+  backdrop-filter: blur(20px);
+}
+
+.ant-select-item {
+  color: #e0e0e0 !important;
+}
+
+.ant-select-item-option-selected {
+  background: rgba(0, 212, 255, 0.2) !important;
+}
+
+.ant-select-item-option-active {
+  background: rgba(0, 212, 255, 0.1) !important;
+}
+
+/* 开关科技风 */
+.ant-switch-checked {
+  background: linear-gradient(135deg, #00d4ff, #7b2fff) !important;
+}
+
+/* 复选框科技风 */
+.ant-checkbox-inner {
+  background: rgba(20, 20, 30, 0.8) !important;
+  border-color: rgba(0, 212, 255, 0.3) !important;
+}
+
+.ant-checkbox-checked .ant-checkbox-inner {
+  background: linear-gradient(135deg, #00d4ff, #7b2fff) !important;
+  border-color: #00d4ff !important;
+}
+
+/* ========== WebChat 主题变量 ========== */
+:root {
+  --chat-primary: #00d4ff;
+  --chat-secondary: #7b2fff;
+  --chat-bg: #0a0a0f;
+  --chat-sider-bg: rgba(15, 15, 25, 0.95);
+  --chat-header-bg: rgba(15, 15, 25, 0.9);
+  --chat-content-bg: transparent;
+  --chat-input-bg: rgba(15, 15, 25, 0.95);
+  --chat-border: rgba(0, 212, 255, 0.15);
+  --chat-text: #e0e0e0;
+  --chat-text-secondary: rgba(255, 255, 255, 0.45);
+  --chat-user-msg-bg: linear-gradient(135deg, rgba(0, 212, 255, 0.15), rgba(123, 47, 255, 0.15));
+  --chat-ai-msg-bg: rgba(20, 20, 30, 0.6);
+  --chat-code-bg: #1e1e1e;
+}
+
+/* WebChat 亮色主题变量 */
+[data-theme='light'] {
+  --chat-primary: #1890ff;
+  --chat-secondary: #722ed1;
+  --chat-bg: #f5f5f5;
+  --chat-sider-bg: #ffffff;
+  --chat-header-bg: #ffffff;
+  --chat-content-bg: #ffffff;
+  --chat-input-bg: #ffffff;
+  --chat-border: #f0f0f0;
+  --chat-text: rgba(0, 0, 0, 0.88);
+  --chat-text-secondary: rgba(0, 0, 0, 0.45);
+  --chat-user-msg-bg: #e6f7ff;
+  --chat-ai-msg-bg: #ffffff;
+  --chat-code-bg: #f5f5f5;
+}
+
+/* WebChat 布局增强 */
+.webchat-layout {
+  background: var(--chat-bg) !important;
+}
+
+.webchat-layout .webchat-sider {
+  background: var(--chat-sider-bg) !important;
+  border-right: 1px solid var(--chat-border) !important;
+}
+
+.webchat-layout .webchat-header {
+  background: var(--chat-header-bg) !important;
+  border-bottom: 1px solid var(--chat-border) !important;
+}
+
+.webchat-layout .webchat-content {
+  background: var(--chat-content-bg) !important;
+}
+
+.webchat-layout .webchat-input-area,
+.webchat-layout .chat-input-container {
+  background: var(--chat-input-bg) !important;
+  border-top: 1px solid var(--chat-border) !important;
+}
+
+/* WebChat 消息样式增强 */
+.webchat-layout .message-item.user-message .message-body {
+  background: var(--chat-user-msg-bg) !important;
+  border: 1px solid var(--chat-border) !important;
+  border-radius: 16px 16px 4px 16px !important;
+}
+
+.webchat-layout .ai-message .message-body {
+  background: var(--chat-ai-msg-bg) !important;
+}
+
+/* WebChat 输入框增强 */
+.webchat-layout .chat-textarea {
+  background: rgba(20, 20, 30, 0.8) !important;
+  border: 1px solid var(--chat-border) !important;
+  color: var(--chat-text) !important;
+}
+
+.webchat-layout .chat-textarea:focus {
+  border-color: var(--chat-primary) !important;
+  box-shadow: 0 0 0 2px rgba(0, 212, 255, 0.2) !important;
+}
+
+/* WebChat 按钮增强 */
+.webchat-layout .send-button {
+  background: linear-gradient(135deg, var(--chat-primary), var(--chat-secondary)) !important;
+  border: none !important;
+  box-shadow: 0 4px 15px rgba(0, 212, 255, 0.3) !important;
+}
+
+.webchat-layout .send-button:hover {
+  box-shadow: 0 6px 20px rgba(0, 212, 255, 0.5) !important;
+}
+
+/* WebChat 会话列表增强 */
+.webchat-layout .session-list-container {
+  background: transparent !important;
+}
+
+.webchat-layout .session-list-header {
+  border-bottom: 1px solid var(--chat-border) !important;
+}
+
+.webchat-layout .session-list .ant-list-item {
+  border-bottom: 1px solid var(--chat-border) !important;
+}
+
+.webchat-layout .session-list .ant-list-item:hover {
+  background: rgba(0, 212, 255, 0.05) !important;
+}
+
+.webchat-layout .session-list .ant-list-item.active {
+  background: rgba(0, 212, 255, 0.1) !important;
+  border-left: 3px solid var(--chat-primary) !important;
+}
+
+/* WebChat 连接状态指示器 */
+.webchat-layout .ant-badge-status-text {
+  color: var(--chat-text-secondary) !important;
+}
+
+/* WebChat 空状态 */
+.webchat-layout .message-list-empty .empty-icon {
+  color: var(--chat-primary) !important;
+}
+
+/* WebChat 流式输出指示器 */
+.webchat-layout .streaming-indicator {
+  background: rgba(0, 212, 255, 0.05) !important;
+  border: 1px solid var(--chat-border) !important;
+}
+
+/* WebChat 快捷建议 */
+.webchat-layout .quick-suggestions {
+  background: rgba(20, 20, 30, 0.6) !important;
+  border: 1px solid var(--chat-border) !important;
+}
+
+.webchat-layout .suggestion-btn {
+  color: var(--chat-primary) !important;
+}
+
+.webchat-layout .suggestion-btn:hover {
+  background: var(--chat-primary) !important;
+  color: #0a0a0f !important;
+}

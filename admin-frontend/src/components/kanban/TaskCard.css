@@ -1,0 +1,104 @@
+.task-card {
+  margin-bottom: 12px;
+  border-radius: 8px;
+  transition: all 0.3s ease;
+  cursor: pointer;
+  border: 1px solid #f0f0f0;
+}
+
+.task-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  transform: translateY(-2px);
+}
+
+.task-card:active {
+  cursor: grabbing;
+}
+
+/* 状态相关的样式 */
+.task-card-pending {
+  border-left: 3px solid #8c8c8c;
+}
+
+.task-card-in_progress {
+  border-left: 3px solid #1890ff;
+}
+
+.task-card-review {
+  border-left: 3px solid #faad14;
+}
+
+.task-card-completed {
+  border-left: 3px solid #52c41a;
+  opacity: 0.85;
+}
+
+.task-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.task-card-id {
+  font-size: 12px;
+  color: #8c8c8c;
+}
+
+.task-card-title {
+  margin-bottom: 8px !important;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.task-card-description {
+  margin-bottom: 8px !important;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.task-card-progress {
+  margin: 8px 0;
+}
+
+.task-card-tags {
+  margin: 8px 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.task-tag {
+  margin: 0;
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 18px;
+  border-radius: 4px;
+}
+
+.task-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.task-card-time {
+  font-size: 11px;
+}
+
+/* 暗色主题 */
+.dark .task-card {
+  background: #1f1f1f;
+  border-color: #333;
+}
+
+.dark .task-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.dark .task-card-footer {
+  border-top-color: #333;
+}
