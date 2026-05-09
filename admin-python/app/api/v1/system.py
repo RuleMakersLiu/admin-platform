@@ -1000,20 +1000,66 @@ async def test_llm_config(
 
     import httpx
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                f"{config.base_url.rstrip('/')}/chat/completions",
-                headers={"Authorization": f"Bearer {config.api_key}"},
-                json={
-                    "model": config.model_name,
-                    "messages": [{"role": "user", "content": "Hi"}],
-                    "max_tokens": 5,
-                },
-            )
-            if resp.status_code == 200:
-                return Response(data={"success": True, "message": "连接成功"})
+        # 构建 API URL
+        base_url = config.base_url.rstrip('/')
+        provider = (config.provider or "").lower()
+
+        # 智谱 GLM: base_url 已经包含完整路径
+        # Anthropic: 用 /v1/messages 格式
+        # OpenAI 兼容: 自动拼接 /chat/completions
+        if provider in ("zhipu", "glm", "chatglm"):
+            api_url = f"{base_url}/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {config.api_key}",
+                "Content-Type": "application/json",
+            }
+        elif provider in ("anthropic", "claude"):
+            if base_url.endswith("/v1/messages"):
+                api_url = base_url
             else:
-                return Response(code=400, message=f"连接失败: HTTP {resp.status_code}")
+                api_url = f"{base_url}/v1/messages"
+            headers = {
+                "x-api-key": config.api_key,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            }
+        else:
+            # OpenAI 兼容 (openai, deepseek, qwen, ollama, custom)
+            if base_url.endswith("/chat/completions"):
+                api_url = base_url
+            elif "/v1" in base_url:
+                api_url = f"{base_url}/chat/completions"
+            else:
+                api_url = f"{base_url}/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {config.api_key}",
+                "Content-Type": "application/json",
+            }
+
+        payload = {
+            "model": config.model_name,
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_tokens": 5,
+        }
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(api_url, headers=headers, json=payload)
+            if resp.status_code == 200:
+                return Response(data={
+                    "success": True,
+                    "message": "连接成功",
+                    "provider": provider,
+                    "model": config.model_name,
+                })
+            else:
+                error_detail = ""
+                try:
+                    err_body = resp.json()
+                    if "error" in err_body:
+                        error_detail = err_body["error"].get("message", "") if isinstance(err_body["error"], dict) else str(err_body["error"])
+                except Exception:
+                    error_detail = resp.text[:200]
+                return Response(code=400, message=f"连接失败 (HTTP {resp.status_code}): {error_detail}")
     except Exception as e:
         return Response(code=400, message=f"连接失败: {str(e)}")
 

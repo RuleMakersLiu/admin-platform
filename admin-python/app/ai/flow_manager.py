@@ -134,9 +134,31 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 UI 设计参考:
 {{ui_preview_output}}
 
+## 后端技术栈（二选一，根据需求类型选择）
+
+### Java 后端（适用于企业级系统）
+- Spring Boot 2.x + MyBatis Plus
+- Dubbo 微服务：core 接口模块 + service 实现模块
+- 分层：Controller → Service → DAO → Model
+- 包结构：com.gemantic.wealth.glsw.{model,dto,service,controller}
+
+### PHP 后端（适用于快速开发、SaaS 平台）
+- Laravel 8 + Swoole/LaravelS
+- 分层：Controller → Service → DAO → Model
+- 多租户隔离：tenant_id 字段
+- 包结构：app/Http/Controllers/{Feature}/ + app/Services/ + app/Http/Dao/
+
+## 前端技术栈（固定）
+- Vue 2.6.10 + antd-vue 1.7.2（基于 vue-antd-pro 脚手架）
+- 路由：vue-router 3.x，配置在 src/router/
+- 状态管理：Vuex 3.x
+- 网络请求：axios，封装在 src/utils/request.js
+- 组件：使用 ant-design-vue 1.7.2 的 a-table, a-form, a-modal, a-card 等组件
+- 样式：Less 预处理器
+
 请分别输出:
-1. 后端 API 代码（用 ```python 或 ```go 包裹）
-2. 前端页面代码（用 ```vue 包裹，使用 Vue 2 + antd-vue 1.x 组件）
+1. 后端 API 代码（Java 用 ```java 包裹，PHP 用 ```php 包裹）
+2. 前端页面代码（用 ```vue 包裹，.vue 单文件组件格式）
 3. 数据库建表 SQL（用 ```sql 包裹）
 4. API 接口文档（用 ```json 包裹 OpenAPI 格式）
 
