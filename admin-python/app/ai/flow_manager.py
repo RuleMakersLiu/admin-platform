@@ -105,127 +105,38 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 4. 非功能需求
 5. 验收标准""",
 
-    "ui_preview": """你是一个顶级前端 UI 设计师。根据需求文档，输出一个**视觉精美、数据丰富、可直接在浏览器中渲染**的 HTML 页面。
+    "ui_preview": """根据需求文档，生成一个 Vue 2 + antd-vue 1.x 的管理后台页面预览。
 
 ## 需求文档
 {{requirement_output}}
 
-## 输出格式（严格遵守）
+## 输出格式
 只输出一个 ```html 代码块，不要在代码块前后写任何文字说明。
 
-## 禁止事项
-- 禁止使用 <script> 标签和 JavaScript（沙箱环境会过滤掉）
-- 禁止使用 onclick、onload 等事件属性
-- 禁止使用外部 CDN 或外部资源链接
-- 禁止使用 display:none 隐藏主要内容
-
-## 必须遵循的页面结构
-
-```html
-<!DOCTYPE html>
-<html>
-<head>
-<style>
-/* 全局 */
-* {{ box-sizing: border-box; margin: 0; padding: 0; }}
-body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f2f5; color: #333; }}
-
-/* 顶部导航 */
-.header {{ background: linear-gradient(135deg, #1677ff 0%, #4096ff 100%); color: white; padding: 0 24px; height: 56px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }}
-.header-logo {{ font-size: 18px; font-weight: 700; }}
-.header-user {{ display: flex; align-items: center; gap: 12px; font-size: 14px; }}
-
-/* 布局 */
-.layout {{ display: flex; min-height: calc(100vh - 56px); }}
-
-/* 侧边栏 */
-.sidebar {{ width: 220px; background: #fff; border-right: 1px solid #e8e8e8; padding: 16px 0; flex-shrink: 0; }}
-.sidebar-item {{ padding: 12px 24px; color: #666; font-size: 14px; border-left: 3px solid transparent; transition: all 0.2s; }}
-.sidebar-item:hover {{ background: #e6f4ff; color: #1677ff; border-left-color: #1677ff; }}
-.sidebar-item.active {{ background: #e6f4ff; color: #1677ff; border-left-color: #1677ff; font-weight: 600; }}
-
-/* 主内容 */
-.main {{ flex: 1; padding: 24px; overflow-y: auto; }}
-
-/* 统计卡片 */
-.stat-row {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }}
-.stat-card {{ background: white; border-radius: 8px; padding: 20px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }}
-.stat-card .label {{ font-size: 13px; color: #999; margin-bottom: 8px; }}
-.stat-card .value {{ font-size: 28px; font-weight: 700; color: #333; }}
-.stat-card .trend {{ font-size: 12px; margin-top: 4px; }}
-.stat-card .trend.up {{ color: #52c41a; }}
-.stat-card .trend.down {{ color: #ff4d4f; }}
-
-/* 卡片 */
-.card {{ background: white; border-radius: 8px; padding: 20px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); margin-bottom: 16px; }}
-.card-title {{ font-size: 16px; font-weight: 600; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #f0f0f0; }}
-
-/* 表格 */
-.table {{ width: 100%; border-collapse: collapse; }}
-.table th {{ background: #fafafa; padding: 12px 16px; text-align: left; font-weight: 600; font-size: 13px; color: #666; border-bottom: 1px solid #f0f0f0; }}
-.table td {{ padding: 12px 16px; border-bottom: 1px solid #f0f0f0; font-size: 14px; }}
-.table tr:hover {{ background: #fafafa; }}
-
-/* 按钮 */
-.btn {{ padding: 6px 16px; border-radius: 6px; border: 1px solid #d9d9d9; background: white; font-size: 14px; cursor: pointer; transition: all 0.2s; }}
-.btn:hover {{ color: #1677ff; border-color: #1677ff; }}
-.btn-primary {{ background: #1677ff; color: white; border-color: #1677ff; }}
-.btn-primary:hover {{ background: #4096ff; }}
-
-/* 标签 */
-.tag {{ display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; }}
-.tag-blue {{ background: #e6f4ff; color: #1677ff; }}
-.tag-green {{ background: #f6ffed; color: #52c41a; }}
-.tag-red {{ background: #fff2f0; color: #ff4d4f; }}
-.tag-orange {{ background: #fff7e6; color: #fa8c16; }}
-
-/* 搜索栏 */
-.search-bar {{ display: flex; gap: 12px; margin-bottom: 16px; align-items: center; }}
-.search-input {{ padding: 8px 12px; border: 1px solid #d9d9d9; border-radius: 6px; font-size: 14px; width: 240px; }}
-
-/* 进度条 */
-.progress-bar {{ background: #f0f0f0; border-radius: 4px; height: 8px; overflow: hidden; }}
-.progress-fill {{ height: 100%; border-radius: 4px; transition: width 0.3s; }}
-
-/* 分页 */
-.pagination {{ display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }}
-.page-item {{ width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border: 1px solid #d9d9d9; border-radius: 6px; font-size: 14px; }}
-.page-item.active {{ background: #1677ff; color: white; border-color: #1677ff; }}
-
-/* CSS 图表 - 柱状图 */
-.chart-bars {{ display: flex; align-items: flex-end; gap: 12px; height: 180px; padding: 0 8px; }}
-.chart-bar {{ flex: 1; border-radius: 4px 4px 0 0; transition: height 0.3s; position: relative; }}
-.chart-bar-label {{ position: absolute; bottom: -24px; left: 50%; transform: translateX(-50%); font-size: 11px; color: #999; white-space: nowrap; }}
-.chart-bar-value {{ position: absolute; top: -20px; left: 50%; transform: translateX(-50%); font-size: 12px; font-weight: 600; color: #333; }}
-</style>
-</head>
-<body>
-  <!-- 按这个结构写你的页面 -->
-</body>
-</html>
-```
-
-## 内容要求（极其重要）
-1. **统计卡片必须填真实数字**：如 "12,846"、"98.5%"、"¥128,400"，不能写占位符
-2. **表格必须填 5-8 行真实模拟数据**：包括序号、名称、状态（用彩色标签）、时间、操作按钮
-3. **柱状图用 div 实现**：用不同高度的 div 模拟数据趋势
-4. **状态标签用 .tag-blue / .tag-green / .tag-red / .tag-orange**
-5. **侧边菜单至少 6 项**，当前页面高亮
-6. **页面要有 3-4 个区块**：统计卡片 + 数据表格 + 图表/进度条 + 操作列表
-7. 所有文字使用中文
-8. 确保页面打开即可看到完整、精美的后台管理界面""",
+## 技术要求
+1. 使用 Vue 2 + antd-vue 1.x CDN：
+   - `<script src="https://cdn.jsdelivr.net/npm/vue@2.7.16/dist/vue.min.js"></script>`
+   - `<script src="https://cdn.jsdelivr.net/npm/moment@2.29.4/min/moment.min.js"></script>`
+   - `<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ant-design-vue@1.7.8/dist/antd.min.css">`
+   - `<script src="https://cdn.jsdelivr.net/npm/ant-design-vue@1.7.8/dist/antd.min.js"></script>`
+2. 使用 antd-vue 组件：a-layout(a-layout-sider + a-layout-header + a-layout-content)、a-table、a-form、a-modal、a-card、a-button、a-input、a-select、a-tag、a-pagination、a-dropdown、a-menu、a-badge、a-avatar、a-icon
+3. Vue 实例通过 `new Vue({el: '#app', ...})` 挂载，使用 `antd` 全局注册
+4. 包含完整的 CRUD 交互（列表、搜索、新增弹窗、编辑、删除确认）
+5. 表格至少 5 条 mock 数据
+6. 页面精致美观，有合理间距、阴影、圆角
+7. 所有文字使用中文""",
 
     "development": """基于以下需求文档和 UI 设计，生成完整的前后端代码。
 
 需求文档:
 {{requirement_output}}
 
-UI 设计参考（以下 HTML 为 UI 预览效果，请参考其布局和交互设计）:
+UI 设计参考:
 {{ui_preview_output}}
 
 请分别输出:
 1. 后端 API 代码（用 ```python 或 ```go 包裹）
-2. 前端页面代码（用 ```tsx 包裹）
+2. 前端页面代码（用 ```vue 包裹，使用 Vue 2 + antd-vue 1.x 组件）
 3. 数据库建表 SQL（用 ```sql 包裹）
 4. API 接口文档（用 ```json 包裹 OpenAPI 格式）
 
@@ -311,13 +222,13 @@ def _render_prompt_template(template: str, context: Dict[str, Any]) -> str:
     prev_outputs = context.get("stage_outputs", {})
 
     replacements = {
-        "{{user_request}}": user_request,
-        "{{requirement_output}}": prev_outputs.get("requirement", {}).get("output", "未提供"),
-        "{{ui_preview_output}}": prev_outputs.get("ui_preview", {}).get("output", "未提供"),
-        "{{development_output}}": prev_outputs.get("development", {}).get("output", "未提供"),
-        "{{code_review_output}}": prev_outputs.get("code_review", {}).get("output", "未提供"),
-        "{{testing_output}}": prev_outputs.get("testing", {}).get("output", "未提供"),
-        "{{commit_output}}": prev_outputs.get("commit", {}).get("output", "未提供"),
+        "{{user_request}}": user_request[:2000],
+        "{{requirement_output}}": prev_outputs.get("requirement", {}).get("output", "未提供")[:3000],
+        "{{ui_preview_output}}": prev_outputs.get("ui_preview", {}).get("output", "未提供")[:3000],
+        "{{development_output}}": prev_outputs.get("development", {}).get("output", "未提供")[:3000],
+        "{{code_review_output}}": prev_outputs.get("code_review", {}).get("output", "未提供")[:2000],
+        "{{testing_output}}": prev_outputs.get("testing", {}).get("output", "未提供")[:2000],
+        "{{commit_output}}": prev_outputs.get("commit", {}).get("output", "未提供")[:1000],
         # 截断版本（report 阶段用）
         "{{requirement_output_short}}": (prev_outputs.get("requirement", {}).get("output", "未提供") or "")[:500],
         "{{code_review_output_short}}": (prev_outputs.get("code_review", {}).get("output", "未提供") or "")[:500],
