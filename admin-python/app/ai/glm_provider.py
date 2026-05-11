@@ -14,14 +14,23 @@ logger = logging.getLogger(__name__)
 
 GLM_API_URL = "https://open.bigmodel.cn/api/paas/v4"
 
-# 模型配置: model_name -> (max_tokens_default, supports_tools)
+# 模型配置: model_name -> (max_tokens_default, supports_tools, is_reasoning)
 MODEL_CONFIG = {
-    "glm-4": (4096, False),
-    "glm-4-plus": (4096, True),
-    "glm-4-flash": (4096, True),
-    "glm-4-long": (16384, False),
-    "glm-5": (4096, True),
+    "glm-4": (4096, False, False),
+    "glm-4-plus": (4096, True, False),
+    "glm-4-flash": (4096, True, False),
+    "glm-4-long": (16384, False, False),
+    "glm-5": (4096, True, False),
+    "glm-5.1": (16384, True, True),
 }
+
+# 推理模型需要更多 token（reasoning tokens 计入 max_tokens）
+REASONING_MODEL_PREFIXES = ("glm-5",)
+
+
+def _is_reasoning_model(model: str) -> bool:
+    """检测推理模型（reasoning tokens 消耗 max_tokens 预算）"""
+    return any(model.startswith(p) for p in REASONING_MODEL_PREFIXES)
 
 
 def _parse_content(raw) -> str:
@@ -67,8 +76,13 @@ class ChatGLM:
     ):
         self.model = model
         self.api_key = api_key or settings.zai_api_key
-        config = MODEL_CONFIG.get(model, (4096, False))
-        self.max_tokens = max_tokens or config[0]
+        config = MODEL_CONFIG.get(model, (4096, False, False))
+        default_max = config[0]
+        self.max_tokens = max_tokens or default_max
+
+        # 推理模型的 reasoning tokens 消耗 max_tokens 预算，需要 4x 余量
+        if _is_reasoning_model(model) and self.max_tokens < 8192:
+            self.max_tokens = max(self.max_tokens * 4, 16384)
         self.temperature = temperature
         self._client: Optional[httpx.AsyncClient] = None
 
@@ -77,7 +91,9 @@ class ChatGLM:
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(timeout=300.0)
+            # 推理模型需要更长时间
+            timeout = 600.0 if _is_reasoning_model(self.model) else 300.0
+            self._client = httpx.AsyncClient(timeout=timeout)
         return self._client
 
     async def close(self):
@@ -126,6 +142,21 @@ class ChatGLM:
 
         content = _parse_content(result["choices"][0]["message"]["content"])
         usage = result.get("usage", {})
+
+        # 推理模型可能用光 max_tokens 做 reasoning，导致 content 为空
+        # 自动增大 max_tokens 重试一次
+        if not content and _is_reasoning_model(self.model):
+            reasoning_tokens = usage.get("completion_tokens_details", {}).get("reasoning_tokens", 0)
+            total_tokens = usage.get("completion_tokens", 0)
+            if reasoning_tokens > 0 and total_tokens >= self.max_tokens * 0.9:
+                old_max = self.max_tokens
+                self.max_tokens = max(self.max_tokens * 2, 32768)
+                logger.warning(
+                    f"Reasoning model used {reasoning_tokens}/{old_max} tokens for thinking, "
+                    f"retrying with max_tokens={self.max_tokens}"
+                )
+                return await self.ainvoke(messages)
+
         return GLMMessage(content=content, usage=usage)
 
     async def astream(self, messages: list) -> AsyncGenerator[str, None]:

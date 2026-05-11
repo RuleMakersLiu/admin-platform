@@ -144,7 +144,7 @@ UI 设计参考:
 
 ### PHP 层 (Laravel 8 + Swoole/LaravelS)
 - 版本：PHP 7.4+, Laravel 8.83, Swoole/LaravelS
-- 分层：Controller → Service → DAO (Http\Models) → Model
+- 分层：Controller → Service → DAO (Http\\Models) → Model
 - HTTP 客户端：使用 Ixudra/Curl 封装，通过 app(Http::class)->postHttp() / getHttp() 调用 Java
 - 签名机制：appkey + timestamp + signcode (MD5)
 - 多租户：tenant_id 字段隔离
@@ -332,7 +332,6 @@ def _parse_agent_output(stage_key: str, raw_output: str) -> Dict[str, Any]:
     result = {"output": raw_output}
 
     if stage_key == "ui_preview":
-        html_blocks = []
         import re
         # 匹配 ```html 或 ```HTML 后面的内容，直到下一个 ```
         pattern = re.compile(r"```(?:html|HTML)\s*\n(.*?)```", re.DOTALL)
@@ -340,14 +339,28 @@ def _parse_agent_output(stage_key: str, raw_output: str) -> Dict[str, Any]:
         if matches:
             result["preview_html"] = matches[0].strip()
         else:
-            # fallback: 尝试找 <!DOCTYPE html> 或 <html 标签
-            doctype_idx = raw_output.find("<!DOCTYPE")
-            html_idx = raw_output.find("<html")
-            start = min(i for i in [doctype_idx, html_idx] if i >= 0) if any(i >= 0 for i in [doctype_idx, html_idx]) else -1
-            if start >= 0:
-                end = raw_output.rfind("</html>")
-                if end > start:
-                    result["preview_html"] = raw_output[start:end + len("</html>")].strip()
+            # 尝试从 ```html 开始提取（处理截断输出）
+            pattern_truncated = re.compile(r"```(?:html|HTML)\s*\n(.*)", re.DOTALL)
+            truncated = pattern_truncated.search(raw_output)
+            if truncated:
+                html_content = truncated.group(1).strip()
+                # 如果有 </html>，截取到那里；否则取全部
+                end_idx = html_content.rfind("</html>")
+                if end_idx > 0:
+                    html_content = html_content[:end_idx + len("</html>")]
+                result["preview_html"] = html_content
+            else:
+                # fallback: 尝试找 <!DOCTYPE html> 或 <html 标签
+                doctype_idx = raw_output.find("<!DOCTYPE")
+                html_idx = raw_output.find("<html")
+                candidates = [i for i in [doctype_idx, html_idx] if i >= 0]
+                start = min(candidates) if candidates else -1
+                if start >= 0:
+                    end = raw_output.rfind("</html>")
+                    if end > start:
+                        result["preview_html"] = raw_output[start:end + len("</html>")].strip()
+                    else:
+                        result["preview_html"] = raw_output[start:].strip()
 
     if stage_key == "development":
         files = {}
@@ -419,9 +432,10 @@ def _parse_agent_output(stage_key: str, raw_output: str) -> Dict[str, Any]:
 def _is_retriable_error(e: Exception) -> bool:
     """判断是否为可重试的错误"""
     error_str = str(e).lower()
-    retriable_keywords = ["timeout", "rate limit", "429", "503", "502", "connection",
-                          "overloaded", "capacity", "retry"]
-    return any(kw in error_str for kw in retriable_keywords)
+    type_name = type(e).__name__.lower()
+    retriable_keywords = ["timeout", "rate limit", "429", "503", "502", "500",
+                          "connection", "overloaded", "capacity", "retry"]
+    return any(kw in error_str for kw in retriable_keywords) or any(kw in type_name for kw in retriable_keywords)
 
 
 async def _call_agent_with_retry(agent_service: AgentService, session_id: str,
