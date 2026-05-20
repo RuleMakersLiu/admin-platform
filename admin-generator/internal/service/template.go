@@ -356,10 +356,13 @@ func (s *ProjectService) ListProjects(tenantID, adminID int64, page, pageSize in
 	var total int64
 	var projects []GenProject
 
-	query := db.Table("gen_project").Where("tenant_id = ?", tenantID)
+	// Also include tenant_id=0 projects (created before header injection was fixed)
+	query := db.Table("gen_project").Where("tenant_id = ? OR tenant_id = 0", tenantID)
 	if adminID > 0 {
-		query = query.Where("admin_id = ?", adminID)
+		query = query.Where("admin_id = ? OR admin_id = 0", adminID)
 	}
+	// Filter out soft-deleted
+	query = query.Where("status != 0")
 
 	query.Count(&total)
 	offset := (page - 1) * pageSize
