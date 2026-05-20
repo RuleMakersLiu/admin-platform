@@ -3,9 +3,11 @@ import { Table, Tag, Button, Space, Modal, Typography, message, Tooltip, Progres
 import {
   DeleteOutlined, EyeOutlined, ReloadOutlined, DownloadOutlined,
   BugOutlined, PlusOutlined, LinkOutlined, BranchesOutlined,
+  BulbOutlined, CheckCircleOutlined, LoadingOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { generatorApi } from '@/services/api'
+import api from '@/services/api'
 
 const { Text } = Typography
 
@@ -25,6 +27,8 @@ const ProjectListPage: React.FC = () => {
   const [repoModalVisible, setRepoModalVisible] = useState(false)
   const [editingProject, setEditingProject] = useState<any>(null)
   const [repoForm] = Form.useForm()
+  const [knowledgeMap, setKnowledgeMap] = useState<Record<number, string>>({})
+  const [analyzingIds, setAnalyzingIds] = useState<Set<number>>(new Set())
 
   const fetchProjects = async (p = page) => {
     setLoading(true)
@@ -37,6 +41,38 @@ const ProjectListPage: React.FC = () => {
   }
 
   useEffect(() => { fetchProjects() }, [page])
+
+  // 加载项目知识库状态
+  const loadKnowledge = async (projectIds: number[]) => {
+    const map: Record<number, string> = {}
+    await Promise.all(projectIds.map(async (id) => {
+      try {
+        const res: any = await api.get(`/flow/projects/${id}/knowledge`)
+        const d = res?.data
+        if (d && d.analysis_status === 'done') map[id] = 'done'
+        else if (d && d.analysis_status === 'analyzing') map[id] = 'analyzing'
+        else map[id] = 'none'
+      } catch { map[id] = 'none' }
+    }))
+    setKnowledgeMap(map)
+  }
+
+  useEffect(() => {
+    if (projects.length > 0) loadKnowledge(projects.map((p: any) => p.id))
+  }, [projects])
+
+  const handleAnalyze = async (id: number) => {
+    setAnalyzingIds(prev => new Set(prev).add(id))
+    try {
+      await api.post(`/flow/projects/${id}/analyze`)
+      message.success('分析已启动，后台执行中')
+      setTimeout(() => loadKnowledge([id]), 10000)
+    } catch (e: any) {
+      message.error(e?.message || '分析失败')
+    } finally {
+      setAnalyzingIds(prev => { const s = new Set(prev); s.delete(id); return s })
+    }
+  }
 
   const handleDelete = async (id: number) => {
     Modal.confirm({
@@ -162,6 +198,25 @@ const ProjectListPage: React.FC = () => {
               style={{ width: 100 }}
             />
           </Tooltip>
+        )
+      },
+    },
+    {
+      title: '知识库',
+      key: 'knowledge',
+      width: 100,
+      render: (_: any, record: any) => {
+        const status = knowledgeMap[record.id]
+        if (analyzingIds.has(record.id) || status === 'analyzing') {
+          return <Tag icon={<LoadingOutlined spin />} color="processing">分析中</Tag>
+        }
+        if (status === 'done') {
+          return <Tag icon={<CheckCircleOutlined />} color="success">已分析</Tag>
+        }
+        return (
+          <Button size="small" icon={<BulbOutlined />} onClick={() => handleAnalyze(record.id)}>
+            分析
+          </Button>
         )
       },
     },
