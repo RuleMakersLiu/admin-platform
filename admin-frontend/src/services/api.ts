@@ -12,9 +12,13 @@ const api = axios.create({
 // 请求拦截器
 api.interceptors.request.use(
   (config) => {
-    const token = useAuthStore.getState().token
+    const { token, user } = useAuthStore.getState()
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
+    }
+    if (user) {
+      config.headers['X-Admin-Id'] = String(user.adminId)
+      config.headers['X-Tenant-Id'] = String(user.tenantId)
     }
     return config
   },
