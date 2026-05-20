@@ -65,27 +65,54 @@ async def get_toolset(name: str):
 
 
 @router.get("/market")
-async def market_list(page: int = 1, pageSize: int = 12, sortBy: str = "newest"):
+async def market_list(
+    page: int = 1, pageSize: int = 12, sortBy: str = "newest",
+    keyword: Optional[str] = None, category: Optional[str] = None,
+):
     """技能市场列表"""
     skills = skill_registry.list_skills()
+    # 过滤
+    if category:
+        skills = [s for s in skills if (s.category or "通用") == category]
+    if keyword:
+        kw = keyword.lower()
+        skills = [s for s in skills if kw in (s.name or "").lower() or kw in (s.description or "").lower()]
+    # 排序
+    if sortBy == "rating":
+        skills = sorted(skills, key=lambda s: s.version or "", reverse=True)
+    elif sortBy == "downloads":
+        skills = skills
+    # else newest - 默认顺序
+    total = len(skills)
+    start = (page - 1) * pageSize
+    page_skills = skills[start:start + pageSize]
     return {
         "code": 200,
         "data": {
-            "items": [
+            "list": [
                 {
-                    "id": i,
+                    "id": s.skill_id,
                     "skill_id": s.skill_id,
                     "name": s.name,
-                    "description": s.description,
+                    "description": s.description or "",
                     "category": s.category or "通用",
+                    "categoryName": s.category or "通用",
                     "author": "系统",
-                    "downloads": 0,
-                    "rating": 0,
-                    "created_at": "",
+                    "authorId": "system",
+                    "version": s.version or "1.0",
+                    "tags": [s.category or "通用"] if s.category else ["通用"],
+                    "rating": 5.0,
+                    "ratingCount": 1,
+                    "downloadCount": 0,
+                    "createTime": 0,
+                    "updateTime": 0,
+                    "isDownloaded": False,
+                    "isPublished": True,
+                    "icon": None,
                 }
-                for i, s in enumerate(skills)
+                for s in page_skills
             ],
-            "total": len(skills),
+            "total": total,
             "page": page,
             "pageSize": pageSize,
         },

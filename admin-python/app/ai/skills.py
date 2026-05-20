@@ -598,15 +598,35 @@ class SkillManager:
 
     @staticmethod
     def create_skill(name: str, content: str, category: str = None) -> Dict[str, Any]:
-        """Create a new skill from SKILL.md content."""
+        """Create a new skill from SKILL.md content.
+
+        If *content* already has YAML frontmatter (starts with ``---``) it is
+        used as-is.  Otherwise a minimal frontmatter is generated automatically
+        so users can just paste instructions.
+        """
         err = SkillManager._validate_name(name)
-        if err:
-            return {"success": False, "error": err}
-        err = SkillManager._validate_frontmatter(content)
         if err:
             return {"success": False, "error": err}
         if len(content) > SkillManager.MAX_CONTENT_CHARS:
             return {"success": False, "error": f"Content exceeds {SkillManager.MAX_CONTENT_CHARS} chars."}
+
+        # Auto-wrap plain instructions with frontmatter
+        if not content.startswith("---"):
+            content = (
+                "---\n"
+                f"id: {name}\n"
+                f"name: {name}\n"
+                f"description: ''\n"
+                f"version: 1.0.0\n"
+                f"category: {category or 'general'}\n"
+                f"agent_type: SYSTEM\n"
+                "---\n\n"
+                + content.strip() + "\n"
+            )
+
+        err = SkillManager._validate_frontmatter(content)
+        if err:
+            return {"success": False, "error": err}
 
         if SkillManager._find_skill_dir(name):
             return {"success": False, "error": f"Skill '{name}' already exists."}
@@ -633,17 +653,32 @@ class SkillManager:
 
     @staticmethod
     def edit_skill(name: str, content: str) -> Dict[str, Any]:
-        """Replace the full SKILL.md of an existing skill."""
-        err = SkillManager._validate_frontmatter(content)
-        if err:
-            return {"success": False, "error": err}
+        """Replace the full SKILL.md or just the instructions body.
 
+        If *content* starts with ``---`` it is treated as a full SKILL.md.
+        Otherwise it is wrapped in the existing frontmatter so users can
+        edit just the instructions without touching YAML.
+        """
         skill_dir = SkillManager._find_skill_dir(name)
         if not skill_dir:
             return {"success": False, "error": f"Skill '{name}' not found."}
 
         skill_md = skill_dir / "SKILL.md"
-        skill_md.write_text(content, encoding="utf-8")
+
+        if content.startswith("---"):
+            err = SkillManager._validate_frontmatter(content)
+            if err:
+                return {"success": False, "error": err}
+            new_full = content
+        else:
+            # Instructions-only edit: keep existing frontmatter, replace body
+            existing = skill_md.read_text(encoding="utf-8")
+            end = existing.find("\n---", 3)
+            if end == -1:
+                return {"success": False, "error": "Existing SKILL.md has no frontmatter."}
+            new_full = existing[: end + 4] + "\n" + content.strip() + "\n"
+
+        skill_md.write_text(new_full, encoding="utf-8")
 
         loaded = SkillLoader.parse_skill_md(skill_md)
         if loaded:

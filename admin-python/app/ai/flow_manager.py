@@ -15,9 +15,9 @@ import logging
 import time
 from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.agents import AgentService
@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 MAX_FIX_ITERATIONS = 3
 MAX_LLM_RETRIES = 3
 RETRY_BASE_DELAY = 2  # seconds
+LLM_STAGE_TIMEOUT = 600  # 单阶段 LLM 调用最大超时（秒）
 
 
 class PipelineStatus(str, Enum):
@@ -50,9 +51,9 @@ STAGE_DEFINITIONS = [
     {"key": "prototype",      "name": "原型预览",   "agent": "FE",  "need_confirm": True},
     {"key": "delivery",       "name": "交付包",     "agent": "PJM", "need_confirm": True},
     # 开发流程
-    {"key": "frontend_dev",   "name": "前端开发",   "agent": "FE",  "need_confirm": False},
-    {"key": "backend_dev",    "name": "后端开发",   "agent": "BE",  "need_confirm": False},
-    {"key": "code_review",    "name": "代码审查",   "agent": "QA",  "need_confirm": False},
+    {"key": "frontend_dev",   "name": "前端开发",   "agent": "FE",  "need_confirm": True},
+    {"key": "backend_dev",    "name": "后端开发",   "agent": "BE",  "need_confirm": True},
+    {"key": "code_review",    "name": "代码审查",   "agent": "QA",  "need_confirm": True},
     {"key": "testing",        "name": "自动化测试", "agent": "QA",  "need_confirm": False},
     {"key": "commit",         "name": "代码提交",   "agent": "PJM", "need_confirm": False},
     {"key": "deploy",         "name": "部署发布",   "agent": "PJM", "need_confirm": False},
@@ -226,11 +227,24 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 
 请根据以上技术栈生成对应的后端代码。如果未指定技术栈，默认使用 Java Spring Boot + MyBatis-Plus。
 
+**注意**: 如果前端层是 PHP 转发层（BFF），则后端需要提供完整的 RESTful API 供 PHP 层调用，接口需要考虑：
+- 统一的响应格式（code/msg/data）
+- 认证 token 的传递和校验
+- 分页、排序等通用参数的标准化
+
 输出要求:
 - 每个代码块前用 `### 文件: 路径/文件名` 标注
 - 用对应语言的代码块包裹（```java, ```php, ```go, ```python, ```sql 等）
 - 包含 Controller、Service、Model/Entity、数据库建表 SQL
-- 遵循该技术栈的最佳实践和常见分层架构""",
+- 遵循该技术栈的最佳实践和常见分层架构
+
+在所有代码之后，请用以下 JSON 格式汇总文件列表（方便自动化解析）:
+```json
+[
+  {"path": "src/main/java/xxx/Controller.java", "content": "完整文件内容"},
+  {"path": "src/main/java/xxx/Service.java", "content": "完整文件内容"}
+]
+```""",
 
     "frontend_dev": """基于以下需求文档、页面设计和原型预览，生成完整的前端代码。
 
@@ -249,15 +263,29 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 ## 目标技术栈
 {{frontend_tech}}
 
-请根据以上技术栈生成对应的前端代码。如果未指定技术栈，默认使用 Vue 3 + Ant Design Vue + TypeScript。
+请根据以上技术栈生成对应的前端代码。
+
+**技术栈判断规则**:
+- 如果技术栈包含 `vue`、`react`、`javascript`、`typescript` 等 → 生成对应前端框架代码
+- 如果技术栈包含 `php` → 这通常是 BFF/API 转发层，生成 PHP 控制器代码：
+  - 接收前端请求 → 转发到后端 Java API → 返回响应
+  - 使用 curl 或 Guzzle 调用后端接口
+  - 处理参数转换、鉴权、日志等中间件逻辑
+- 如果未指定技术栈 → 默认使用 Vue 3 + Ant Design Vue + TypeScript
 
 输出要求:
 - 每个代码块前用 `### 文件: 路径/文件名` 标注
-- 用对应语言的代码块包裹（```vue, ```js, ```ts, ```jsx, ```tsx 等）
-- 包含列表页、表单/弹窗组件、API 服务、路由配置
-4. 路由配置（用 ```js 包裹）
+- 用对应语言的代码块包裹（```vue, ```js, ```ts, ```php, ```jsx, ```tsx 等）
+- 前端框架项目：包含列表页、表单/弹窗组件、API 服务、路由配置
+- PHP 转发层项目：包含 Controller（接收+转发）、Service（业务逻辑）、Middleware（鉴权/日志）、路由配置
 
-每个代码块前用 `### 文件: 路径/文件名` 标注。""",
+在所有代码之后，请用以下 JSON 格式汇总文件列表:
+```json
+[
+  {"path": "src/views/List.vue", "content": "完整文件内容"},
+  {"path": "src/api/module.js", "content": "完整文件内容"}
+]
+```""",
 
     "code_review": """请审查以下前后端代码，检查代码质量、安全性和最佳实践。
 
@@ -274,9 +302,19 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 4. 改进建议（每个问题给出具体的修复方案）
 5. 是否通过审查 (PASS/FAIL)
 
-如果发现 critical 或 major 问题，标记为 FAIL 并给出详细修复指导。""",
+如果发现 critical 或 major 问题，标记为 FAIL 并给出详细修复指导。
 
-    "testing": """基于以下需求和前后端代码，设计测试用例并验证。
+请在输出末尾附带结构化 JSON（方便自动化解析）:
+```json
+{
+  "review_passed": true/false,
+  "backend_score": "A/B/C/D/F",
+  "frontend_score": "A/B/C/D/F",
+  "fix_suggestions": "修复建议摘要"
+}
+```""",
+
+    "testing": """基于以下需求和前后端代码，设计测试用例并生成可执行的测试脚本。
 
 需求文档:
 {{requirement_output}}
@@ -290,11 +328,42 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 代码审查结果:
 {{code_review_output}}
 
-请输出:
-1. 测试用例列表
-2. 测试结果（通过/失败）
-3. 覆盖率评估
-4. 发现的 Bug 列表（标注严重程度: critical/major/minor）""",
+## 要求
+
+请完成以下两部分输出:
+
+### 第一部分：测试用例分析
+1. 测试用例列表（含优先级、预期结果）
+2. 覆盖率评估
+3. 发现的 Bug 列表（标注严重程度: critical/major/minor）
+
+### 第二部分：可执行测试脚本
+请根据后端技术栈生成对应的自动化测试代码:
+- Java: JUnit 5 + MockMvc 测试
+- Go: testing 包 + httptest
+- Python: pytest + httpx
+- PHP: PHPUnit
+- Node.js: Jest + supertest
+
+如果后端有 REST API，请生成 API 接口测试脚本，包含:
+- 正常流程测试（200 响应）
+- 参数校验测试（400 响应）
+- 权限测试（401/403 响应）
+- 边界条件测试
+
+每个代码块前用 `### 文件: 路径/文件名` 标注。
+
+在输出末尾附带结构化 JSON:
+```json
+{
+  "tests_passed": true/false,
+  "bug_details": "发现的问题详情",
+  "test_cases_total": 10,
+  "test_cases_passed": 8,
+  "coverage_estimate": "80%",
+  "test_scripts": ["tests/TestController.java"]
+}
+```""",
 
     "commit": """请整理以下前后端代码，生成提交信息并准备提交。
 
@@ -418,6 +487,86 @@ def _build_pipeline_prompt(stage_key: str, context: Dict[str, Any],
 
 # ==================== 输出解析 ====================
 
+def _try_parse_json_code_files(raw_output: str) -> Dict[str, str]:
+    """尝试从 LLM 输出中提取 JSON 格式的代码文件映射。
+    支持格式: ```json\n{"path": "src/xxx", "content": "..."}\n``` 或直接 JSON 对象
+    """
+    import re
+    # 尝试匹配 ```json 代码块中的文件列表
+    pattern = re.compile(r"```(?:json|JSON)\s*\n(.*?)```", re.DOTALL)
+    for match in pattern.finditer(raw_output):
+        try:
+            data = json.loads(match.group(1).strip())
+            if isinstance(data, dict):
+                # {"path": "content"} 格式
+                return {k: v for k, v in data.items() if isinstance(v, str)}
+            if isinstance(data, list):
+                # [{"path": "src/a.js", "content": "..."}] 格式
+                files = {}
+                for item in data:
+                    if isinstance(item, dict) and "path" in item and "content" in item:
+                        files[item["path"]] = item["content"]
+                if files:
+                    return files
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+    # 尝试匹配 `<!-- CODE_FILES_JSON -->` 标记
+    marker = raw_output.find("<!-- CODE_FILES_JSON -->")
+    if marker >= 0:
+        after = raw_output[marker + len("<!-- CODE_FILES_JSON -->"):]
+        end = after.find("<!-- /CODE_FILES_JSON -->")
+        if end > 0:
+            try:
+                data = json.loads(after[:end].strip())
+                if isinstance(data, dict):
+                    return {k: v for k, v in data.items() if isinstance(v, str)}
+            except (json.JSONDecodeError, TypeError):
+                pass
+    return {}
+
+
+def _parse_markdown_code_files(raw_output: str) -> Dict[str, str]:
+    """从 Markdown 格式的 LLM 输出中解析代码文件（fallback）"""
+    files = {}
+    current_file = None
+    current_content = []
+    in_code = False
+
+    for line in raw_output.split("\n"):
+        if line.startswith("### 文件:"):
+            if current_file and current_content:
+                files[current_file] = "\n".join(current_content)
+            current_file = line.replace("### 文件:", "").strip()
+            current_content = []
+        elif line.startswith("```") and not in_code:
+            in_code = True
+            continue
+        elif line.startswith("```") and in_code:
+            in_code = False
+            continue
+        elif in_code and current_file:
+            current_content.append(line)
+
+    if current_file and current_content:
+        files[current_file] = "\n".join(current_content)
+    return files
+
+
+def _try_parse_json_block(raw_output: str, expected_keys: List[str]) -> Optional[Dict[str, Any]]:
+    """尝试从 LLM 输出中提取包含指定 key 的 JSON 块"""
+    import re
+    pattern = re.compile(r"```(?:json|JSON)\s*\n(.*?)```", re.DOTALL)
+    for match in pattern.finditer(raw_output):
+        try:
+            data = json.loads(match.group(1).strip())
+            if isinstance(data, dict) and any(k in data for k in expected_keys):
+                return data
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return None
+
+
 def _parse_agent_output(stage_key: str, raw_output: str) -> Dict[str, Any]:
     """解析 Agent 输出，提取结构化数据"""
     result = {"output": raw_output}
@@ -453,29 +602,12 @@ def _parse_agent_output(stage_key: str, raw_output: str) -> Dict[str, Any]:
                     else:
                         result["preview_html"] = raw_output[start:].strip()
 
-    if stage_key in ("development", "frontend_dev", "backend_dev"):
-        files = {}
-        current_file = None
-        current_content = []
-        in_code = False
-
-        for line in raw_output.split("\n"):
-            if line.startswith("### 文件:"):
-                if current_file and current_content:
-                    files[current_file] = "\n".join(current_content)
-                current_file = line.replace("### 文件:", "").strip()
-                current_content = []
-            elif line.startswith("```") and not in_code:
-                in_code = True
-                continue
-            elif line.startswith("```") and in_code:
-                in_code = False
-                continue
-            elif in_code and current_file:
-                current_content.append(line)
-
-        if current_file and current_content:
-            files[current_file] = "\n".join(current_content)
+    if stage_key in ("development", "frontend_dev", "backend_dev", "testing"):
+        # 优先尝试解析 JSON 结构化输出
+        files = _try_parse_json_code_files(raw_output)
+        if not files:
+            # fallback: 正则解析
+            files = _parse_markdown_code_files(raw_output)
         if files:
             result["code_files"] = files
 
@@ -492,28 +624,36 @@ def _parse_agent_output(stage_key: str, raw_output: str) -> Dict[str, Any]:
                 break
 
     if stage_key == "code_review":
-        if "PASS" in raw_output:
-            result["review_passed"] = True
-        elif "FAIL" in raw_output:
-            result["review_passed"] = False
-        # 提取改进建议作为修复指导
-        suggestions = []
-        for line in raw_output.split("\n"):
-            line = line.strip()
-            if line.startswith(("- ", "* ", "改进", "建议", "修复", "问题")):
-                suggestions.append(line)
-        if suggestions:
-            result["fix_suggestions"] = "\n".join(suggestions[:10])
+        # 优先尝试 JSON 结构化输出
+        json_result = _try_parse_json_block(raw_output, ["review_passed", "fix_suggestions"])
+        if json_result:
+            result.update(json_result)
+        else:
+            if "PASS" in raw_output:
+                result["review_passed"] = True
+            elif "FAIL" in raw_output:
+                result["review_passed"] = False
+            suggestions = []
+            for line in raw_output.split("\n"):
+                line = line.strip()
+                if line.startswith(("- ", "* ", "改进", "建议", "修复", "问题")):
+                    suggestions.append(line)
+            if suggestions:
+                result["fix_suggestions"] = "\n".join(suggestions[:10])
 
     if stage_key == "testing":
-        has_failures = "失败" in raw_output or "FAIL" in raw_output or "critical" in raw_output.lower()
-        result["tests_passed"] = not has_failures
-        if has_failures:
-            bug_lines = []
-            for line in raw_output.split("\n"):
-                if any(kw in line.lower() for kw in ["bug", "失败", "fail", "error", "critical", "major"]):
-                    bug_lines.append(line.strip())
-            result["bug_details"] = "\n".join(bug_lines[:10]) if bug_lines else raw_output[:500]
+        json_result = _try_parse_json_block(raw_output, ["tests_passed", "bug_details"])
+        if json_result:
+            result.update(json_result)
+        else:
+            has_failures = "失败" in raw_output or "FAIL" in raw_output or "critical" in raw_output.lower()
+            result["tests_passed"] = not has_failures
+            if has_failures:
+                bug_lines = []
+                for line in raw_output.split("\n"):
+                    if any(kw in line.lower() for kw in ["bug", "失败", "fail", "error", "critical", "major"]):
+                        bug_lines.append(line.strip())
+                result["bug_details"] = "\n".join(bug_lines[:10]) if bug_lines else raw_output[:500]
 
     return result
 
@@ -525,7 +665,8 @@ def _is_retriable_error(e: Exception) -> bool:
     error_str = str(e).lower()
     type_name = type(e).__name__.lower()
     retriable_keywords = ["timeout", "rate limit", "429", "503", "502", "500",
-                          "connection", "overloaded", "capacity", "retry"]
+                          "connection", "overloaded", "capacity", "retry",
+                          "connecterror", "timeouterror", "read error", "eof"]
     return any(kw in error_str for kw in retriable_keywords) or any(kw in type_name for kw in retriable_keywords)
 
 
@@ -547,6 +688,7 @@ async def _call_agent_with_retry(agent_service: AgentService, session_id: str,
     try:
         for attempt in range(MAX_LLM_RETRIES):
             try:
+                logger.info(f"LLM call attempt {attempt + 1}/{MAX_LLM_RETRIES} for {session_id}")
                 result = await agent_service.chat(
                     session_id=session_id,
                     message=message,
@@ -961,17 +1103,23 @@ class DevPipelineManager:
         skill_config = json.loads(pipe.skill_config or "{}")
         workspace = pipe.workspace_path
 
-        # Skill: code_writer — development 阶段写文件
-        if stage_key == "development" and parsed.get("code_files"):
+        # Skill: code_writer — frontend_dev/backend_dev/testing 阶段写文件
+        if stage_key in ("frontend_dev", "backend_dev", "testing") and parsed.get("code_files"):
             workspace = ensure_workspace(pipeline_id)
             pipe.workspace_path = workspace
+            # testing 阶段的代码写到 tests/ 子目录
+            if stage_key == "testing":
+                test_files = {f"tests/{k}" if not k.startswith("tests/") else k: v
+                              for k, v in parsed["code_files"].items()}
+            else:
+                test_files = None
             result = await skill_registry.execute(
                 "code_writer",
                 pipeline_id=pipeline_id,
-                code_files=parsed["code_files"],
+                code_files=test_files or parsed["code_files"],
             )
             if result.status.value == "completed" and result.output:
-                logger.info(f"code_writer: {result.output.get('files_written', [])}")
+                logger.info(f"code_writer ({stage_key}): {result.output.get('files_written', [])}")
                 stages[stage_key]["skill_result"] = {
                     "skill": "code_writer",
                     "files_written": result.output.get("files_written", []),
@@ -1085,6 +1233,95 @@ class DevPipelineManager:
 
     # ==================== 核心执行引擎 ====================
 
+    async def _run_single_stage(
+        self, pipeline_id: str, stage_key: str, stages: Dict[str, Any],
+        pipe: 'DevPipeline', fix_feedback: str, user_input: str,
+        session: AsyncSession,
+    ) -> Tuple[str, Dict[str, Any]]:
+        """执行单个阶段：构建 prompt → 调用 LLM → 解析输出。
+        返回 (raw_output, parsed)。
+        注意：不修改 stages/pipe 状态，由调用方负责。
+        """
+        agent_type = _get_stage_agent(stage_key)
+
+        # 检索记忆
+        memories_text = await self._retrieve_memories(
+            pipeline_id, stage_key, pipe.tenant_id, session
+        )
+
+        # 加载技术栈配置
+        pipe_config = json.loads(pipe.skill_config or "{}")
+
+        # 加载技术栈配置
+        pipe_config = json.loads(pipe.skill_config or "{}")
+
+        # 构建 context（先构建，后续语义搜索需要用到 user_request）
+        user_request = user_input or pipe.user_request or ""
+        context = {
+            "user_request": user_request,
+            "stage_outputs": {k: v for k, v in stages.items() if v.get("status") == "completed"},
+            "fix_feedback": fix_feedback,
+            "memories_text": memories_text,
+            "backend_tech": pipe_config.get("backend_tech", ""),
+            "frontend_tech": pipe_config.get("frontend_tech", ""),
+        }
+
+        # 加载关联项目的知识库上下文（上下文工程：语义检索 + 项目知识）
+        project_ctx_section = ""
+        fe_proj_id = pipe_config.get("frontend_project_id", "")
+        be_proj_id = pipe_config.get("backend_project_id", "")
+        ctx_parts = []
+        if fe_proj_id and stage_key in ("frontend_dev", "prototype", "page_design"):
+            from app.services.knowledge_service import get_relevant_context
+            ctx = await get_relevant_context(
+                query=user_request,
+                project_id=fe_proj_id,
+                tenant_id=pipe.tenant_id,
+            )
+            if ctx:
+                ctx_parts.append(ctx)
+            else:
+                fe_ctx = await _load_project_context(fe_proj_id, "frontend")
+                if fe_ctx:
+                    ctx_parts.append(f"## 前端项目代码参考\n{fe_ctx}")
+        if be_proj_id and stage_key in ("backend_dev", "code_review", "testing"):
+            from app.services.knowledge_service import get_relevant_context
+            ctx = await get_relevant_context(
+                query=user_request,
+                project_id=be_proj_id,
+                tenant_id=pipe.tenant_id,
+            )
+            if ctx:
+                ctx_parts.append(ctx)
+            else:
+                be_ctx = await _load_project_context(be_proj_id, "backend")
+                if be_ctx:
+                    ctx_parts.append(f"## 后端项目代码参考\n{be_ctx}")
+        if ctx_parts:
+            project_ctx_section = "\n\n".join(ctx_parts)
+
+        # 构建 prompt
+        project_prompts = await self._load_project_prompts(pipe.project_id or "")
+        prompt = _build_pipeline_prompt(stage_key, context, custom_prompts=project_prompts)
+        if project_ctx_section:
+            prompt = f"{project_ctx_section}\n\n---\n\n{prompt}"
+
+        # 调用 LLM
+        session_id = f"{pipeline_id}_{stage_key}"
+        html_stages = {"prototype", "ui_preview"}
+        max_tok = 16384 if stage_key in html_stages else None
+
+        raw_output = await asyncio.wait_for(
+            _call_agent_with_retry(
+                self.agent_service, session_id, prompt, agent_type,
+                max_tokens_override=max_tok,
+            ),
+            timeout=LLM_STAGE_TIMEOUT,
+        )
+
+        parsed = _parse_agent_output(stage_key, raw_output)
+        return raw_output, parsed
+
     async def _load_project_prompts(self, project_id: str) -> Dict[str, str]:
         """加载项目级自定义 prompt"""
         if not project_id:
@@ -1106,7 +1343,7 @@ class DevPipelineManager:
         return {}
 
     async def execute_stage(self, pipeline_id: str, user_input: str = "") -> Dict[str, Any]:
-        """执行流水线（迭代循环，带自修复分支）"""
+        """执行流水线（迭代循环，带自修复分支和并行 Fan-out）"""
         # Ensure LLM config is loaded from DB before executing
         from app.ai.agents import AgentFactory
         async with async_session_maker() as cfg_session:
@@ -1119,9 +1356,118 @@ class DevPipelineManager:
 
             while True:
                 current_stage = pipe.current_stage
-                agent_type = _get_stage_agent(current_stage)
 
-                # 更新阶段状态
+                # ====== Fan-out: frontend_dev + backend_dev 并行执行 ======
+                if current_stage == "frontend_dev" and "backend_dev" in stages \
+                        and stages.get("backend_dev", {}).get("status") == "pending":
+                    stages["frontend_dev"]["status"] = "running"
+                    stages["frontend_dev"]["started_at"] = datetime.now().isoformat()
+                    stages["backend_dev"]["status"] = "running"
+                    stages["backend_dev"]["started_at"] = datetime.now().isoformat()
+                    pipe.status = PipelineStatus.RUNNING.value
+                    pipe.stages_data = json.dumps(stages, ensure_ascii=False)
+                    pipe.update_time = int(time.time() * 1000)
+                    await session.commit()
+
+                    try:
+                        fe_result, be_result = await asyncio.gather(
+                            self._run_single_stage(
+                                pipeline_id, "frontend_dev", stages,
+                                pipe, fix_feedback, user_input, session,
+                            ),
+                            self._run_single_stage(
+                                pipeline_id, "backend_dev", stages,
+                                pipe, fix_feedback, user_input, session,
+                            ),
+                            return_exceptions=True,
+                        )
+
+                        # 处理前端结果
+                        if isinstance(fe_result, Exception):
+                            raise fe_result
+                        fe_output, fe_parsed = fe_result
+                        stages["frontend_dev"].update({
+                            "status": "completed",
+                            "output": fe_output,
+                            "structured_output": fe_parsed,
+                            "preview_html": fe_parsed.get("preview_html", ""),
+                            "code_files": fe_parsed.get("code_files", {}),
+                            "completed_at": datetime.now().isoformat(),
+                        })
+                        await self._save_stage_memory(
+                            pipeline_id, "frontend_dev", "FE",
+                            fe_output, fe_parsed, pipe.tenant_id, db_session=session,
+                        )
+
+                        # 处理后端结果
+                        if isinstance(be_result, Exception):
+                            raise be_result
+                        be_output, be_parsed = be_result
+                        stages["backend_dev"].update({
+                            "status": "completed",
+                            "output": be_output,
+                            "structured_output": be_parsed,
+                            "code_files": be_parsed.get("code_files", {}),
+                            "completed_at": datetime.now().isoformat(),
+                        })
+                        await self._save_stage_memory(
+                            pipeline_id, "backend_dev", "BE",
+                            be_output, be_parsed, pipe.tenant_id, db_session=session,
+                        )
+
+                        # 执行 Skill（写文件）
+                        for sk, prs in [("frontend_dev", fe_parsed), ("backend_dev", be_parsed)]:
+                            await self._execute_stage_skill(
+                                pipeline_id, pipe, sk, stages, prs, session,
+                            )
+
+                        pipe.stages_data = json.dumps(stages, ensure_ascii=False)
+                        pipe.update_time = int(time.time() * 1000)
+                        await session.commit()
+
+                        # FE/BE 都完成，推进到 code_review
+                        pipe.current_stage = "code_review"
+                        pipe.stages_data = json.dumps(stages, ensure_ascii=False)
+                        pipe.update_time = int(time.time() * 1000)
+                        await session.commit()
+                        user_input = ""
+                        fix_feedback = ""
+
+                        # code_review need_confirm → 暂停
+                        if _stage_needs_confirm("code_review"):
+                            pipe.status = PipelineStatus.WAITING_CONFIRM.value
+                            pipe.update_time = int(time.time() * 1000)
+                            await session.commit()
+                            return {
+                                "pipeline_id": pipeline_id,
+                                "stage": "frontend_dev+backend_dev",
+                                "status": "waiting_confirm",
+                                "output": fe_output[:500] + "\n---\n" + be_output[:500],
+                                "need_confirm": True,
+                                "parallel": True,
+                            }
+                        continue  # 不需要确认，继续循环执行 code_review
+
+                    except (asyncio.TimeoutError, Exception) as e:
+                        err_msg = str(e) if not isinstance(e, asyncio.TimeoutError) \
+                            else f"并行执行超时（{LLM_STAGE_TIMEOUT}秒）"
+                        logger.error(f"Pipeline {pipeline_id} parallel FE/BE failed: {err_msg}")
+                        for sk in ("frontend_dev", "backend_dev"):
+                            if stages[sk]["status"] == "running":
+                                stages[sk]["status"] = "failed"
+                                stages[sk]["error"] = err_msg
+                        pipe.status = PipelineStatus.FAILED.value
+                        pipe.stages_data = json.dumps(stages, ensure_ascii=False)
+                        pipe.update_time = int(time.time() * 1000)
+                        await session.commit()
+                        return {
+                            "pipeline_id": pipeline_id,
+                            "stage": "frontend_dev+backend_dev",
+                            "status": "failed",
+                            "error": err_msg,
+                        }
+
+                # ====== 单阶段顺序执行 ======
                 stages[current_stage]["status"] = "running"
                 stages[current_stage]["started_at"] = datetime.now().isoformat()
                 pipe.status = PipelineStatus.RUNNING.value
@@ -1129,73 +1475,15 @@ class DevPipelineManager:
                 pipe.update_time = int(time.time() * 1000)
                 await session.commit()
 
-                # 检索记忆
-                memories_text = await self._retrieve_memories(
-                    pipeline_id, current_stage, pipe.tenant_id, session
-                )
-
-                # 加载技术栈配置
-                pipe_config = json.loads(pipe.skill_config or "{}")
-
-                # 加载关联项目的知识库上下文
-                project_ctx_section = ""
-                fe_proj_id = pipe_config.get("frontend_project_id", "")
-                be_proj_id = pipe_config.get("backend_project_id", "")
-                ctx_parts = []
-                if fe_proj_id:
-                    from app.services.knowledge_service import get_project_knowledge_text
-                    fe_knowledge = await get_project_knowledge_text(fe_proj_id)
-                    if fe_knowledge:
-                        ctx_parts.append(fe_knowledge)
-                    else:
-                        # 知识库没有，尝试加载原始代码
-                        fe_ctx = await _load_project_context(fe_proj_id, "frontend")
-                        if fe_ctx:
-                            ctx_parts.append(f"## 前端项目代码参考\n{fe_ctx}")
-                if be_proj_id:
-                    from app.services.knowledge_service import get_project_knowledge_text
-                    be_knowledge = await get_project_knowledge_text(be_proj_id)
-                    if be_knowledge:
-                        ctx_parts.append(be_knowledge)
-                    else:
-                        be_ctx = await _load_project_context(be_proj_id, "backend")
-                        if be_ctx:
-                            ctx_parts.append(f"## 后端项目代码参考\n{be_ctx}")
-                if ctx_parts:
-                    project_ctx_section = "\n\n".join(ctx_parts)
-
-                # 构建 prompt（加载项目级自定义 prompt）
-                context = {
-                    "user_request": user_input or pipe.user_request or "",
-                    "stage_outputs": {k: v for k, v in stages.items() if v.get("status") == "completed"},
-                    "fix_feedback": fix_feedback,
-                    "memories_text": memories_text,
-                    "backend_tech": pipe_config.get("backend_tech", ""),
-                    "frontend_tech": pipe_config.get("frontend_tech", ""),
-                }
-                project_prompts = await self._load_project_prompts(pipe.project_id or "")
-                prompt = _build_pipeline_prompt(current_stage, context,
-                                                 custom_prompts=project_prompts)
-                # 注入项目代码上下文
-                if project_ctx_section:
-                    prompt = f"{project_ctx_section}\n\n---\n\n{prompt}"
-                if user_input:
-                    prompt = f"{user_input}\n\n{prompt}"
-                    user_input = ""
-
-                # 调用 Agent（带重试）
-                session_id = f"{pipeline_id}_{current_stage}"
-                # HTML 生成阶段需要更多 token 防止截断
-                html_stages = {"prototype", "ui_preview"}
-                max_tok = 16384 if current_stage in html_stages else None
                 try:
-                    raw_output = await _call_agent_with_retry(
-                        self.agent_service, session_id, prompt, agent_type,
-                        max_tokens_override=max_tok,
+                    raw_output, parsed = await self._run_single_stage(
+                        pipeline_id, current_stage, stages,
+                        pipe, fix_feedback, user_input, session,
                     )
+                    if user_input:
+                        user_input = ""
 
-                    # 解析输出
-                    parsed = _parse_agent_output(current_stage, raw_output)
+                    # 更新阶段状态
                     stages[current_stage].update({
                         "status": "completed",
                         "output": raw_output,
@@ -1208,6 +1496,7 @@ class DevPipelineManager:
                     await session.commit()
 
                     # 保存记忆
+                    agent_type = _get_stage_agent(current_stage)
                     await self._save_stage_memory(
                         pipeline_id, current_stage, agent_type, raw_output, parsed, pipe.tenant_id,
                         db_session=session
@@ -1219,6 +1508,79 @@ class DevPipelineManager:
                     )
 
                     # ---- 条件分支：自修复决策 ----
+
+                    # 分支 0: Code Review 失败 → 自动回退到前端开发阶段修复（优先级最高）
+                    if current_stage == "code_review" and parsed.get("review_passed") is False:
+                        if pipe.retry_count < MAX_FIX_ITERATIONS:
+                            pipe.retry_count += 1
+                            fix_feedback = parsed.get("fix_suggestions", raw_output[:500])
+                            pipe.current_stage = "frontend_dev"
+                            idx = STAGE_KEYS.index("frontend_dev")
+                            for sk in STAGE_KEYS[idx:]:
+                                stages[sk]["status"] = "pending"
+                                stages[sk]["output"] = ""
+                                stages[sk]["error"] = ""
+                                stages[sk]["code_files"] = {}
+                                stages[sk]["preview_html"] = ""
+                            pipe.status = PipelineStatus.RUNNING.value
+                            pipe.stages_data = json.dumps(stages, ensure_ascii=False)
+                            pipe.update_time = int(time.time() * 1000)
+                            await session.commit()
+
+                            logger.info(f"Pipeline {pipeline_id}: Code review failed, "
+                                       f"looping back to frontend_dev (iteration {pipe.retry_count}/{MAX_FIX_ITERATIONS})")
+                            await self._save_stage_memory(
+                                pipeline_id, "code_review_fix", agent_type,
+                                f"第{pipe.retry_count}次修复: {fix_feedback[:300]}",
+                                {}, pipe.tenant_id, db_session=session
+                            )
+                            continue  # 继续循环，重新执行 frontend_dev
+                        else:
+                            pipe.status = PipelineStatus.FAILED.value
+                            pipe.stages_data = json.dumps(stages, ensure_ascii=False)
+                            pipe.update_time = int(time.time() * 1000)
+                            await session.commit()
+                            return {
+                                "pipeline_id": pipeline_id,
+                                "stage": current_stage,
+                                "status": "failed",
+                                "error": f"代码审查在 {MAX_FIX_ITERATIONS} 次修复后仍未通过",
+                                "retry_count": pipe.retry_count,
+                            }
+
+                    # 分支 0b: 测试失败 → 自动回退到前端开发阶段修复 Bug
+                    if current_stage == "testing" and not parsed.get("tests_passed", True):
+                        if pipe.retry_count < MAX_FIX_ITERATIONS:
+                            pipe.retry_count += 1
+                            fix_feedback = f"测试发现问题，请修复:\n{parsed.get('bug_details', raw_output[:500])}"
+                            pipe.current_stage = "frontend_dev"
+                            idx = STAGE_KEYS.index("frontend_dev")
+                            for sk in STAGE_KEYS[idx:]:
+                                stages[sk]["status"] = "pending"
+                                stages[sk]["output"] = ""
+                                stages[sk]["error"] = ""
+                                stages[sk]["code_files"] = {}
+                                stages[sk]["preview_html"] = ""
+                            pipe.status = PipelineStatus.RUNNING.value
+                            pipe.stages_data = json.dumps(stages, ensure_ascii=False)
+                            pipe.update_time = int(time.time() * 1000)
+                            await session.commit()
+
+                            logger.info(f"Pipeline {pipeline_id}: Tests failed, "
+                                       f"looping back to frontend_dev (iteration {pipe.retry_count}/{MAX_FIX_ITERATIONS})")
+                            continue
+                        else:
+                            pipe.status = PipelineStatus.FAILED.value
+                            pipe.stages_data = json.dumps(stages, ensure_ascii=False)
+                            pipe.update_time = int(time.time() * 1000)
+                            await session.commit()
+                            return {
+                                "pipeline_id": pipeline_id,
+                                "stage": current_stage,
+                                "status": "failed",
+                                "error": f"自动化测试在 {MAX_FIX_ITERATIONS} 次修复后仍有问题",
+                                "retry_count": pipe.retry_count,
+                            }
 
                     # 分支 1: 需要用户确认 → 暂停
                     if _stage_needs_confirm(current_stage):
@@ -1233,69 +1595,6 @@ class DevPipelineManager:
                             "preview_html": parsed.get("preview_html", ""),
                             "need_confirm": True,
                         }
-
-                    # 分支 2: Code Review 失败 → 回退到开发阶段修复
-                    if current_stage == "code_review" and parsed.get("review_passed") is False:
-                        if pipe.retry_count < MAX_FIX_ITERATIONS:
-                            pipe.retry_count += 1
-                            fix_feedback = parsed.get("fix_suggestions", raw_output[:500])
-                            pipe.current_stage = "development"
-                            stages["development"]["status"] = "pending"
-                            pipe.status = PipelineStatus.RUNNING.value
-                            pipe.stages_data = json.dumps(stages, ensure_ascii=False)
-                            pipe.update_time = int(time.time() * 1000)
-                            await session.commit()
-
-                            logger.info(f"Pipeline {pipeline_id}: Code review failed, "
-                                       f"looping back to development (iteration {pipe.retry_count}/{MAX_FIX_ITERATIONS})")
-                            # 保存修复记忆
-                            await self._save_stage_memory(
-                                pipeline_id, "code_review_fix", agent_type,
-                                f"第{pipe.retry_count}次修复: {fix_feedback[:300]}",
-                                {}, pipe.tenant_id,
-                                db_session=session
-                            )
-                            continue  # 继续循环，重新执行 development
-                        else:
-                            pipe.status = PipelineStatus.FAILED.value
-                            pipe.stages_data = json.dumps(stages, ensure_ascii=False)
-                            pipe.update_time = int(time.time() * 1000)
-                            await session.commit()
-                            return {
-                                "pipeline_id": pipeline_id,
-                                "stage": current_stage,
-                                "status": "failed",
-                                "error": f"代码审查在 {MAX_FIX_ITERATIONS} 次修复后仍未通过",
-                                "retry_count": pipe.retry_count,
-                            }
-
-                    # 分支 3: 测试失败 → 回退到开发阶段修复 Bug
-                    if current_stage == "testing" and not parsed.get("tests_passed", True):
-                        if pipe.retry_count < MAX_FIX_ITERATIONS:
-                            pipe.retry_count += 1
-                            fix_feedback = f"测试发现问题，请修复:\n{parsed.get('bug_details', raw_output[:500])}"
-                            pipe.current_stage = "development"
-                            stages["development"]["status"] = "pending"
-                            pipe.status = PipelineStatus.RUNNING.value
-                            pipe.stages_data = json.dumps(stages, ensure_ascii=False)
-                            pipe.update_time = int(time.time() * 1000)
-                            await session.commit()
-
-                            logger.info(f"Pipeline {pipeline_id}: Tests failed, "
-                                       f"looping back to development (iteration {pipe.retry_count}/{MAX_FIX_ITERATIONS})")
-                            continue
-                        else:
-                            pipe.status = PipelineStatus.FAILED.value
-                            pipe.stages_data = json.dumps(stages, ensure_ascii=False)
-                            pipe.update_time = int(time.time() * 1000)
-                            await session.commit()
-                            return {
-                                "pipeline_id": pipeline_id,
-                                "stage": current_stage,
-                                "status": "failed",
-                                "error": f"自动化测试在 {MAX_FIX_ITERATIONS} 次修复后仍有问题",
-                                "retry_count": pipe.retry_count,
-                            }
 
                     # 分支 4: 测试通过 → 重置重试计数器
                     if current_stage == "testing":
@@ -1328,6 +1627,20 @@ class DevPipelineManager:
                     fix_feedback = ""  # 清除修复反馈
                     # 继续循环
 
+                except asyncio.TimeoutError:
+                    logger.error(f"Pipeline {pipeline_id} stage {current_stage} timed out after {LLM_STAGE_TIMEOUT}s")
+                    stages[current_stage]["status"] = "failed"
+                    stages[current_stage]["error"] = f"阶段超时（{LLM_STAGE_TIMEOUT}秒），LLM 未返回结果，请重试"
+                    pipe.status = PipelineStatus.FAILED.value
+                    pipe.stages_data = json.dumps(stages, ensure_ascii=False)
+                    pipe.update_time = int(time.time() * 1000)
+                    await session.commit()
+                    return {
+                        "pipeline_id": pipeline_id,
+                        "stage": current_stage,
+                        "status": "failed",
+                        "error": f"阶段超时（{LLM_STAGE_TIMEOUT}秒），请点击重新执行",
+                    }
                 except Exception as e:
                     logger.error(f"Pipeline {pipeline_id} stage {current_stage} failed: {e}")
                     stages[current_stage]["status"] = "failed"
@@ -1454,13 +1767,30 @@ class DevPipelineManager:
                 {
                     "pipeline_id": p.pipeline_id,
                     "project_id": p.project_id or "",
+                    "user_request": p.user_request or "",
                     "status": p.status,
                     "current_stage": p.current_stage,
                     "retry_count": p.retry_count,
-                    "created_at": str(p.create_time),
+                    "create_time": p.create_time,
+                    "update_time": p.update_time,
                 }
                 for p in pipes
             ]
+
+    async def delete_pipeline(self, pipeline_id: str, tenant_id: int = 0) -> None:
+        """软删除流水线"""
+        async with async_session_maker() as session:
+            query = update(DevPipeline).where(
+                DevPipeline.pipeline_id == pipeline_id,
+                DevPipeline.is_deleted == 0,
+            )
+            if tenant_id:
+                query = query.where(DevPipeline.tenant_id == tenant_id)
+            query = query.values(is_deleted=1, update_time=int(time.time() * 1000))
+            result = await session.execute(query)
+            if result.rowcount == 0:
+                raise ValueError("流水线不存在")
+            await session.commit()
 
     async def rollback(self, pipeline_id: str) -> Dict[str, Any]:
         async with async_session_maker() as session:

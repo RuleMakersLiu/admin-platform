@@ -190,6 +190,21 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
               ),
             },
             {
+              key: 'instructions',
+              label: '技能指令',
+              children: (
+                <div className="detail-section">
+                  <div className="instructions-content">
+                    {skill.content ? (
+                      <pre className="instructions-pre">{skill.content}</pre>
+                    ) : (
+                      <Paragraph style={{ color: '#888' }}>暂无技能指令内容</Paragraph>
+                    )}
+                  </div>
+                </div>
+              ),
+            },
+            {
               key: 'info',
               label: '详细信息',
               children: (
@@ -289,7 +304,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
             margin-bottom: 12px;
           }
           .header-meta .version {
-            color: #666;
+            color: #888;
             font-size: 14px;
           }
           .header-stats {
@@ -299,14 +314,14 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            color: #666;
+            color: #888;
           }
           .stat-item .stat-value {
             font-weight: 600;
-            color: #1f1f1f;
+            color: #e0e0e0;
           }
           .stat-item .stat-label {
-            color: #999;
+            color: #666;
             font-size: 13px;
           }
           .detail-actions {
@@ -318,16 +333,33 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
             padding: 8px 0;
           }
           .section-content {
-            background: #fafafa;
+            background: rgba(255, 255, 255, 0.04);
             padding: 16px;
             border-radius: 8px;
+          }
+          .instructions-content {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(0, 212, 255, 0.1);
+            border-radius: 8px;
+            padding: 16px;
+            max-height: 400px;
+            overflow-y: auto;
+          }
+          .instructions-pre {
+            margin: 0;
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-size: 13px;
+            line-height: 1.7;
+            color: #c9d1d9;
+            font-family: 'SF Mono', 'Fira Code', monospace;
           }
           .tags-section {
             margin-top: 24px;
           }
           .tags-section h4 {
             margin-bottom: 12px;
-            color: #666;
+            color: #888;
             font-weight: 500;
           }
           .tags-list {

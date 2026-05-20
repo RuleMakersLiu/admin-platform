@@ -152,6 +152,17 @@ async def rollback_pipeline(pipeline_id: str):
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.delete("/pipeline/{pipeline_id}")
+async def delete_pipeline(pipeline_id: str, http_request: Request):
+    """删除流水线"""
+    tenant_id = _get_tenant_id(http_request)
+    try:
+        await pipeline_manager.delete_pipeline(pipeline_id, tenant_id)
+        return {"code": 200, "message": "删除成功"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @router.get("/pipeline/{pipeline_id}/files")
 async def get_pipeline_files(pipeline_id: str):
     """获取工作区文件列表"""

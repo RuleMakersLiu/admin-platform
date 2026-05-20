@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   Button, Spin, Input, Tag, Empty,
   message, Space, Typography, Alert, Drawer,
-  Tooltip, Badge, Collapse, Select,
+  Tooltip, Badge, Collapse, Select, Modal,
 } from 'antd'
 import {
   CheckCircleOutlined, CloseCircleOutlined,
@@ -11,11 +11,12 @@ import {
   Html5Outlined, DownloadOutlined,
   ThunderboltOutlined, BranchesOutlined, HistoryOutlined,
   ExclamationCircleOutlined, PlayCircleOutlined, ArrowLeftOutlined,
-  UndoOutlined, SettingOutlined,
+  UndoOutlined, SettingOutlined, DeleteOutlined, ReloadOutlined,
 } from '@ant-design/icons'
 import { useSearchParams } from 'react-router-dom'
 import { pipelineApi, type PipelineStatus } from '@/services/pipeline'
 import { generatorApi } from '@/services/api'
+import api from '@/services/api'
 import { MarkdownRenderer } from '@/utils/markdown'
 import { extractHtmlBlocks, prepareUIPreviewHtml, repairTruncatedHtml } from '@/utils/sanitize'
 
@@ -59,6 +60,65 @@ const STAGE_NAMES: Record<string, string> = {
 }
 
 const STAGE_KEYS = ['requirement', 'page_design', 'prototype', 'delivery', 'frontend_dev', 'backend_dev', 'code_review', 'testing', 'commit', 'deploy', 'report']
+
+const STATUS_COLORS: Record<string, { bg: string; color: string; text: string }> = {
+  running:           { bg: 'rgba(0,212,255,0.12)', color: '#00d4ff', text: '执行中' },
+  completed:         { bg: 'rgba(82,196,26,0.12)', color: '#52c41a', text: '已完成' },
+  failed:            { bg: 'rgba(245,34,45,0.12)',  color: '#f5222d', text: '失败' },
+  waiting_confirm:   { bg: 'rgba(250,173,20,0.12)', color: '#faad14', text: '待确认' },
+  pending:           { bg: 'rgba(255,255,255,0.05)',color: '#888',    text: '待执行' },
+}
+
+const PipelineHistoryList: React.FC<{
+  pipelines: any[]
+  loading: boolean
+  onSelect: (id: string) => void
+  onDelete: (id: string) => void
+}> = ({ pipelines, loading, onSelect, onDelete }) => {
+  if (loading) return <div style={{ textAlign: 'center', padding: 20 }}><Spin /></div>
+  if (!pipelines.length) return <Empty description="暂无历史流水线" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 400, overflow: 'auto' }}>
+      {pipelines.map((p) => {
+        const s = STATUS_COLORS[p.status] || STATUS_COLORS.pending
+        const stageName = STAGE_NAMES[p.current_stage] || p.current_stage
+        return (
+          <div key={p.pipeline_id} style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '10px 14px', borderRadius: 8, cursor: 'pointer',
+            background: 'rgba(255,255,255,0.03)',
+            border: '1px solid rgba(255,255,255,0.06)',
+            transition: 'all 0.2s',
+          }}
+            onClick={() => onSelect(p.pipeline_id)}
+            onMouseEnter={e => (e.currentTarget.style.background = 'rgba(0,212,255,0.06)')}
+            onMouseLeave={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.03)')}
+          >
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <Text style={{ color: '#e0e0e0', fontSize: 13, fontWeight: 500 }} ellipsis>
+                  {p.user_request?.slice(0, 60) || p.pipeline_id}
+                </Text>
+                <span style={{
+                  background: s.bg, color: s.color, padding: '1px 8px',
+                  borderRadius: 4, fontSize: 11, fontWeight: 500,
+                }}>
+                  {s.text}
+                </span>
+              </div>
+              <div style={{ fontSize: 11, color: '#666' }}>
+                {p.pipeline_id?.slice(0, 16)}... · {stageName} · {new Date(p.create_time).toLocaleString()}
+              </div>
+            </div>
+            <Button size="small" danger type="text" icon={<DeleteOutlined />}
+              onClick={(e) => { e.stopPropagation(); onDelete(p.pipeline_id) }} />
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 
 const STAGE_AGENT_MAP: Record<string, string> = {
   requirement: 'PM',
@@ -485,7 +545,7 @@ const styles: Styles = {
 
 const PipelinePage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams()
-  const initialId = searchParams.get('id') || ''
+  const initialId = searchParams.get('id') || localStorage.getItem('lastPipelineId') || ''
   const [pipelineId, setPipelineId] = useState<string>(initialId)
   const [pipeline, setPipeline] = useState<PipelineStatus | null>(null)
   const [userRequest, setUserRequest] = useState('')
@@ -495,12 +555,22 @@ const PipelinePage: React.FC = () => {
   const [frontendProjectId, setFrontendProjectId] = useState<string | undefined>(undefined)
   const [feedback, setFeedback] = useState('')
   const [showCreate, setShowCreate] = useState(!initialId)
+
+  // pipelineId 变化时同步 URL 和 localStorage
+  useEffect(() => {
+    if (pipelineId) {
+      setSearchParams({ id: pipelineId })
+      localStorage.setItem('lastPipelineId', pipelineId)
+    }
+  }, [pipelineId])
   const [previewVisible, setPreviewVisible] = useState(false)
   const [selectedStage, setSelectedStage] = useState<string>('')
   const [defaultPrompts, setDefaultPrompts] = useState<Record<string, string>>({})
   const [editedPrompts, setEditedPrompts] = useState<Record<string, string>>({})
   const [promptsDrawerVisible, setPromptsDrawerVisible] = useState(false)
   const [mergedPrompts, setMergedPrompts] = useState<Record<string, string>>({})
+  const [pipelineHistory, setPipelineHistory] = useState<any[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
 
   useEffect(() => {
     generatorApi.getProjects({ page: 1, page_size: 100 }).then((data: any) => {
@@ -532,6 +602,44 @@ const PipelinePage: React.FC = () => {
   }, [pipelineId])
 
   useEffect(() => { refreshStatus() }, [refreshStatus])
+
+  // 加载历史流水线
+  const fetchPipelineHistory = useCallback(async () => {
+    setHistoryLoading(true)
+    try {
+      const res = await pipelineApi.list()
+      const list = res?.data?.list || res?.data || res?.list || res || []
+      setPipelineHistory(Array.isArray(list) ? list : [])
+    } catch { /* ignore */ }
+    setHistoryLoading(false)
+  }, [])
+
+  useEffect(() => { fetchPipelineHistory() }, [fetchPipelineHistory])
+
+  const handleDeletePipeline = async (id: string) => {
+    Modal.confirm({
+      title: <span style={{ color: '#e0e0e0' }}>确认删除</span>,
+      content: <span style={{ color: '#aaa' }}>删除后无法恢复，确定要删除这条流水线吗？</span>,
+      okType: 'danger',
+      okText: '删除',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await api.delete(`/flow/pipeline/${id}`)
+          message.success('已删除')
+          fetchPipelineHistory()
+          if (pipelineId === id) {
+            setPipelineId('')
+            setPipeline(null)
+            setShowCreate(true)
+            setSearchParams({})
+          }
+        } catch (e: any) {
+          message.error(e?.message || '删除失败')
+        }
+      },
+    })
+  }
 
   // Load default prompts on mount
   useEffect(() => {
@@ -573,6 +681,7 @@ const PipelinePage: React.FC = () => {
       const id = data.pipeline_id
       setPipelineId(id)
       setSearchParams({ id })
+      localStorage.setItem('lastPipelineId', id)
       setShowCreate(false)
       message.success('流水线创建成功')
       // 自动执行第一阶段（LLM调用可能较慢，需要较长超时）
@@ -751,28 +860,22 @@ const PipelinePage: React.FC = () => {
                 allowClear
                 showSearch
                 optionFilterProp="label"
-                options={projects
-                  .filter((p: any) => !['javascript', 'vue'].includes(p.language))
-                  .map((p: any) => ({
-                    label: `${p.name} (${p.language}/${p.framework})`,
-                    value: String(p.id),
-                  }))
-                }
+                options={projects.map((p: any) => ({
+                  label: `${p.name} (${p.language}/${p.framework})`,
+                  value: String(p.id),
+                }))}
               />
               <Select
-                placeholder="前端项目（决定前端技术栈）"
+                placeholder="前端项目（决定前端技术栈，如 PHP 转发层也选这里）"
                 value={frontendProjectId}
                 onChange={setFrontendProjectId}
                 allowClear
                 showSearch
                 optionFilterProp="label"
-                options={projects
-                  .filter((p: any) => ['javascript', 'vue', 'node', 'typescript'].includes(p.language) || ['vue', 'react'].includes(p.framework))
-                  .map((p: any) => ({
-                    label: `${p.name} (${p.language}/${p.framework})`,
-                    value: String(p.id),
-                  }))
-                }
+                options={projects.map((p: any) => ({
+                  label: `${p.name} (${p.language}/${p.framework})`,
+                  value: String(p.id),
+                }))}
               />
             </div>
             {((backendProjectId && projects.find(p => String(p.id) === backendProjectId)) ||
@@ -909,6 +1012,30 @@ const PipelinePage: React.FC = () => {
             </Button>
           </div>
         </div>
+
+        {/* 历史流水线列表 */}
+        <div style={{
+          marginTop: 24, padding: 20,
+          background: 'rgba(15, 15, 25, 0.6)',
+          border: '1px solid rgba(0, 212, 255, 0.12)',
+          borderRadius: 12,
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <Text style={{ color: '#e0e0e0', fontSize: 15, fontWeight: 600 }}>
+              <HistoryOutlined style={{ color: '#00d4ff', marginRight: 8 }} />
+              历史流水线
+            </Text>
+            <Button size="small" icon={<ReloadOutlined />} onClick={fetchPipelineHistory}>
+              刷新
+            </Button>
+          </div>
+          <PipelineHistoryList
+            pipelines={pipelineHistory}
+            loading={historyLoading}
+            onSelect={(id) => { setPipelineId(id); setShowCreate(false) }}
+            onDelete={handleDeletePipeline}
+          />
+        </div>
       </div>
     )
   }
@@ -931,6 +1058,18 @@ const PipelinePage: React.FC = () => {
       {/* ---- Header Bar ---- */}
       <div style={styles.headerBar}>
         <div style={styles.headerLeft}>
+          <Button
+            type="text"
+            icon={<ArrowLeftOutlined />}
+            onClick={() => {
+              setPipelineId('')
+              setPipeline(null)
+              setShowCreate(true)
+              setSearchParams({})
+              fetchPipelineHistory()
+            }}
+            style={{ color: '#888', marginRight: 8 }}
+          />
           <BranchesOutlined style={{ color: '#00d4ff', fontSize: 16 }} />
           <Text style={styles.pipelineIdText}>
             {pipelineId.length > 12
@@ -1110,6 +1249,18 @@ const PipelinePage: React.FC = () => {
               {loading && (
                 <div style={{ textAlign: 'center', padding: 40 }}>
                   <Spin size="large" tip="Agent 正在工作..." />
+                </div>
+              )}
+
+              {/* Error Display */}
+              {currentStage?.status === 'failed' && currentStage?.error && (
+                <div style={{
+                  padding: 16, marginBottom: 16,
+                  background: 'rgba(245, 34, 45, 0.08)',
+                  border: '1px solid rgba(245, 34, 45, 0.3)',
+                  borderRadius: 8, color: '#ff7875',
+                }}>
+                  <strong>错误信息：</strong>{currentStage.error}
                 </div>
               )}
 

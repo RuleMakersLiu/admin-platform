@@ -678,13 +678,21 @@ ANALYSIS_PROMPT = """你是一个资深的技术架构分析师。请分析以�
 ## 项目源码关键文件
 {files_text}
 
+## 分析要求
+
+请特别注意识别以下架构模式：
+1. **BFF/API 转发层**：如果项目是 PHP 且主要功能是接收请求后转发到 Java/Go 等后端服务，请在 architecture 中明确标注 "BFF/API转发层"
+2. **纯后端 API**：如果项目只提供 API 接口，标注 "纯后端API服务"
+3. **前后端一体**：如果项目包含模板渲染+API，标注 "前后端一体"
+4. **纯前端**：如果项目只有前端代码，标注 "纯前端SPA"
+
 ## 请输出 JSON 格式的分析结果（不要用 markdown 代码块包裹，直接输出 JSON）
 
 {{
   "tech_summary": "技术栈总结（3-5句话描述项目用了什么技术、什么版本、什么构建工具）",
-  "architecture": "架构描述（目录结构、分层设计、模块划分、路由组织方式）",
-  "component_patterns": "组件/模块模式（常用组件封装方式、表单处理、表格处理、弹窗处理等代码模式）",
-  "api_patterns": "接口规范（接口路径风格、请求/响应格式、错误码规范、认证方式）",
+  "architecture": "架构描述（必须包含架构角色：BFF/API转发层/纯后端API服务/前后端一体/纯前端SPA。然后描述目录结构、分层设计、模块划分、路由组织方式）",
+  "component_patterns": "组件/模块模式（常用组件封装方式、表单处理、表格处理、弹窗处理、请求转发模式等代码模式）",
+  "api_patterns": "接口规范（接口路径风格、请求/响应格式、错误码规范、认证方式、转发目标地址模式）",
   "permission_model": "权限模型（路由权限、按钮权限、角色体系的实现方式）",
   "coding_style": "编码风格（命名规范、注释风格、文件组织习惯、状态管理方式）",
   "key_files": ["关键文件路径1", "关键文件路径2"]
@@ -917,3 +925,171 @@ def _knowledge_to_dict(k) -> Dict:
             "component_patterns": k.component_patterns or "", "api_patterns": k.api_patterns or "",
             "permission_model": k.permission_model or "", "coding_style": k.coding_style or "",
             "key_files": json.loads(k.key_files or "[]")}
+
+
+# ==================== 上下文工程增强 ====================
+
+async def semantic_search(query: str, tenant_id: int = 1, top_k: int = 5,
+                          category: Optional[str] = None) -> List[Dict]:
+    """语义搜索知识库：基于关键词 + 标签的多维匹配。
+    当没有向量数据库时，使用 BM25 风格的 TF 匹配作为语义搜索的替代。
+
+    Args:
+        query: 搜索查询
+        tenant_id: 租户ID
+        top_k: 返回前 K 个结果
+        category: 可选分类过滤
+
+    Returns:
+        匹配的知识条目列表，按相关度排序
+    """
+    if not query or not query.strip():
+        return []
+
+    # 分词（简单按空格/标点分割）
+    import re
+    query_terms = set(re.findall(r'[a-zA-Z0-9_一-鿿]+', query.lower()))
+    if not query_terms:
+        return []
+
+    async with async_session_maker() as session:
+        conditions = [
+            AgentKnowledge.is_deleted == 0,
+            AgentKnowledge.tenant_id == tenant_id,
+        ]
+        if category:
+            conditions.append(AgentKnowledge.category == category)
+
+        result = await session.execute(
+            select(AgentKnowledge).where(and_(*conditions))
+        )
+        all_records = result.scalars().all()
+
+    # 计算每条记录的相关度分数
+    scored = []
+    for record in all_records:
+        text = f"{record.title} {record.content} {record.tags or ''}".lower()
+        terms = set(re.findall(r'[a-zA-Z0-9_一-鿿]+', text))
+
+        # Jaccard 相似度 + 关键词命中加权
+        if not terms:
+            continue
+        intersection = query_terms & terms
+        if not intersection:
+            continue
+
+        # BM25 简化：命中数 / 文档长度归一化
+        tf = len(intersection) / len(terms)
+        idf_weight = sum(1.0 / (1 + sum(1 for r2 in all_records
+                                         if t in f"{r2.title} {r2.content}".lower()))
+                         for t in intersection)
+        score = tf * 0.4 + idf_weight * 0.6
+
+        # 标题命中额外加权
+        title_terms = set(re.findall(r'[a-zA-Z0-9_一-鿿]+', record.title.lower()))
+        title_overlap = query_terms & title_terms
+        if title_overlap:
+            score += len(title_overlap) * 0.3
+
+        scored.append((score, record))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    results = []
+    for score, record in scored[:top_k]:
+        results.append({
+            "knowledge_id": record.knowledge_id,
+            "title": record.title,
+            "content": record.content[:500],
+            "category": record.category,
+            "score": round(score, 4),
+            "tags": json.loads(record.tags) if record.tags else [],
+        })
+    return results
+
+
+async def generate_code_summary(code_files: Dict[str, str], project_name: str = "") -> str:
+    """使用 LLM 生成代码摘要，用于上下文工程。
+    对关键文件生成精简摘要，替代全量代码注入 prompt。
+
+    Args:
+        code_files: {path: content} 文件映射
+        project_name: 项目名称
+
+    Returns:
+        精简的代码摘要文本
+    """
+    if not code_files:
+        return ""
+
+    # 筛选最关键的文件
+    key_files = _select_key_files(code_files, "", "")
+    if not key_files:
+        key_files = "\n".join(f"### {p}\n```{c[:1500]}\n```"
+                              for p, c in list(code_files.items())[:10])
+
+    summary_prompt = f"""请对以下项目「{project_name}」的代码生成精简摘要。
+
+要求：
+1. 每个文件用 2-3 句话概括其功能、导出的核心函数/组件、依赖关系
+2. 标注文件间的调用关系
+3. 总结项目的整体架构模式
+4. 总长度不超过 1500 字
+
+代码文件：
+{key_files[:8000]}
+"""
+    try:
+        from app.ai.agents import AgentFactory
+        agent = AgentFactory.get_agent("BE")
+        if agent and hasattr(agent, 'llm') and agent.llm:
+            result = await agent.llm.ainvoke(summary_prompt)
+            content = result.content if hasattr(result, 'content') else str(result)
+            return content.strip()
+    except Exception as e:
+        logger.warning(f"Failed to generate code summary via LLM: {e}")
+
+    # fallback: 直接返回文件头 + 前几行
+    lines = []
+    for path, content in list(code_files.items())[:15]:
+        first_lines = content.split("\n")[:5]
+        lines.append(f"### {path}\n" + "\n".join(first_lines))
+    return "\n\n".join(lines)
+
+
+async def get_relevant_context(query: str, project_id: str = "",
+                               tenant_id: int = 1, max_chars: int = 4000) -> str:
+    """上下文工程入口：综合知识库 + 项目知识 + 语义搜索，生成最优 prompt 上下文。
+
+    Args:
+        query: 当前阶段的用户需求/任务描述
+        project_id: 关联项目ID
+        tenant_id: 租户ID
+        max_chars: 上下文最大字符数
+
+    Returns:
+        精选的上下文文本
+    """
+    parts = []
+
+    # 1. 项目知识库（如果有）
+    if project_id:
+        proj_knowledge = await get_project_knowledge_text(project_id)
+        if proj_knowledge:
+            parts.append(proj_knowledge)
+
+    # 2. 语义搜索相关知识
+    search_results = await semantic_search(query, tenant_id=tenant_id, top_k=3)
+    if search_results:
+        kb_section = "## 相关知识库条目\n"
+        for r in search_results:
+            kb_section += f"### {r['title']} (相关度: {r['score']})\n{r['content']}\n\n"
+        parts.append(kb_section)
+
+    if not parts:
+        return ""
+
+    context = "\n\n---\n\n".join(parts)
+    if len(context) > max_chars:
+        context = context[:max_chars] + "\n...(已截断)"
+    return context

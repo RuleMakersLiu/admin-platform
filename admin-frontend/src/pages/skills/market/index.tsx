@@ -10,6 +10,8 @@ import {
   Pagination,
   Space,
   Drawer,
+  Modal,
+  Form,
 } from 'antd'
 import {
   SearchOutlined,
@@ -17,7 +19,9 @@ import {
   SortAscendingOutlined,
   FilterOutlined,
   ReloadOutlined,
+  PlusOutlined,
 } from '@ant-design/icons'
+import api from '@/services/api'
 import SkillCard from './SkillCard'
 import SkillDetail from './SkillDetail'
 import RatingModal from './RatingModal'
@@ -117,6 +121,12 @@ const SkillMarketPage: React.FC = () => {
 
   // 移动端筛选抽屉
   const [filterDrawerVisible, setFilterDrawerVisible] = useState(false)
+
+  // 技能管理
+  const [manageVisible, setManageVisible] = useState(false)
+  const [manageAction, setManageAction] = useState<'create' | 'edit' | 'delete'>('create')
+  const [manageForm] = Form.useForm()
+  const [managing, setManaging] = useState(false)
 
   // 加载分类
   useEffect(() => {
@@ -268,6 +278,14 @@ const SkillMarketPage: React.FC = () => {
           刷新
         </Button>
 
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => {
+          setManageAction('create')
+          manageForm.resetFields()
+          setManageVisible(true)
+        }}>
+          新增技能
+        </Button>
+
         <Button onClick={handleReset}>重置</Button>
       </Space>
     </div>
@@ -337,6 +355,30 @@ const SkillMarketPage: React.FC = () => {
               skill={skill}
               onClick={handleSkillClick}
               onDownload={handleDownload}
+              onEdit={async (skill) => {
+                setManageAction('edit')
+                manageForm.setFieldsValue({
+                  name: skill.id || skill.name,
+                  category: skill.category,
+                  content: '加载中...',
+                })
+                setManageVisible(true)
+                try {
+                  const res = await api.get(`/skills/market/${skill.id}`)
+                  const detail = res?.data || res
+                  manageForm.setFieldsValue({
+                    content: detail.content || detail.instructions || '',
+                  })
+                } catch {
+                  manageForm.setFieldsValue({ content: '' })
+                  message.warning('加载技能内容失败')
+                }
+              }}
+              onDelete={(skill) => {
+                setManageAction('delete')
+                manageForm.setFieldsValue({ name: skill.id || skill.name })
+                setManageVisible(true)
+              }}
             />
           </Col>
         ))}
@@ -438,11 +480,92 @@ const SkillMarketPage: React.FC = () => {
         onSuccess={handleRateSuccess}
       />
 
+      {/* 技能管理弹窗 */}
+      <Modal
+        title={manageAction === 'create' ? '新增技能' : manageAction === 'edit' ? '编辑技能' : '删除技能'}
+        open={manageVisible}
+        onCancel={() => setManageVisible(false)}
+        onOk={async () => {
+          if (manageAction === 'delete') {
+            const name = manageForm.getFieldValue('name')
+            try {
+              await api.post('/skills/manage', { action: 'delete', name })
+              message.success('删除成功')
+              setManageVisible(false)
+              fetchSkills()
+              fetchCategories()
+            } catch (e: any) {
+              message.error(e?.response?.data?.detail || e?.message || '操作失败')
+            }
+            return
+          }
+          try {
+            const values = await manageForm.validateFields()
+            setManaging(true)
+            await api.post('/skills/manage', {
+              action: manageAction,
+              name: values.name,
+              content: values.content,
+              category: values.category || '通用',
+            })
+            message.success(manageAction === 'create' ? '创建成功' : '编辑成功')
+            setManageVisible(false)
+            fetchSkills()
+            fetchCategories()
+          } catch (e: any) {
+            if (e?.response?.data?.detail) {
+              message.error(e.response.data.detail)
+            }
+          } finally {
+            setManaging(false)
+          }
+        }}
+        confirmLoading={managing}
+        okText={manageAction === 'delete' ? '确认删除' : '保存'}
+        okButtonProps={manageAction === 'delete' ? { danger: true } : {}}
+        width={640}
+        styles={{
+          body: {
+            background: 'rgba(15, 15, 25, 0.95)',
+            padding: 20,
+            color: '#e0e0e0',
+          },
+        }}
+      >
+        <Form form={manageForm} layout="vertical">
+          <Form.Item name="name" label={<span style={{ color: '#aaa' }}>技能名称</span>}
+            rules={[{ required: true, message: '请输入技能名称' }]}>
+            <Input placeholder="例如：code_review" disabled={manageAction === 'edit'} />
+          </Form.Item>
+          {manageAction !== 'delete' && (
+            <>
+              <Form.Item name="category" label={<span style={{ color: '#aaa' }}>分类</span>}>
+                <Select placeholder="选择分类" allowClear>
+                  <Select.Option value="knowledge">knowledge</Select.Option>
+                  <Select.Option value="analysis">analysis</Select.Option>
+                  <Select.Option value="report">report</Select.Option>
+                  <Select.Option value="testing">testing</Select.Option>
+                  <Select.Option value="coding">coding</Select.Option>
+                  <Select.Option value="通用">通用</Select.Option>
+                </Select>
+              </Form.Item>
+              <Form.Item name="content" label={<span style={{ color: '#aaa' }}>技能内容（Markdown/指令）</span>}
+                rules={[{ required: true, message: '请输入技能内容' }]}>
+                <Input.TextArea rows={12} placeholder="输入技能的完整指令内容..." />
+              </Form.Item>
+            </>
+          )}
+          {manageAction === 'delete' && (
+            <p style={{ color: '#ff7875' }}>确定要删除此技能吗？删除后无法恢复。</p>
+          )}
+        </Form>
+      </Modal>
+
       <style>{`
         .skill-market-page {
           padding: 24px;
           min-height: 100vh;
-          background: #f0f2f5;
+          background: #0a0a0f;
         }
         .page-header {
           margin-bottom: 24px;
@@ -451,11 +574,11 @@ const SkillMarketPage: React.FC = () => {
           margin: 0 0 8px 0;
           font-size: 24px;
           font-weight: 600;
-          color: #1f1f1f;
+          color: #e0e0e0;
         }
         .page-header p {
           margin: 0;
-          color: #666;
+          color: #888;
           font-size: 14px;
         }
         .page-content {
@@ -478,25 +601,25 @@ const SkillMarketPage: React.FC = () => {
           gap: 16px;
           margin-bottom: 24px;
           padding: 16px;
-          background: #fff;
-          border-radius: 8px;
-          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+          background: rgba(15, 15, 25, 0.8);
+          border: 1px solid rgba(0, 212, 255, 0.15);
+          border-radius: 12px;
         }
         .mobile-filter-btn {
           display: none;
           margin-bottom: 16px;
         }
         .category-sidebar {
-          background: #fff;
-          border-radius: 8px;
+          background: rgba(15, 15, 25, 0.8);
+          border: 1px solid rgba(0, 212, 255, 0.15);
+          border-radius: 12px;
           padding: 16px;
-          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
         }
         .sidebar-title {
           margin: 0 0 16px 0;
           font-size: 16px;
           font-weight: 600;
-          color: #1f1f1f;
+          color: #e0e0e0;
         }
         .category-list {
           display: flex;
@@ -511,13 +634,15 @@ const SkillMarketPage: React.FC = () => {
           border-radius: 6px;
           cursor: pointer;
           transition: all 0.2s;
+          color: #aaa;
         }
         .category-item:hover {
-          background: #f5f5f5;
+          background: rgba(0, 212, 255, 0.05);
         }
         .category-item.active {
-          background: #e6f4ff;
-          color: #1890ff;
+          background: rgba(0, 212, 255, 0.1);
+          color: #00d4ff;
+          border-left: 3px solid #00d4ff;
         }
         .category-item.active .category-name {
           font-weight: 500;
@@ -527,18 +652,19 @@ const SkillMarketPage: React.FC = () => {
         }
         .category-count {
           font-size: 12px;
-          color: #999;
+          color: #666;
         }
         .category-item.active .category-count {
-          color: #1890ff;
+          color: #00d4ff;
         }
         .pagination-wrapper {
           display: flex;
           justify-content: center;
           margin-top: 24px;
           padding: 16px;
-          background: #fff;
-          border-radius: 8px;
+          background: rgba(15, 15, 25, 0.8);
+          border: 1px solid rgba(0, 212, 255, 0.15);
+          border-radius: 12px;
         }
         .empty-state,
         .error-state {
@@ -546,14 +672,16 @@ const SkillMarketPage: React.FC = () => {
           justify-content: center;
           align-items: center;
           min-height: 400px;
-          background: #fff;
-          border-radius: 8px;
+          background: rgba(15, 15, 25, 0.8);
+          border: 1px solid rgba(0, 212, 255, 0.15);
+          border-radius: 12px;
         }
 
         /* 骨架屏样式 */
         .skill-card-skeleton {
-          background: #fff;
-          border-radius: 8px;
+          background: rgba(15, 15, 25, 0.8);
+          border: 1px solid rgba(0, 212, 255, 0.1);
+          border-radius: 12px;
           padding: 16px;
           animation: skeleton-loading 1.4s ease infinite;
         }
@@ -565,26 +693,26 @@ const SkillMarketPage: React.FC = () => {
         .skeleton-icon {
           width: 48px;
           height: 48px;
-          background: #f0f0f0;
+          background: rgba(255, 255, 255, 0.05);
           border-radius: 8px;
         }
         .skeleton-tag {
           width: 60px;
           height: 22px;
-          background: #f0f0f0;
+          background: rgba(255, 255, 255, 0.05);
           border-radius: 4px;
         }
         .skeleton-title {
           width: 70%;
           height: 20px;
-          background: #f0f0f0;
+          background: rgba(255, 255, 255, 0.05);
           border-radius: 4px;
           margin-bottom: 8px;
         }
         .skeleton-desc {
           width: 100%;
           height: 14px;
-          background: #f0f0f0;
+          background: rgba(255, 255, 255, 0.05);
           border-radius: 4px;
           margin-bottom: 6px;
         }
@@ -599,61 +727,42 @@ const SkillMarketPage: React.FC = () => {
         .skeleton-tag-item {
           width: 50px;
           height: 20px;
-          background: #f0f0f0;
+          background: rgba(255, 255, 255, 0.05);
           border-radius: 4px;
         }
         .skeleton-stats {
           height: 40px;
-          background: #f0f0f0;
+          background: rgba(255, 255, 255, 0.05);
           border-radius: 4px;
           margin-bottom: 12px;
         }
         .skeleton-footer {
           height: 20px;
-          background: #f0f0f0;
+          background: rgba(255, 255, 255, 0.05);
           border-radius: 4px;
           margin-bottom: 12px;
         }
         .skeleton-btn {
           height: 32px;
-          background: #f0f0f0;
+          background: rgba(255, 255, 255, 0.05);
           border-radius: 6px;
         }
         @keyframes skeleton-loading {
-          0% {
-            opacity: 1;
-          }
-          50% {
-            opacity: 0.4;
-          }
-          100% {
-            opacity: 1;
-          }
+          0% { opacity: 1; }
+          50% { opacity: 0.4; }
+          100% { opacity: 1; }
         }
 
         /* 响应式布局 */
         @media (max-width: 992px) {
-          .sidebar-desktop {
-            display: none;
-          }
-          .mobile-filter-btn {
-            display: inline-flex;
-          }
-          .page-content {
-            flex-direction: column;
-          }
+          .sidebar-desktop { display: none; }
+          .mobile-filter-btn { display: inline-flex; }
+          .page-content { flex-direction: column; }
         }
         @media (max-width: 576px) {
-          .skill-market-page {
-            padding: 16px;
-          }
-          .filter-section {
-            flex-direction: column;
-            align-items: stretch;
-          }
-          .filter-section .ant-input-search {
-            max-width: 100% !important;
-          }
+          .skill-market-page { padding: 16px; }
+          .filter-section { flex-direction: column; align-items: stretch; }
+          .filter-section .ant-input-search { max-width: 100% !important; }
         }
       `}</style>
     </div>

@@ -6,6 +6,7 @@ export interface Skill {
   name: string
   description: string
   longDescription?: string
+  content?: string
   category: string
   categoryName: string
   author: string

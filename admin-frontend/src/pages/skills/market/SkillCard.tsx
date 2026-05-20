@@ -6,6 +6,8 @@ import {
   UserOutlined,
   ClockCircleOutlined,
   CheckCircleOutlined,
+  EditOutlined,
+  DeleteOutlined,
 } from '@ant-design/icons'
 import type { Skill } from '@/services/skills'
 
@@ -13,6 +15,8 @@ interface SkillCardProps {
   skill: Skill
   onDownload?: (skill: Skill) => void
   onClick?: (skill: Skill) => void
+  onEdit?: (skill: Skill) => void
+  onDelete?: (skill: Skill) => void
   loading?: boolean
 }
 
@@ -26,7 +30,7 @@ const categoryColors: Record<string, string> = {
   other: 'default',
 }
 
-const SkillCard: React.FC<SkillCardProps> = ({ skill, onDownload, onClick, loading }) => {
+const SkillCard: React.FC<SkillCardProps> = ({ skill, onDownload, onClick, onEdit, onDelete, loading }) => {
   const handleDownload = (e: React.MouseEvent) => {
     e.stopPropagation()
     onDownload?.(skill)
@@ -124,18 +128,20 @@ const SkillCard: React.FC<SkillCardProps> = ({ skill, onDownload, onClick, loadi
         </Tooltip>
       </div>
 
-      {/* 下载按钮 */}
-      <div className="skill-card-actions">
+      {/* 操作按钮 */}
+      <div className="skill-card-actions" style={{ display: 'flex', gap: 6 }}>
         <Button
           type={skill.isDownloaded ? 'default' : 'primary'}
           icon={skill.isDownloaded ? <CheckCircleOutlined /> : <DownloadOutlined />}
           onClick={handleDownload}
           loading={loading}
           disabled={skill.isDownloaded}
-          block
+          style={{ flex: 1 }}
         >
           {skill.isDownloaded ? '已下载' : '下载'}
         </Button>
+        <Button icon={<EditOutlined />} onClick={(e) => { e.stopPropagation(); onEdit?.(skill) }} />
+        <Button danger icon={<DeleteOutlined />} onClick={(e) => { e.stopPropagation(); onDelete?.(skill) }} />
       </div>
 
       <style>{`
@@ -143,11 +149,14 @@ const SkillCard: React.FC<SkillCardProps> = ({ skill, onDownload, onClick, loadi
           height: 100%;
           display: flex;
           flex-direction: column;
-          border-radius: 8px;
+          border-radius: 12px;
           transition: all 0.3s ease;
+          background: rgba(15, 15, 25, 0.8) !important;
+          border: 1px solid rgba(0, 212, 255, 0.15) !important;
         }
         .skill-card:hover {
-          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+          box-shadow: 0 4px 20px rgba(0, 212, 255, 0.15);
+          border-color: rgba(0, 212, 255, 0.3) !important;
           transform: translateY(-2px);
         }
         .skill-card-header {
@@ -161,7 +170,7 @@ const SkillCard: React.FC<SkillCardProps> = ({ skill, onDownload, onClick, loadi
           height: 48px;
           border-radius: 8px;
           overflow: hidden;
-          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          background: linear-gradient(135deg, #00d4ff 0%, #7b2fff 100%);
         }
         .skill-icon img {
           width: 100%;
@@ -182,7 +191,7 @@ const SkillCard: React.FC<SkillCardProps> = ({ skill, onDownload, onClick, loadi
           margin: 0 0 8px 0;
           font-size: 16px;
           font-weight: 600;
-          color: #1f1f1f;
+          color: #e0e0e0;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
@@ -190,7 +199,7 @@ const SkillCard: React.FC<SkillCardProps> = ({ skill, onDownload, onClick, loadi
         .skill-card-description {
           margin: 0 0 12px 0;
           font-size: 13px;
-          color: #666;
+          color: #888;
           line-height: 1.5;
           height: 40px;
           overflow: hidden;
@@ -210,25 +219,25 @@ const SkillCard: React.FC<SkillCardProps> = ({ skill, onDownload, onClick, loadi
           padding: 0 6px;
           height: 20px;
           line-height: 20px;
-          background: #f5f5f5;
-          border: none;
-          color: #666;
+          background: rgba(0, 212, 255, 0.08) !important;
+          border: 1px solid rgba(0, 212, 255, 0.2) !important;
+          color: #00d4ff !important;
         }
         .skill-card-stats {
           display: flex;
           justify-content: space-between;
           align-items: center;
           padding: 8px 0;
-          border-top: 1px solid #f0f0f0;
-          border-bottom: 1px solid #f0f0f0;
+          border-top: 1px solid rgba(255, 255, 255, 0.06);
+          border-bottom: 1px solid rgba(255, 255, 255, 0.06);
           margin-bottom: 12px;
         }
         .stat-value {
           font-weight: 500;
-          color: #1f1f1f;
+          color: #e0e0e0;
         }
         .stat-label {
-          color: #999;
+          color: #666;
           font-size: 12px;
         }
         .skill-card-footer {
@@ -236,7 +245,7 @@ const SkillCard: React.FC<SkillCardProps> = ({ skill, onDownload, onClick, loadi
           justify-content: space-between;
           align-items: center;
           font-size: 12px;
-          color: #999;
+          color: #666;
           margin-bottom: 12px;
         }
         .author-name {
