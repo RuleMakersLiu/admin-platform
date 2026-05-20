@@ -101,6 +101,12 @@ export const generatorApi = {
   getProjectTestConfig: (id: number) => api.get(`/generator/projects/${id}/test-config`),
 }
 
+// 系统配置（Git、LLM）
+export const systemApi = {
+  getGitConfigs: () => api.get('/system/git'),
+  getLlmConfigs: () => api.get('/system/llm'),
+}
+
 // 部署接口
 export const deployApi = {
   getProjects: () => api.get('/deploy/projects'),

@@ -668,7 +668,7 @@ async def _fetch_project_files_from_git(project_id: str) -> Dict[str, str]:
 
         # 2. 浅克隆到临时目录
         tmp_dir = tempfile.mkdtemp(prefix="pipe-ctx-")
-        token = await _get_git_token_for_repo(repo_url)
+        token = await _get_git_token_for_project(project_id) or await _get_git_token_for_repo(repo_url)
         clone_url = _inject_git_credentials(repo_url, token)
 
         proc = await asyncio.create_subprocess_exec(
@@ -730,6 +730,7 @@ async def _get_git_token_for_repo(repo_url: str) -> str:
     """根据仓库 URL 从数据库查找对应的 Git token"""
     from sqlalchemy import text
     async with async_session_maker() as session:
+        # 先按 base_url 匹配
         result = await session.execute(
             text("SELECT platform, access_token, base_url FROM sys_git_config WHERE status = 1 LIMIT 10")
         )
@@ -744,6 +745,38 @@ async def _get_git_token_for_repo(repo_url: str) -> str:
             if platform == "github" and "github" in repo_url:
                 return access_token
     return ""
+
+
+async def _get_git_token_for_project(project_id: str) -> str:
+    """从项目的 git_config_id 获取 Git token"""
+    import httpx
+    from sqlalchemy import text
+    try:
+        # 先从 Generator 获取项目的 git_config_id
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"http://localhost:8082/generator/projects/{project_id}")
+            if resp.status_code != 200:
+                return ""
+            proj = resp.json().get("data", {})
+        git_config_id = proj.get("git_config_id")
+        if not git_config_id:
+            # fallback: 用 repo_url 匹配
+            repo_url = proj.get("repo_url", "")
+            if repo_url:
+                return await _get_git_token_for_repo(repo_url)
+            return ""
+
+        # 从数据库取 token
+        async with async_session_maker() as session:
+            result = await session.execute(
+                text("SELECT access_token FROM sys_git_config WHERE id = :id AND status = 1"),
+                {"id": int(git_config_id)}
+            )
+            row = result.fetchone()
+            return row[0] if row and row[0] else ""
+    except Exception as e:
+        logger.warning(f"Failed to get git token for project {project_id}: {e}")
+        return ""
 
 
 # ==================== 流水线管理器 ====================

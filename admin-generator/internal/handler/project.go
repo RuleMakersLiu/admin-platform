@@ -322,7 +322,7 @@ func UpdateProject(c *gin.Context) {
 	}
 
 	allowedFields := map[string]bool{
-		"name": true, "description": true, "repo_url": true, "branch": true, "status": true,
+		"name": true, "description": true, "repo_url": true, "branch": true, "status": true, "git_config_id": true, "llm_config_id": true,
 	}
 	filtered := make(map[string]interface{})
 	for k, v := range updates {

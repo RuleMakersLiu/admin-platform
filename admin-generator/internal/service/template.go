@@ -208,6 +208,8 @@ type GenProject struct {
 	DeployProjectID  *int64  `json:"deploy_project_id"`
 	TestPassRate     *float64 `json:"test_pass_rate"`
 	LastTestTime     *int64  `json:"last_test_time"`
+	GitConfigID      *int64  `json:"git_config_id"`
+	LlmConfigID      *int64  `json:"llm_config_id"`
 	AdminID          int64   `json:"admin_id"`
 	TenantID         int64   `json:"tenant_id"`
 	Status           int     `json:"status"`
@@ -460,6 +462,7 @@ type ImportProjectRequest struct {
 	Description string `json:"description"`
 	RepoURL     string `json:"repo_url" binding:"required"`
 	Branch      string `json:"branch"`
+	GitConfigID *int64 `json:"git_config_id"`
 }
 
 // ImportProject 从 Git 仓库导入项目
@@ -496,6 +499,7 @@ func (s *ProjectService) ImportProject(req *ImportProjectRequest, adminID, tenan
 		RepoURL:     req.RepoURL,
 		Branch:      req.Branch,
 		AdminID:     adminID,
+		GitConfigID: req.GitConfigID,
 		TenantID:    tenantID,
 		Status:      1,
 		CreateTime:  time.Now().UnixMilli(),

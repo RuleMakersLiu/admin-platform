@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react'
-import { Steps, Card, Input, Button, Form, Space, Typography, message, Spin, Tag, Modal } from 'antd'
+import { Steps, Card, Input, Button, Form, Space, Typography, message, Spin, Tag, Modal, Select } from 'antd'
 import {
   CodeOutlined, AppstoreOutlined, SettingOutlined, RocketOutlined,
   JavaOutlined, Html5Outlined, CheckCircleOutlined,
   ImportOutlined, BranchesOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { generatorApi } from '@/services/api'
+import { generatorApi, systemApi } from '@/services/api'
 
 const { Title, Text, Paragraph } = Typography
 const { TextArea } = Input
@@ -69,10 +69,16 @@ const ProjectCreatePage: React.FC = () => {
   const [importBranch, setImportBranch] = useState('main')
   const [importLoading, setImportLoading] = useState(false)
   const [importedProject, setImportedProject] = useState<any>(null)
+  const [gitConfigs, setGitConfigs] = useState<any[]>([])
+  const [selectedGitConfig, setSelectedGitConfig] = useState<string | undefined>(undefined)
 
   useEffect(() => {
     generatorApi.getTemplates().then((data: any) => {
       setTemplates(Array.isArray(data) ? data : [])
+    }).catch(() => {})
+    systemApi.getGitConfigs().then((data: any) => {
+      const list = Array.isArray(data) ? data : data?.data?.list || data?.list || []
+      setGitConfigs(list)
     }).catch(() => {})
   }, [])
 
@@ -151,6 +157,7 @@ const ProjectCreatePage: React.FC = () => {
         description: projectDesc,
         repo_url: importUrl,
         branch: importBranch || 'main',
+        git_config_id: selectedGitConfig || undefined,
       })
 
       setImportedProject(data)
@@ -421,6 +428,20 @@ const ProjectCreatePage: React.FC = () => {
                   placeholder="main"
                   value={importBranch}
                   onChange={e => setImportBranch(e.target.value)}
+                />
+              </Form.Item>
+
+              <Form.Item label={<Text style={{ color: '#aaa' }}>Git 凭证配置</Text>}>
+                <Select
+                  placeholder="选择 Git 凭证（用于克隆私有仓库）"
+                  value={selectedGitConfig}
+                  onChange={setSelectedGitConfig}
+                  allowClear
+                  style={{ width: '100%' }}
+                  options={gitConfigs.map((g: any) => ({
+                    label: `${g.name} (${g.platform})`,
+                    value: String(g.id),
+                  }))}
                 />
               </Form.Item>
             </Form>
