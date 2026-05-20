@@ -430,6 +430,12 @@ func (s *ProjectService) GetProjectWithFiles(id int64, tenantID int64) (*GenProj
 		return nil, nil, err
 	}
 
+	// 导入的项目没有 template_id，尝试从 Git 重新 clone 获取文件
+	if project.TemplateID == 0 {
+		files, err := s.getImportedProjectFiles(project)
+		return project, files, err
+	}
+
 	tmpl, err := s.templateSvc.GetTemplateByID(project.TemplateID)
 	if err != nil {
 		return project, nil, err
@@ -444,6 +450,88 @@ func (s *ProjectService) GetProjectWithFiles(id int64, tenantID int64) (*GenProj
 
 	files, err := s.GenerateProjectFiles(tmpl, vars)
 	return project, files, err
+}
+
+// getImportedProjectFiles 从 Git 仓库 clone 获取项目文件（用于预览/下载）
+func (s *ProjectService) getImportedProjectFiles(project *GenProject) (map[string]string, error) {
+	if project.RepoURL == "" {
+		return nil, fmt.Errorf("导入项目未关联仓库，无法获取文件")
+	}
+
+	tmpDir := filepath.Join(os.TempDir(), fmt.Sprintf("admin-preview-%d", time.Now().UnixMilli()))
+	defer os.RemoveAll(tmpDir)
+
+	cloneURL, err := injectGitCredentials(project.RepoURL)
+	if err != nil {
+		return nil, err
+	}
+
+	branch := project.Branch
+	if branch == "" {
+		branch = "main"
+	}
+
+	cmd := exec.Command("git", "clone", "--depth", "1", "-b", branch, cloneURL, tmpDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("git clone 失败: %s", string(out))
+	}
+
+	files := make(map[string]string)
+	maxSize := int64(500 * 1024) // 单文件最大 500KB
+	fileCount := 0
+	maxFiles := 200
+
+	filepath.Walk(tmpDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || fileCount >= maxFiles {
+			return nil
+		}
+		// 跳过 .git 目录
+		if strings.Contains(path, string(filepath.Separator)+".git"+string(filepath.Separator)) ||
+			strings.HasSuffix(path, string(filepath.Separator)+".git") {
+			return nil
+		}
+		if info.Size() > maxSize {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(tmpDir, path)
+		if err != nil {
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+
+		// 跳过二进制文件
+		if !isTextContent(content) {
+			return nil
+		}
+
+		files[relPath] = string(content)
+		fileCount++
+		return nil
+	})
+
+	return files, nil
+}
+
+// isTextContent 简单判断内容是否为文本
+func isTextContent(data []byte) bool {
+	if len(data) == 0 {
+		return true
+	}
+	// 检查前 512 字节是否有 NULL 字符（二进制标志）
+	checkLen := len(data)
+	if checkLen > 512 {
+		checkLen = 512
+	}
+	for i := 0; i < checkLen; i++ {
+		if data[i] == 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // UpdateProject 更新项目基本信息
@@ -561,15 +649,22 @@ func injectGitCredentials(repoURL string) (string, error) {
 func detectProjectLanguage(dir string) (string, string) {
 	// Java / Spring Boot
 	if _, err := os.Stat(filepath.Join(dir, "pom.xml")); err == nil {
-		return "java", "spring-boot"
+		content, _ := os.ReadFile(filepath.Join(dir, "pom.xml"))
+		pom := string(content)
+		if strings.Contains(pom, "spring-boot") {
+			return "java", "spring-boot"
+		}
+		return "java", "maven"
 	}
 	if _, err := os.Stat(filepath.Join(dir, "build.gradle")); err == nil {
-		return "java", "spring-boot"
+		return "java", "gradle"
+	}
+	if _, err := os.Stat(filepath.Join(dir, "build.gradle.kts")); err == nil {
+		return "java", "gradle"
 	}
 
 	// Go
 	if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-		// 检测框架
 		content, _ := os.ReadFile(filepath.Join(dir, "go.mod"))
 		mod := string(content)
 		if strings.Contains(mod, "gin-gonic") {
@@ -580,6 +675,12 @@ func detectProjectLanguage(dir string) (string, string) {
 		}
 		if strings.Contains(mod, "go-zero") {
 			return "go", "go-zero"
+		}
+		if strings.Contains(mod, "fiber") {
+			return "go", "fiber"
+		}
+		if strings.Contains(mod, "echo") {
+			return "go", "echo"
 		}
 		return "go", "go"
 	}
@@ -594,8 +695,11 @@ func detectProjectLanguage(dir string) (string, string) {
 		if strings.Contains(composer, "symfony") {
 			return "php", "symfony"
 		}
-		if strings.Contains(composer, "thinkphp") {
+		if strings.Contains(composer, "thinkphp") || strings.Contains(composer, "topthink") {
 			return "php", "thinkphp"
+		}
+		if strings.Contains(composer, "yii") {
+			return "php", "yii"
 		}
 		return "php", "php"
 	}
@@ -616,6 +720,20 @@ func detectProjectLanguage(dir string) (string, string) {
 		return "python", "python"
 	}
 	if _, err := os.Stat(filepath.Join(dir, "pyproject.toml")); err == nil {
+		content, _ := os.ReadFile(filepath.Join(dir, "pyproject.toml"))
+		toml := string(content)
+		if strings.Contains(toml, "fastapi") {
+			return "python", "fastapi"
+		}
+		if strings.Contains(toml, "flask") {
+			return "python", "flask"
+		}
+		if strings.Contains(toml, "django") {
+			return "python", "django"
+		}
+		return "python", "python"
+	}
+	if _, err := os.Stat(filepath.Join(dir, "setup.py")); err == nil {
 		return "python", "python"
 	}
 
@@ -623,22 +741,41 @@ func detectProjectLanguage(dir string) (string, string) {
 	if _, err := os.Stat(filepath.Join(dir, "package.json")); err == nil {
 		content, _ := os.ReadFile(filepath.Join(dir, "package.json"))
 		pkg := string(content)
-		if strings.Contains(pkg, "vue") {
+		if strings.Contains(pkg, "\"vue\"") || strings.Contains(pkg, "\"vue\"") {
+			if strings.Contains(pkg, "nuxt") {
+				return "javascript", "nuxt"
+			}
 			return "javascript", "vue"
 		}
-		if strings.Contains(pkg, "react") {
+		if strings.Contains(pkg, "\"react\"") {
+			if strings.Contains(pkg, "next") {
+				return "javascript", "next.js"
+			}
 			return "javascript", "react"
 		}
-		if strings.Contains(pkg, "next") {
-			return "javascript", "next.js"
+		if strings.Contains(pkg, "\"angular\"") || strings.Contains(pkg, "\"@angular/core\"") {
+			return "javascript", "angular"
 		}
-		if strings.Contains(pkg, "express") || strings.Contains(pkg, "koa") {
+		if strings.Contains(pkg, "express") {
 			return "node", "express"
+		}
+		if strings.Contains(pkg, "koa") {
+			return "node", "koa"
 		}
 		if strings.Contains(pkg, "nestjs") || strings.Contains(pkg, "@nestjs") {
 			return "node", "nestjs"
 		}
 		return "node", "node"
+	}
+
+	// Rust
+	if _, err := os.Stat(filepath.Join(dir, "Cargo.toml")); err == nil {
+		return "rust", "rust"
+	}
+
+	// C# / .NET
+	if _, err := os.Stat(filepath.Join(dir, "*.sln")); err == nil {
+		return "csharp", "dotnet"
 	}
 
 	return "unknown", "unknown"

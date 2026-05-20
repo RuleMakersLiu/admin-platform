@@ -71,7 +71,11 @@ const ProjectTestPage: React.FC = () => {
       const hasRunning = (data?.list || []).some((t: any) => t.status === 2)
       if (hasRunning && !autoRefresh) setAutoRefresh(true)
       if (!hasRunning && autoRefresh) setAutoRefresh(false)
-    } catch { /* ignore */ }
+    } catch (e: any) {
+      if (!autoRefresh && page === 1) {
+        message.warning(e?.message || '测试服务暂时不可用')
+      }
+    }
     setLoading(false)
   }
 

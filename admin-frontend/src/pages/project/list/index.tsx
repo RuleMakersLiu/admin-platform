@@ -147,12 +147,17 @@ const ProjectListPage: React.FC = () => {
     {
       title: '语言/框架',
       key: 'tech',
-      render: (_: any, record: any) => (
-        <Space>
-          <Tag color={LANGUAGE_COLORS[record.language]}>{record.language}</Tag>
-          <Tag>{record.framework}</Tag>
-        </Space>
-      ),
+      render: (_: any, record: any) => {
+        const lang = record.language && record.language !== 'unknown' ? record.language : ''
+        const fw = record.framework && record.framework !== 'unknown' ? record.framework : ''
+        if (!lang && !fw) return <Text type="secondary">未识别</Text>
+        return (
+          <Space>
+            {lang && <Tag color={LANGUAGE_COLORS[lang]}>{lang}</Tag>}
+            {fw && <Tag>{fw}</Tag>}
+          </Space>
+        )
+      },
     },
     {
       title: 'Git 仓库',
