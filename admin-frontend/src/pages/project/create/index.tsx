@@ -157,7 +157,7 @@ const ProjectCreatePage: React.FC = () => {
         description: projectDesc,
         repo_url: importUrl,
         branch: importBranch || 'main',
-        git_config_id: selectedGitConfig || undefined,
+        git_config_id: selectedGitConfig ? Number(selectedGitConfig) : undefined,
       })
 
       setImportedProject(data)
