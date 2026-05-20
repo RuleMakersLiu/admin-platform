@@ -150,7 +150,68 @@ const ProjectListPage: React.FC = () => {
       render: (_: any, record: any) => {
         const lang = record.language && record.language !== 'unknown' ? record.language : ''
         const fw = record.framework && record.framework !== 'unknown' ? record.framework : ''
-        if (!lang && !fw) return <Text type="secondary">未识别</Text>
+        if (!lang && !fw) {
+          return (
+            <Tag
+              style={{ cursor: 'pointer', background: 'rgba(250,173,20,0.1)', border: '1px dashed rgba(250,173,20,0.4)', color: '#faad14' }}
+              onClick={() => {
+                Modal.confirm({
+                  title: <span style={{ color: '#e0e0e0' }}>设置语言/框架</span>,
+                  content: (
+                    <div style={{ marginTop: 12 }}>
+                      <Select
+                        id="lang-select"
+                        defaultValue=""
+                        style={{ width: '100%', marginBottom: 8 }}
+                        placeholder="选择语言"
+                        options={[
+                          { label: 'Java', value: 'java' },
+                          { label: 'Go', value: 'go' },
+                          { label: 'Python', value: 'python' },
+                          { label: 'PHP', value: 'php' },
+                          { label: 'JavaScript/TypeScript', value: 'javascript' },
+                          { label: 'Node.js', value: 'node' },
+                        ]}
+                        onChange={(v) => { (window as any).__lang_val = v }}
+                      />
+                      <Select
+                        id="fw-select"
+                        defaultValue=""
+                        style={{ width: '100%' }}
+                        placeholder="选择框架"
+                        options={[
+                          { label: 'Spring Boot', value: 'spring-boot' },
+                          { label: 'Gin', value: 'gin' },
+                          { label: 'FastAPI', value: 'fastapi' },
+                          { label: 'Laravel', value: 'laravel' },
+                          { label: 'Vue', value: 'vue' },
+                          { label: 'React', value: 'react' },
+                          { label: 'Express', value: 'express' },
+                        ]}
+                        onChange={(v) => { (window as any).__fw_val = v }}
+                      />
+                    </div>
+                  ),
+                  okText: '保存',
+                  onOk: async () => {
+                    const language = (window as any).__lang_val || ''
+                    const framework = (window as any).__fw_val || ''
+                    if (!language) { message.warning('请选择语言'); return }
+                    try {
+                      await generatorApi.updateProject(record.id, { language, framework })
+                      message.success('已更新')
+                      fetchProjects()
+                    } catch (e: any) {
+                      message.error(e?.message || '更新失败')
+                    }
+                  },
+                })
+              }}
+            >
+              未识别，点击设置
+            </Tag>
+          )
+        }
         return (
           <Space>
             {lang && <Tag color={LANGUAGE_COLORS[lang]}>{lang}</Tag>}
