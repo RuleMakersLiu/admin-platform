@@ -470,3 +470,133 @@ body {
   background: var(--chat-primary) !important;
   color: #0a0a0f !important;
 }
+
+/* ===== Markdown 全局渲染样式（pipeline / chat 共用） ===== */
+
+.markdown-body {
+  font-size: 14px;
+  line-height: 1.6;
+  word-wrap: break-word;
+  color: #e0e0e0;
+}
+
+.markdown-body p {
+  margin: 0 0 12px 0;
+}
+.markdown-body p:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  margin: 20px 0 10px 0;
+  font-weight: 600;
+  color: #f0f0f0;
+}
+.markdown-body h1 { font-size: 22px; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 8px; }
+.markdown-body h2 { font-size: 18px; }
+.markdown-body h3 { font-size: 16px; }
+.markdown-body h4 { font-size: 14px; }
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 24px;
+  margin: 8px 0;
+}
+.markdown-body li {
+  margin: 4px 0;
+}
+
+.markdown-body blockquote {
+  margin: 12px 0;
+  padding: 8px 16px;
+  border-left: 4px solid #00d4ff;
+  background: rgba(0, 212, 255, 0.05);
+  color: #aaa;
+}
+
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid rgba(255,255,255,0.1);
+  margin: 20px 0;
+}
+
+.markdown-body strong {
+  color: #f0f0f0;
+  font-weight: 600;
+}
+
+/* 行内代码 */
+.inline-code {
+  padding: 2px 6px;
+  background: rgba(0, 212, 255, 0.08);
+  border-radius: 4px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 13px;
+  color: #00d4ff;
+}
+
+/* 代码块 */
+.code-block-wrapper {
+  margin: 12px 0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #1a1a2e;
+  border: 1px solid rgba(0, 212, 255, 0.1);
+}
+.code-block-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 12px;
+  background: rgba(0, 212, 255, 0.05);
+  border-bottom: 1px solid rgba(0, 212, 255, 0.1);
+}
+.code-language {
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.code-action-btn {
+  color: #888 !important;
+}
+.code-block-content {
+  margin: 0;
+  padding: 16px;
+  overflow-x: auto;
+  background: transparent;
+}
+.code-block-content code {
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #d4d4d4;
+}
+
+/* 表格 */
+.table-wrapper {
+  overflow-x: auto;
+  margin: 12px 0;
+}
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.markdown-body th,
+.markdown-body td {
+  padding: 8px 12px;
+  border: 1px solid rgba(255,255,255,0.08);
+  text-align: left;
+}
+.markdown-body th {
+  background: rgba(0, 212, 255, 0.05);
+  font-weight: 600;
+  color: #e0e0e0;
+}
+.markdown-body td {
+  color: #ccc;
+}
