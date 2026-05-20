@@ -76,39 +76,54 @@ const PipelineHistoryList: React.FC<{
   onDelete: (id: string) => void
 }> = ({ pipelines, loading, onSelect, onDelete }) => {
   if (loading) return <div style={{ textAlign: 'center', padding: 20 }}><Spin /></div>
-  if (!pipelines.length) return <Empty description="暂无历史流水线" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+  if (!pipelines.length) return (
+    <div style={{ textAlign: 'center', padding: '32px 0' }}>
+      <HistoryOutlined style={{ fontSize: 32, color: '#333', marginBottom: 8 }} />
+      <div style={{ color: '#555', fontSize: 13 }}>暂无历史流水线</div>
+    </div>
+  )
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 400, overflow: 'auto' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 340, overflow: 'auto' }}>
       {pipelines.map((p) => {
         const s = STATUS_COLORS[p.status] || STATUS_COLORS.pending
         const stageName = STAGE_NAMES[p.current_stage] || p.current_stage
         return (
           <div key={p.pipeline_id} style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            padding: '10px 14px', borderRadius: 8, cursor: 'pointer',
+            padding: '12px 16px', borderRadius: 10, cursor: 'pointer',
             background: 'rgba(255,255,255,0.03)',
-            border: '1px solid rgba(255,255,255,0.06)',
+            border: '1px solid rgba(0,212,255,0.08)',
             transition: 'all 0.2s',
           }}
             onClick={() => onSelect(p.pipeline_id)}
-            onMouseEnter={e => (e.currentTarget.style.background = 'rgba(0,212,255,0.06)')}
-            onMouseLeave={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.03)')}
+            onMouseEnter={e => {
+              e.currentTarget.style.background = 'rgba(0,212,255,0.06)'
+              e.currentTarget.style.borderColor = 'rgba(0,212,255,0.2)'
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.background = 'rgba(255,255,255,0.03)'
+              e.currentTarget.style.borderColor = 'rgba(0,212,255,0.08)'
+            }}
           >
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                 <Text style={{ color: '#e0e0e0', fontSize: 13, fontWeight: 500 }} ellipsis>
-                  {p.user_request?.slice(0, 60) || p.pipeline_id}
+                  {p.user_request?.slice(0, 50) || p.pipeline_id}
                 </Text>
                 <span style={{
                   background: s.bg, color: s.color, padding: '1px 8px',
-                  borderRadius: 4, fontSize: 11, fontWeight: 500,
+                  borderRadius: 4, fontSize: 11, fontWeight: 500, whiteSpace: 'nowrap',
                 }}>
                   {s.text}
                 </span>
               </div>
-              <div style={{ fontSize: 11, color: '#666' }}>
-                {p.pipeline_id?.slice(0, 16)}... · {stageName} · {new Date(p.create_time).toLocaleString()}
+              <div style={{ fontSize: 11, color: '#555', display: 'flex', gap: 8, alignItems: 'center' }}>
+                <span style={{ fontFamily: 'monospace', color: '#444' }}>{p.pipeline_id?.slice(0, 12)}...</span>
+                <span style={{ color: '#333' }}>·</span>
+                <span>{stageName}</span>
+                <span style={{ color: '#333' }}>·</span>
+                <span>{p.create_time ? new Date(p.create_time).toLocaleString() : ''}</span>
               </div>
             </div>
             <Button size="small" danger type="text" icon={<DeleteOutlined />}
@@ -188,11 +203,11 @@ const styles: Styles = {
     padding: 24,
     minHeight: 'calc(100vh - 120px)',
     display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
+    gap: 20,
+    alignItems: 'flex-start',
   },
   createCard: {
-    maxWidth: 720,
+    maxWidth: 560,
     width: '100%',
     border: '1px solid rgba(0, 212, 255, 0.2)',
     borderRadius: 16,
@@ -1015,10 +1030,10 @@ const PipelinePage: React.FC = () => {
 
         {/* 历史流水线列表 */}
         <div style={{
-          marginTop: 24, padding: 20,
+          flex: 1, minWidth: 320, padding: 20,
           background: 'rgba(15, 15, 25, 0.6)',
           border: '1px solid rgba(0, 212, 255, 0.12)',
-          borderRadius: 12,
+          borderRadius: 12, alignSelf: 'stretch',
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <Text style={{ color: '#e0e0e0', fontSize: 15, fontWeight: 600 }}>

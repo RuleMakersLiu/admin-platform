@@ -582,7 +582,18 @@ func (s *TestService) finishTestTask(taskID int64, status int, result *TestResul
 		"total_cases":  result.TotalCases,
 		"passed_cases": result.PassedCases,
 		"failed_cases": result.FailedCases,
-		"result_json":  truncateString(resultJSON, 50000),
+	// MySQL json column rejects empty string — use empty object
+	rj := truncateString(resultJSON, 50000)
+	if rj == "" {
+		rj = "{}"
+	}
+
+	updates := map[string]interface{}{
+		"status":       status,
+		"total_cases":  result.TotalCases,
+		"passed_cases": result.PassedCases,
+		"failed_cases": result.FailedCases,
+		"result_json":  rj,
 		"end_time":     time.Now().UnixMilli(),
 		"update_time":  time.Now().UnixMilli(),
 	}
