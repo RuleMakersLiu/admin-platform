@@ -4,9 +4,9 @@ server:
 
 database:
   host: localhost
-  port: 5432
-  user: postgres
-  password: postgres
+  port: 3306
+  user: root
+  password: root
   dbname: admin_platform
   max_idle_conns: 10
   max_open_conns: 100
@@ -53,7 +53,7 @@ projects:
 
 # 部署配置
 deploy:
-  work_dir: /data/deploy
+  work_dir: /tmp/admin-sandbox
   backup_dir: /data/backup
   max_backups: 5
 

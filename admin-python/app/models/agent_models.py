@@ -284,3 +284,31 @@ class DevPipeline(Base):
     create_time: Mapped[int] = mapped_column(BigInteger, default=lambda: int(time.time() * 1000))
     update_time: Mapped[int] = mapped_column(BigInteger, default=lambda: int(time.time() * 1000))
     is_deleted: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class ProjectKnowledge(Base):
+    """项目知识库 — LLM 自动分析项目后提炼的结构化知识"""
+    __tablename__ = "project_knowledge"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    project_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    project_name: Mapped[str] = mapped_column(String(200))
+    repo_url: Mapped[Optional[str]] = mapped_column(String(512))
+    language: Mapped[Optional[str]] = mapped_column(String(50))
+    framework: Mapped[Optional[str]] = mapped_column(String(100))
+
+    # LLM 分析结果
+    tech_summary: Mapped[Optional[str]] = mapped_column(Text)
+    architecture: Mapped[Optional[str]] = mapped_column(Text)
+    component_patterns: Mapped[Optional[str]] = mapped_column(Text)
+    api_patterns: Mapped[Optional[str]] = mapped_column(Text)
+    permission_model: Mapped[Optional[str]] = mapped_column(Text)
+    coding_style: Mapped[Optional[str]] = mapped_column(Text)
+    key_files: Mapped[Optional[str]] = mapped_column(Text)
+
+    analysis_status: Mapped[str] = mapped_column(String(20), default="pending")
+    raw_files: Mapped[Optional[str]] = mapped_column(Text)
+
+    tenant_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    create_time: Mapped[int] = mapped_column(BigInteger, default=lambda: int(time.time() * 1000))
+    update_time: Mapped[int] = mapped_column(BigInteger, default=lambda: int(time.time() * 1000))

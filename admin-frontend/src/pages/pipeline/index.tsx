@@ -2,20 +2,22 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   Button, Spin, Input, Tag, Empty,
   message, Space, Typography, Alert, Drawer,
-  Tooltip, Badge, Collapse,
+  Tooltip, Badge, Collapse, Select,
 } from 'antd'
 import {
   CheckCircleOutlined, CloseCircleOutlined,
   LoadingOutlined, RollbackOutlined, EyeOutlined, CodeOutlined,
   FileTextOutlined, RocketOutlined, BugOutlined, SendOutlined,
+  Html5Outlined, DownloadOutlined,
   ThunderboltOutlined, BranchesOutlined, HistoryOutlined,
   ExclamationCircleOutlined, PlayCircleOutlined, ArrowLeftOutlined,
   UndoOutlined, SettingOutlined,
 } from '@ant-design/icons'
 import { useSearchParams } from 'react-router-dom'
 import { pipelineApi, type PipelineStatus } from '@/services/pipeline'
+import { generatorApi } from '@/services/api'
 import { MarkdownRenderer } from '@/utils/markdown'
-import { extractHtmlBlocks, prepareUIPreviewHtml } from '@/utils/sanitize'
+import { extractHtmlBlocks, prepareUIPreviewHtml, repairTruncatedHtml } from '@/utils/sanitize'
 
 const { TextArea } = Input
 const { Title, Text, Paragraph } = Typography
@@ -26,18 +28,28 @@ const AGENT_COLORS: Record<string, string> = {
 
 const STAGE_ICONS: Record<string, React.ReactNode> = {
   requirement: <FileTextOutlined />,
+  page_design: <FileTextOutlined />,
+  prototype: <EyeOutlined />,
+  delivery: <SendOutlined />,
   ui_preview: <EyeOutlined />,
+  backend_dev: <CodeOutlined />,
+  frontend_dev: <Html5Outlined />,
   development: <CodeOutlined />,
   code_review: <CheckCircleOutlined />,
   testing: <BugOutlined />,
-  commit: <SendOutlined />,
+  commit: <BranchesOutlined />,
   deploy: <RocketOutlined />,
   report: <FileTextOutlined />,
 }
 
 const STAGE_NAMES: Record<string, string> = {
   requirement: '需求分析',
+  page_design: '页面设计',
+  prototype: '原型预览',
+  delivery: '交付包',
   ui_preview: 'UI预览',
+  backend_dev: '后端开发',
+  frontend_dev: '前端开发',
   development: '代码生成',
   code_review: '代码审查',
   testing: '自动化测试',
@@ -46,13 +58,18 @@ const STAGE_NAMES: Record<string, string> = {
   report: '总结报告',
 }
 
-const STAGE_KEYS = ['requirement', 'ui_preview', 'development', 'code_review', 'testing', 'commit', 'deploy', 'report']
+const STAGE_KEYS = ['requirement', 'page_design', 'prototype', 'delivery', 'frontend_dev', 'backend_dev', 'code_review', 'testing', 'commit', 'deploy', 'report']
 
 const STAGE_AGENT_MAP: Record<string, string> = {
   requirement: 'PM',
+  page_design: 'PM',
+  prototype: 'FE',
+  delivery: 'PJM',
   ui_preview: 'FE',
+  backend_dev: 'BE',
+  frontend_dev: 'FE',
   development: 'BE',
-  code_review: 'BE',
+  code_review: 'QA',
   testing: 'QA',
   commit: 'PJM',
   deploy: 'PJM',
@@ -473,15 +490,23 @@ const PipelinePage: React.FC = () => {
   const [pipeline, setPipeline] = useState<PipelineStatus | null>(null)
   const [userRequest, setUserRequest] = useState('')
   const [loading, setLoading] = useState(false)
+  const [projects, setProjects] = useState<any[]>([])
+  const [backendProjectId, setBackendProjectId] = useState<string | undefined>(undefined)
+  const [frontendProjectId, setFrontendProjectId] = useState<string | undefined>(undefined)
   const [feedback, setFeedback] = useState('')
   const [showCreate, setShowCreate] = useState(!initialId)
   const [previewVisible, setPreviewVisible] = useState(false)
-  const [previewHtml, setPreviewHtml] = useState('')
   const [selectedStage, setSelectedStage] = useState<string>('')
   const [defaultPrompts, setDefaultPrompts] = useState<Record<string, string>>({})
   const [editedPrompts, setEditedPrompts] = useState<Record<string, string>>({})
   const [promptsDrawerVisible, setPromptsDrawerVisible] = useState(false)
   const [mergedPrompts, setMergedPrompts] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    generatorApi.getProjects({ page: 1, page_size: 100 }).then((data: any) => {
+      setProjects(data?.list || [])
+    }).catch(() => {})
+  }, [])
 
   const refreshStatus = useCallback(async () => {
     if (!pipelineId) return
@@ -534,7 +559,17 @@ const PipelinePage: React.FC = () => {
     }
     setLoading(true)
     try {
-      const data = await pipelineApi.create({ user_request: userRequest })
+      const backendProj = projects.find(p => String(p.id) === backendProjectId)
+      const frontendProj = projects.find(p => String(p.id) === frontendProjectId)
+      const data = await pipelineApi.create({
+        user_request: userRequest,
+        project_id: '',
+        project_name: '',
+        backend_project_id: backendProjectId || '',
+        frontend_project_id: frontendProjectId || '',
+        backend_tech: backendProj ? `${backendProj.language}/${backendProj.framework}` : '',
+        frontend_tech: frontendProj ? `${frontendProj.language}/${frontendProj.framework}` : '',
+      })
       const id = data.pipeline_id
       setPipelineId(id)
       setSearchParams({ id })
@@ -554,12 +589,20 @@ const PipelinePage: React.FC = () => {
     if (!pipelineId) return
     setLoading(true)
     try {
-      await pipelineApi.confirm(pipelineId, confirmed, feedback)
-      message.success(confirmed ? '已确认，自动推进' : '已退回')
+      const result = await pipelineApi.confirm(pipelineId, confirmed, feedback)
+      message.success(confirmed ? '已确认，推进下一阶段' : '已退回，正在重新执行')
       setFeedback('')
       await refreshStatus()
+      if (confirmed && result?.stage) {
+        // 确认后自动触发下一阶段
+        pipelineApi.execute(pipelineId, feedback).catch(() => {})
+      } else if (!confirmed) {
+        // 退回后自动重新执行当前阶段
+        pipelineApi.execute(pipelineId, feedback).then(() => refreshStatus()).catch(() => {})
+      }
     } catch (e: any) {
       message.error(e?.message || '操作失败')
+      await refreshStatus()
     } finally {
       setLoading(false)
     }
@@ -593,14 +636,6 @@ const PipelinePage: React.FC = () => {
     }
   }
 
-  const handlePreview = async () => {
-    if (!pipelineId) return
-    try {
-      const data = await pipelineApi.getPreview(pipelineId)
-      setPreviewHtml(data.preview_html || data.output || '')
-      setPreviewVisible(true)
-    } catch { /* ignore */ }
-  }
 
   const getStepsStatus = (stageKey: string): 'wait' | 'process' | 'finish' | 'error' => {
     if (!pipeline) return 'wait'
@@ -624,7 +659,28 @@ const PipelinePage: React.FC = () => {
     return extractHtmlBlocks(currentStage.output)
   }, [currentStage?.output])
 
-  const hasHtmlPreview = htmlBlocks.length > 0 && activeStageKey === 'ui_preview'
+  // For prototype/ui_preview, also try direct HTML extraction if blocks are empty
+  const previewHtmlContent = useMemo(() => {
+    if (!['ui_preview', 'prototype'].includes(activeStageKey)) return ''
+    if (!currentStage?.output) return ''
+    // Try extracted blocks first
+    if (htmlBlocks.length > 0) {
+      return htmlBlocks.map((b: any) => b.code || b).join('\n')
+    }
+    // Fallback: extract between ```html and ```
+    const raw = currentStage.output
+    const startIdx = raw.indexOf('```html')
+    if (startIdx === -1) return ''
+    const htmlStart = raw.indexOf('\n', startIdx) + 1
+    const endIdx = raw.lastIndexOf('```')
+    if (endIdx > htmlStart) {
+      return raw.substring(htmlStart, endIdx).trim()
+    }
+    // Last resort: take everything after ```html
+    return raw.substring(htmlStart).trim()
+  }, [activeStageKey, currentStage?.output, htmlBlocks])
+
+  const hasHtmlPreview = previewHtmlContent.length > 0 && ['ui_preview', 'prototype'].includes(activeStageKey)
 
   // Strip markdown/prg code block wrappers for text stages
   const displayOutput = useMemo(() => {
@@ -639,9 +695,8 @@ const PipelinePage: React.FC = () => {
 
   const inlinePreviewSrc = useMemo(() => {
     if (!hasHtmlPreview) return ''
-    const htmlCode = htmlBlocks.map((b: any) => b.code || b).join('\n')
-    return prepareUIPreviewHtml(htmlCode)
-  }, [hasHtmlPreview, htmlBlocks])
+    return prepareUIPreviewHtml(repairTruncatedHtml(previewHtmlContent))
+  }, [hasHtmlPreview, previewHtmlContent])
 
   const isRunning = pipeline?.status === 'running'
   const isCompleted = pipeline?.status === 'completed'
@@ -687,6 +742,56 @@ const PipelinePage: React.FC = () => {
                 </span>
               ))}
             </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+              <Select
+                placeholder="后端项目（决定后端技术栈）"
+                value={backendProjectId}
+                onChange={setBackendProjectId}
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                options={projects
+                  .filter((p: any) => !['javascript', 'vue'].includes(p.language))
+                  .map((p: any) => ({
+                    label: `${p.name} (${p.language}/${p.framework})`,
+                    value: String(p.id),
+                  }))
+                }
+              />
+              <Select
+                placeholder="前端项目（决定前端技术栈）"
+                value={frontendProjectId}
+                onChange={setFrontendProjectId}
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                options={projects
+                  .filter((p: any) => ['javascript', 'vue', 'node', 'typescript'].includes(p.language) || ['vue', 'react'].includes(p.framework))
+                  .map((p: any) => ({
+                    label: `${p.name} (${p.language}/${p.framework})`,
+                    value: String(p.id),
+                  }))
+                }
+              />
+            </div>
+            {((backendProjectId && projects.find(p => String(p.id) === backendProjectId)) ||
+              (frontendProjectId && projects.find(p => String(p.id) === frontendProjectId))) && (
+              <div style={{
+                marginBottom: 12, padding: '8px 12px', borderRadius: 8,
+                background: 'rgba(0, 212, 255, 0.06)', border: '1px solid rgba(0, 212, 255, 0.1)',
+                display: 'flex', gap: 16, flexWrap: 'wrap',
+              }}>
+                {backendProjectId && (() => {
+                  const p = projects.find(p => String(p.id) === backendProjectId)
+                  return p ? <Tag color="blue">后端: {p.language}/{p.framework}</Tag> : null
+                })()}
+                {frontendProjectId && (() => {
+                  const p = projects.find(p => String(p.id) === frontendProjectId)
+                  return p ? <Tag color="green">前端: {p.language}/{p.framework}</Tag> : null
+                })()}
+              </div>
+            )}
 
             <TextArea
               rows={6}
@@ -1029,29 +1134,69 @@ const PipelinePage: React.FC = () => {
                   )}
                 </div>
               )}
-              {/* UI Preview Button */}
-              {(activeStageKey === 'ui_preview' && (currentStage?.status === 'completed' || isWaitingConfirm)) && (
+              {/* HTML Preview - open in new window for non-tech users */}
+              {hasHtmlPreview && (currentStage?.status === 'completed' || isWaitingConfirm) && (
                 <Button
-                  type="default"
+                  type="primary"
                   icon={<EyeOutlined />}
-                  onClick={handlePreview}
+                  onClick={() => {
+                    const repaired = repairTruncatedHtml(previewHtmlContent)
+                    const blob = new Blob([repaired], { type: 'text/html' })
+                    const url = URL.createObjectURL(blob)
+                    window.open(url, '_blank')
+                  }}
                   style={{
                     marginBottom: 16,
                     borderRadius: 8,
-                    borderColor: 'rgba(0, 212, 255, 0.3)',
-                    color: '#00d4ff',
+                    background: '#52c41a',
+                    borderColor: '#52c41a',
                   }}
                 >
-                  查看完整预览
+                  在新窗口打开预览
                 </Button>
               )}
 
               {/* Code Files */}
               {currentStage?.code_files && Object.keys(currentStage.code_files).length > 0 && (
                 <div style={{ marginBottom: 16 }}>
-                  <Text style={{ color: '#888', fontSize: 12, textTransform: 'uppercase', letterSpacing: '1px', marginBottom: 8, display: 'block' }}>
-                    生成的代码文件
-                  </Text>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <Text style={{ color: '#888', fontSize: 12, textTransform: 'uppercase', letterSpacing: '1px' }}>
+                      生成的代码文件
+                    </Text>
+                    <Button
+                      size="small"
+                      icon={<DownloadOutlined />}
+                      onClick={() => {
+                        // 打包所有代码文件为 zip
+                        const files = Object.entries(currentStage.code_files || {})
+                        if (files.length === 1) {
+                          // 单文件直接下载
+                          const [name, content] = files[0]
+                          const blob = new Blob([content as string], { type: 'text/plain' })
+                          const url = URL.createObjectURL(blob)
+                          const a = document.createElement('a')
+                          a.href = url
+                          a.download = name
+                          a.click()
+                          URL.revokeObjectURL(url)
+                        } else {
+                          // 多文件逐个下载
+                          files.forEach(([name, content]) => {
+                            const blob = new Blob([content as string], { type: 'text/plain' })
+                            const url = URL.createObjectURL(blob)
+                            const a = document.createElement('a')
+                            a.href = url
+                            a.download = name
+                            a.click()
+                            URL.revokeObjectURL(url)
+                          })
+                        }
+                      }}
+                      style={{ borderRadius: 6, fontSize: 12 }}
+                    >
+                      下载代码
+                    </Button>
+                  </div>
                   {Object.entries(currentStage.code_files).map(([name, content]) => (
                     <div key={name} style={styles.codeFileItem}>
                       <CodeOutlined style={{ color: '#00d4ff', fontSize: 12 }} />
@@ -1273,9 +1418,9 @@ const PipelinePage: React.FC = () => {
           },
         }}
       >
-        {previewHtml ? (
+        {hasHtmlPreview && previewHtmlContent ? (
           <iframe
-            srcDoc={prepareUIPreviewHtml(previewHtml)}
+            srcDoc={prepareUIPreviewHtml(repairTruncatedHtml(previewHtmlContent))}
             style={{
               width: '100%',
               height: '80vh',

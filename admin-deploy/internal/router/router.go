@@ -40,5 +40,13 @@ func Setup(r *gin.Engine) {
 
 		deploy.GET("/images", handler.ListImages)
 		deploy.DELETE("/images/:id", handler.RemoveImage)
+
+		// ========== 测试管理 ==========
+		deploy.GET("/tests", handler.ListTestTasks)
+		deploy.GET("/tests/:id", handler.GetTestTask)
+		deploy.POST("/tests", handler.CreateTestTask)
+		deploy.POST("/tests/:id/execute", handler.ExecuteTestTask)
+		deploy.POST("/tests/:id/cancel", handler.CancelTestTask)
+		deploy.GET("/tests/:id/logs", handler.GetTestTaskLogs)
 	}
 }

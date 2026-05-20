@@ -1,5 +1,6 @@
 """智能体协作流程 API"""
 import json
+import logging
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from typing import Optional, Dict
@@ -16,6 +17,10 @@ class CreatePipelineRequest(BaseModel):
     git_repo_url: Optional[str] = Field(default="", description="Git 仓库地址")
     git_branch: Optional[str] = Field(default="main", description="分支名")
     skill_config: Optional[dict] = Field(default=None, description="每阶段 Skill 配置")
+    backend_project_id: Optional[str] = Field(default="", description="后端项目ID")
+    frontend_project_id: Optional[str] = Field(default="", description="前端项目ID")
+    backend_tech: Optional[str] = Field(default="", description="后端技术栈 如 java/spring-boot")
+    frontend_tech: Optional[str] = Field(default="", description="前端技术栈 如 javascript/vue")
 
 
 class ExecuteStageRequest(BaseModel):
@@ -58,6 +63,10 @@ async def create_pipeline(request: CreatePipelineRequest, http_request: Request)
             git_repo_url=request.git_repo_url,
             git_branch=request.git_branch,
             skill_config=request.skill_config,
+            backend_tech=request.backend_tech or "",
+            frontend_tech=request.frontend_tech or "",
+            backend_project_id=request.backend_project_id or "",
+            frontend_project_id=request.frontend_project_id or "",
         )
         return {
             "code": 200,
@@ -339,3 +348,61 @@ async def update_project_prompts(project_code: str, request: UpdatePromptsReques
         await session.commit()
 
     return {"code": 200, "message": "更新成功"}
+
+
+# ==================== 项目知识库 ====================
+
+@router.post("/projects/{project_id}/analyze")
+async def analyze_project_api(project_id: str):
+    """触发项目知识库分析（后台异步执行）"""
+    import asyncio
+    from app.services.knowledge_service import analyze_project
+
+    # 后台执行，不阻塞 API 响应
+    asyncio.create_task(_do_analyze(project_id))
+    return {"code": 200, "message": "分析任务已启动", "data": {"project_id": project_id, "status": "analyzing"}}
+
+
+async def _do_analyze(project_id: str):
+    """后台执行项目分析"""
+    try:
+        from app.services.knowledge_service import analyze_project
+        result = await analyze_project(project_id)
+        logger.info(f"Project {project_id} analysis done: {bool(result)}")
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Project analysis failed: {e}")
+
+
+@router.get("/projects/{project_id}/knowledge")
+async def get_project_knowledge_api(project_id: str):
+    """获取项目知识库"""
+    from app.models.agent_models import ProjectKnowledge
+    from app.core.database import async_session_maker
+    from sqlalchemy import select
+
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(ProjectKnowledge).where(ProjectKnowledge.project_id == int(project_id))
+        )
+        k = result.scalar_one_or_none()
+        if not k:
+            return {"code": 200, "data": None, "message": "未分析"}
+
+    return {
+        "code": 200,
+        "data": {
+            "project_id": k.project_id,
+            "project_name": k.project_name,
+            "language": k.language,
+            "framework": k.framework,
+            "tech_summary": k.tech_summary,
+            "architecture": k.architecture,
+            "component_patterns": k.component_patterns,
+            "api_patterns": k.api_patterns,
+            "permission_model": k.permission_model,
+            "coding_style": k.coding_style,
+            "key_files": json.loads(k.key_files) if k.key_files else [],
+            "analysis_status": k.analysis_status,
+        }
+    }

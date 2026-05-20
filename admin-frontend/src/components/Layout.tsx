@@ -12,6 +12,10 @@ import {
   GithubOutlined,
   BookOutlined,
   ThunderboltOutlined,
+  CodeOutlined,
+  PlusCircleOutlined,
+  FolderOutlined,
+  BugOutlined,
 } from '@ant-design/icons'
 import { useAuthStore } from '@/stores/auth'
 import { authApi } from '@/services/api'
@@ -29,6 +33,21 @@ interface MenuItem {
 
 const menuItems: MenuItem[] = [
   {
+    key: '/project',
+    icon: <CodeOutlined />,
+    label: '项目管理',
+    children: [
+      { key: '/project/create', label: '创建项目', icon: <PlusCircleOutlined /> },
+      { key: '/project/list', label: '项目列表', icon: <FolderOutlined /> },
+      { key: '/project/test', label: '测试中心', icon: <BugOutlined /> },
+    ],
+  },
+  {
+    key: '/pipeline',
+    icon: <RocketOutlined />,
+    label: '开发流水线',
+  },
+  {
     key: '/system',
     icon: <SettingOutlined />,
     label: '系统管理',
@@ -41,11 +60,6 @@ const menuItems: MenuItem[] = [
       { key: '/system/git', label: 'Git 配置', icon: <GithubOutlined /> },
       { key: '/system/knowledge', label: '知识库', icon: <BookOutlined /> },
     ],
-  },
-  {
-    key: '/pipeline',
-    icon: <RocketOutlined />,
-    label: '开发流水线',
   },
   {
     key: '/skills/market',

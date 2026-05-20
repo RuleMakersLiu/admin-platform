@@ -597,25 +597,62 @@ export function extractHtmlBlocks(content: string): Array<{ language: string; co
   return blocks;
 }
 /**
+ * 修复被截断的 HTML（LLM 输出超出 max_tokens 时被截断）
+ * 通过自动闭合未关闭的标签来尽量恢复页面渲染
+ */
+export function repairTruncatedHtml(html: string): string {
+  if (!html || typeof html !== 'string') return ''
+
+  // 如果有 </html> 标签，大概率是完整的
+  if (/<\/html\s*>/i.test(html)) return html
+
+  const selfClosing = new Set([
+    'br', 'hr', 'img', 'input', 'meta', 'link', 'area',
+    'base', 'col', 'embed', 'source', 'track', 'wbr',
+  ])
+  const tagRegex = /<\/?([a-zA-Z][a-zA-Z0-9]*)[^>]*>/gi
+  const openTags: string[] = []
+
+  let match
+  while ((match = tagRegex.exec(html)) !== null) {
+    const full = match[0]
+    const tag = match[1].toLowerCase()
+    if (selfClosing.has(tag)) continue
+    if (full.startsWith('</')) {
+      const idx = openTags.lastIndexOf(tag)
+      if (idx !== -1) openTags.splice(idx, 1)
+    } else {
+      openTags.push(tag)
+    }
+  }
+
+  // 移除末尾不完整的标签（如 `<div class="som` 被截断）
+  let result = html.replace(/<[^>]*$/, '')
+
+  // 按相反顺序关闭未闭合的标签
+  for (let i = openTags.length - 1; i >= 0; i--) {
+    result += `\n</${openTags[i]}>`
+  }
+
+  return result
+}
+
+/**
  * 为 UI 预览准备 HTML 内容
- * LLM 输出的已是完整 HTML 文档，在 sandbox iframe 中渲染，浏览器沙箱已禁止 JS 执行
- * 只做轻量安全过滤：移除 script 标签和事件处理器
- * @param html 完整的 HTML 文档字符串
- * @returns 安全的完整 HTML 文档
+ *
+ * iframe sandbox=allow-scripts 已提供安全隔离，LLM 生成的内容是可信的。
+ * 只做极轻量过滤：移除 javascript: URL，其余全部保留。
+ * 不移除 <script> 标签（Vue/antd CDN + 内联初始化代码都需要）
+ * 不移除 on* 属性（antd 组件内部使用）
  */
 export function prepareUIPreviewHtml(html: string): string {
-  if (!html || typeof html !== 'string') return '';
+  if (!html || typeof html !== 'string') return ''
 
-  // 轻量过滤：只移除 <script> 和事件属性，其余保留
-  let safe = html;
-  // 移除 <script>...</script>
-  safe = safe.replace(/<script[\s\S]*?<\/script\s*>/gi, '');
-  // 移除 on* 事件属性
-  safe = safe.replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, '');
-  // 移除 javascript: URL
-  safe = safe.replace(/href\s*=\s*(?:"javascript:[^"]*"|'javascript:[^']*')/gi, 'href="#"');
+  let safe = html
+  // 只移除 javascript: URL
+  safe = safe.replace(/href\s*=\s*(?:"javascript:[^"]*"|'javascript:[^']*')/gi, 'href="#"')
 
-  return safe;
+  return safe
 }
 
 export default {
@@ -623,6 +660,7 @@ export default {
   sanitizeStyle,
   prepareSandboxHtml,
   prepareUIPreviewHtml,
+  repairTruncatedHtml,
   detectContentType,
   extractHtmlBlocks,
 };

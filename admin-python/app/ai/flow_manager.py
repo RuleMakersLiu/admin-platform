@@ -44,17 +44,23 @@ class PipelineStatus(str, Enum):
 
 
 STAGE_DEFINITIONS = [
-    {"key": "requirement",  "name": "需求分析",   "agent": "PM",  "need_confirm": True},
-    {"key": "ui_preview",   "name": "UI预览",     "agent": "FE",  "need_confirm": True},
-    {"key": "development",  "name": "代码生成",   "agent": "BE",  "need_confirm": False},
-    {"key": "code_review",  "name": "代码审查",   "agent": "QA",  "need_confirm": False},
-    {"key": "testing",      "name": "自动化测试", "agent": "QA",  "need_confirm": False},
-    {"key": "commit",       "name": "代码提交",   "agent": "PJM", "need_confirm": False},
-    {"key": "deploy",       "name": "部署发布",   "agent": "PJM", "need_confirm": False},
-    {"key": "report",       "name": "总结报告",   "agent": "RPT", "need_confirm": False},
+    # 产品设计流程
+    {"key": "requirement",    "name": "需求分析",   "agent": "PM",  "need_confirm": True},
+    {"key": "page_design",    "name": "页面设计",   "agent": "PM",  "need_confirm": True},
+    {"key": "prototype",      "name": "原型预览",   "agent": "FE",  "need_confirm": True},
+    {"key": "delivery",       "name": "交付包",     "agent": "PJM", "need_confirm": True},
+    # 开发流程
+    {"key": "frontend_dev",   "name": "前端开发",   "agent": "FE",  "need_confirm": False},
+    {"key": "backend_dev",    "name": "后端开发",   "agent": "BE",  "need_confirm": False},
+    {"key": "code_review",    "name": "代码审查",   "agent": "QA",  "need_confirm": False},
+    {"key": "testing",        "name": "自动化测试", "agent": "QA",  "need_confirm": False},
+    {"key": "commit",         "name": "代码提交",   "agent": "PJM", "need_confirm": False},
+    {"key": "deploy",         "name": "部署发布",   "agent": "PJM", "need_confirm": False},
+    {"key": "report",         "name": "总结报告",   "agent": "RPT", "need_confirm": False},
 ]
 
 STAGE_KEYS = [s["key"] for s in STAGE_DEFINITIONS]
+STAGE_NAMES = {s["key"]: s["name"] for s in STAGE_DEFINITIONS}
 
 
 def _get_stage_agent(stage_key: str) -> str:
@@ -98,6 +104,9 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 用户需求:
 {{user_request}}
 
+## 参考项目
+如果上方有「前端项目代码参考」或「后端项目代码参考」，请结合项目现有的架构、字段、组件来撰写需求，保持与项目一致的技术风格。
+
 请直接输出 Markdown 格式的 PRD 文档（不要用代码块包裹），包含:
 1. 项目概述
 2. 功能需求列表（含优先级 P0/P1/P2/P3）
@@ -105,110 +114,178 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 4. 非功能需求
 5. 验收标准""",
 
-    "ui_preview": """根据需求文档，生成一个 Vue 2 + antd-vue 1.x 的管理后台页面预览。
+    "page_design": """基于以下需求文档，进行详细的页面设计。
 
 ## 需求文档
 {{requirement_output}}
 
-## 输出格式
-只输出一个 ```html 代码块，不要在代码块前后写任何文字说明。
+请直接输出 Markdown 格式的页面设计文档（不要用代码块包裹），包含:
+1. 页面列表及层级关系
+2. 每个页面的字段定义（字段名、类型、是否必填、校验规则）
+3. 每个页面的按钮和操作（新增、编辑、删除、导出等）
+4. 搜索/筛选条件
+5. 弹窗交互说明（新增弹窗、编辑弹窗、确认弹窗）
+6. 页面状态（空数据、加载中、无权限、搜索无结果、异常）
+7. 权限控制点（页面级权限 + 按钮/操作级权限）
+8. 开发确认要点（需要开发团队确认的技术问题）""",
 
-## 技术要求
-1. 使用 Vue 2 + antd-vue 1.x CDN：
-   - `<script src="https://cdn.jsdelivr.net/npm/vue@2.7.16/dist/vue.min.js"></script>`
-   - `<script src="https://cdn.jsdelivr.net/npm/moment@2.29.4/min/moment.min.js"></script>`
-   - `<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ant-design-vue@1.7.8/dist/antd.min.css">`
-   - `<script src="https://cdn.jsdelivr.net/npm/ant-design-vue@1.7.8/dist/antd.min.js"></script>`
-2. 使用 antd-vue 组件：a-layout(a-layout-sider + a-layout-header + a-layout-content)、a-table、a-form、a-modal、a-card、a-button、a-input、a-select、a-tag、a-pagination、a-dropdown、a-menu、a-badge、a-avatar、a-icon
-3. Vue 实例通过 `new Vue({el: '#app', ...})` 挂载，使用 `antd` 全局注册
-4. 包含完整的 CRUD 交互（列表、搜索、新增弹窗、编辑、删除确认）
-5. 表格至少 5 条 mock 数据
-6. 页面精致美观，有合理间距、阴影、圆角
-7. 所有文字使用中文""",
+    "prototype": """根据需求文档和页面设计，生成一个可交互的前端原型页面。
 
-    "development": """基于以下需求文档和 UI 设计，生成完整的前后端代码。
+## 需求文档
+{{requirement_output}}
+
+## 页面设计
+{{page_design_output}}
+
+## 前端技术栈
+{{frontend_tech}}
+
+## 用户需求
+{{user_request}}
+
+## 输出要求
+- 只输出一个 ```html 代码块，不要在代码块前后写任何文字说明
+- HTML 必须完整输出，不能被截断，控制在 350 行以内
+
+## 重要：参考项目代码
+如果上方有「前端项目代码参考」，参考其组件用法、样式风格和布局结构来设计原型。
+
+## 技术方案
+只用 antd CSS + 原生 JS（禁止使用 Vue/React）：
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ant-design-vue@1.7.8/dist/antd.min.css">
+
+用 antd CSS 类名渲染组件外观（.ant-btn, .ant-table, .ant-input, .ant-modal, .ant-tag 等）。
+用一个 <script> 标签写原生 JS 实现交互，只允许用以下简单模式：
+- 弹窗显示/隐藏：document.getElementById('xxx').style.display = 'block'/'none'
+- 按钮点击：onclick="函数名()"
+- 提交反馈：alert('操作成功')
+不要用任何框架、不要用模板语法、不要用数据绑定。
+
+## 实现要求
+1. 纯 HTML + antd CSS 类名 + 少量原生 JS，不引入任何框架
+2. 实现：主列表页 + 搜索 + 批量处理弹窗 + 删除确认弹窗
+3. 弹窗默认隐藏，点击按钮显示，点取消/确定关闭
+4. 表格放 3 条 mock 数据（中文），列和字段要与页面设计一致
+5. 所有文字使用中文
+6. 弹窗中的表单字段要能输入""",
+
+    "delivery": """基于需求分析、页面设计和原型预览，整理一份完整的交付文档包。
+
+## 需求文档
+{{requirement_output}}
+
+## 页面设计
+{{page_design_output}}
+
+请直接输出 Markdown 格式的交付文档（不要用代码块包裹），包含:
+1. PRD 摘要（功能清单、优先级、验收标准）
+2. 页面设计规格（字段、按钮、交互、状态、权限）
+3. 交互流程说明（主流程 + 异常流程）
+4. 前端实现要点（组件选择、状态管理、路由规划）
+5. API 接口草案（接口路径、请求方法、请求参数、响应格式）
+6. Mock 数据示例（至少包含列表和详情的 mock 数据）
+7. 权限规则表（角色 × 操作权限矩阵）
+8. 测试验收标准（功能测试用例清单、边界条件、兼容性要求）""",
+
+    "ui_preview": """根据需求文档，生成一个静态管理后台页面预览。
+
+## 需求文档
+{{requirement_output}}
+
+## 前端技术栈
+{{frontend_tech}}
+
+## 用户需求
+{{user_request}}
+
+## 输出要求
+- 只输出一个 ```html 代码块，不要在代码块前后写任何文字说明
+- HTML 必须完整输出，不能被截断，控制在 300 行以内
+
+## 技术方案
+纯静态 HTML，不需要 Vue/React/JS，只引入 antd CSS：
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ant-design-vue@1.7.8/dist/antd.min.css">
+用 antd CSS 类名（.ant-btn, .ant-table, .ant-input 等）模拟组件外观。
+
+## 实现要求
+1. 纯静态 HTML + CSS，不需要 <script>
+2. 主列表页 + 新增/编辑弹窗 + 删除确认
+3. 表格放 3 条 mock 数据（中文）
+4. 所有文字使用中文""",
+
+    "backend_dev": """基于以下需求文档和交付包，生成完整的后端代码。
 
 需求文档:
 {{requirement_output}}
 
-UI 设计参考:
-{{ui_preview_output}}
+交付包:
+{{delivery_output}}
 
-## 系统架构（PHP 转发到 Java）
+## 目标技术栈
+{{backend_tech}}
 
-本系统采用 PHP + Java 双层架构：
-- PHP (Laravel 8 + Swoole) 对外提供 API，负责认证、参数校验、数据转发
-- Java (Spring Boot 1.4.3 + Dubbo 3.x) 提供核心业务服务
-- PHP 通过 Curl 调用 Java 的 HTTP 接口（非 Dubbo 直连），使用 app.java_api_url 配置的服务地址
-- 请求/响应格式统一：{ "message": { "code": 0, "message": "success" }, "data": {...} }
+请根据以上技术栈生成对应的后端代码。如果未指定技术栈，默认使用 Java Spring Boot + MyBatis-Plus。
 
-### PHP 层 (Laravel 8 + Swoole/LaravelS)
-- 版本：PHP 7.4+, Laravel 8.83, Swoole/LaravelS
-- 分层：Controller → Service → DAO (Http\\Models) → Model
-- HTTP 客户端：使用 Ixudra/Curl 封装，通过 app(Http::class)->postHttp() / getHttp() 调用 Java
-- 签名机制：appkey + timestamp + signcode (MD5)
-- 多租户：tenant_id 字段隔离
-- 控制器路径：app/Http/Controllers/Api/{Feature}Controller.php
-- 服务层路径：app/Http/Services/{Feature}Service.php
-- DAO层路径：app/Http/Dao/{Feature}Dao.php (直接操作数据库)
-- 模型路径：app/Http/Models/{Feature}.php
+输出要求:
+- 每个代码块前用 `### 文件: 路径/文件名` 标注
+- 用对应语言的代码块包裹（```java, ```php, ```go, ```python, ```sql 等）
+- 包含 Controller、Service、Model/Entity、数据库建表 SQL
+- 遵循该技术栈的最佳实践和常见分层架构""",
 
-### Java 层 (Spring Boot 1.4.3 + Dubbo 3.x)
-- 版本：Java 1.8, Spring Boot 1.4.3.RELEASE, Dubbo 3.2.16
-- 模块结构：
-  - wealth-glsw-core: 接口定义 (model/dto/service/枚举)
-  - wealth-glsw-service: Dubbo 服务实现
-  - wealth-admin-home: Web 层 (Controller + DubboReference 调用)
-- 控制器：@RestController + @RequestMapping + @DubboReference 注入服务
-- 返回值：统一使用 ApiResult 封装
-- ORM：无 MyBatis，使用 Dubbo 服务接口操作数据
-- 包结构：com.gemantic.wealth.{模块}.controller/service/model/dto
+    "frontend_dev": """基于以下需求文档、页面设计和原型预览，生成完整的前端代码。
 
-## 前端技术栈
-- Vue 2.6.10 + antd-vue 1.7.2 (vue-antd-pro 脚手架)
-- 路由：vue-router 3.x，配置在 src/router/
-- 状态管理：Vuex 3.x + vue-ls 持久化
-- 网络请求：axios，封装在 src/utils/request.js，baseURL 通过环境变量配置
-- 列表页使用 s-table 组件（封装了 a-table + 分页 + 加载）
-- 表单使用 a-form (layout="inline" 搜索, 垂直布局编辑)
-- 弹窗使用 a-modal
-- 权限指令：v-action:xxx
-- 样式：Less 预处理器，scoped 样式
+需求文档:
+{{requirement_output}}
 
-请输出以下内容:
-1. PHP Controller（用 ```php 包裹）
-2. PHP Service（用 ```php 包裹）
-3. PHP DAO（如果需要直接数据库操作）（用 ```php 包裹）
-4. Java Controller（用 ```java 包裹）
-5. Java Service 接口 + 实现（用 ```java 包裹）
-6. Java Model/DTO（用 ```java 包裹）
-7. 前端列表页 .vue（用 ```vue 包裹）
-8. 前端表单页 .vue（用 ```vue 包裹）
-9. 前端 API 服务（用 ```js 包裹）
-10. 数据库建表 SQL（用 ```sql 包裹）
+页面设计:
+{{page_design_output}}
+
+原型预览参考:
+{{prototype_output}}
+
+交付包中的 API 接口定义:
+{{delivery_output}}
+
+## 目标技术栈
+{{frontend_tech}}
+
+请根据以上技术栈生成对应的前端代码。如果未指定技术栈，默认使用 Vue 3 + Ant Design Vue + TypeScript。
+
+输出要求:
+- 每个代码块前用 `### 文件: 路径/文件名` 标注
+- 用对应语言的代码块包裹（```vue, ```js, ```ts, ```jsx, ```tsx 等）
+- 包含列表页、表单/弹窗组件、API 服务、路由配置
+4. 路由配置（用 ```js 包裹）
 
 每个代码块前用 `### 文件: 路径/文件名` 标注。""",
 
-    "code_review": """请审查以下代码，检查代码质量、安全性和最佳实践。
+    "code_review": """请审查以下前后端代码，检查代码质量、安全性和最佳实践。
 
-代码:
-{{development_output}}
+后端代码:
+{{backend_dev_output}}
+
+前端代码:
+{{frontend_dev_output}}
 
 请输出:
-1. 代码评分 (A/B/C/D/F)
-2. 发现的问题列表（含严重程度: critical/major/minor）
-3. 改进建议（每个问题给出具体的修复方案）
-4. 是否通过审查 (PASS/FAIL)
+1. 后端代码评分 (A/B/C/D/F)
+2. 前端代码评分 (A/B/C/D/F)
+3. 发现的问题列表（含严重程度: critical/major/minor，标注前后端）
+4. 改进建议（每个问题给出具体的修复方案）
+5. 是否通过审查 (PASS/FAIL)
 
 如果发现 critical 或 major 问题，标记为 FAIL 并给出详细修复指导。""",
 
-    "testing": """基于以下需求和代码，设计测试用例并验证。
+    "testing": """基于以下需求和前后端代码，设计测试用例并验证。
 
 需求文档:
 {{requirement_output}}
 
-代码:
-{{development_output}}
+后端代码:
+{{backend_dev_output}}
+
+前端代码:
+{{frontend_dev_output}}
 
 代码审查结果:
 {{code_review_output}}
@@ -219,18 +296,22 @@ UI 设计参考:
 3. 覆盖率评估
 4. 发现的 Bug 列表（标注严重程度: critical/major/minor）""",
 
-    "commit": """请整理以下代码，生成提交信息并准备提交。
+    "commit": """请整理以下前后端代码，生成提交信息并准备提交。
 
-代码:
-{{development_output}}
+后端代码:
+{{backend_dev_output}}
+
+前端代码:
+{{frontend_dev_output}}
 
 测试结果:
 {{testing_output}}
 
 请输出:
-1. Git commit message（Conventional Commits 格式）
-2. 变更文件列表
-3. 代码打包说明""",
+1. 后端 Git commit message（Conventional Commits 格式）
+2. 前端 Git commit message（Conventional Commits 格式）
+3. 后端变更文件列表
+4. 前端变更文件列表""",
 
     "deploy": """请根据以下信息，生成部署方案。
 
@@ -268,14 +349,24 @@ def _render_prompt_template(template: str, context: Dict[str, Any]) -> str:
     user_request = context.get("user_request", "")
     prev_outputs = context.get("stage_outputs", {})
 
+    backend_tech = context.get("backend_tech", "")
+    frontend_tech = context.get("frontend_tech", "")
+
     replacements = {
         "{{user_request}}": user_request[:2000],
         "{{requirement_output}}": prev_outputs.get("requirement", {}).get("output", "未提供")[:3000],
+        "{{page_design_output}}": prev_outputs.get("page_design", {}).get("output", "未提供")[:3000],
+        "{{prototype_output}}": prev_outputs.get("prototype", {}).get("output", "未提供")[:3000],
+        "{{delivery_output}}": prev_outputs.get("delivery", {}).get("output", "未提供")[:3000],
         "{{ui_preview_output}}": prev_outputs.get("ui_preview", {}).get("output", "未提供")[:3000],
+        "{{backend_dev_output}}": prev_outputs.get("backend_dev", {}).get("output", "未提供")[:3000],
+        "{{frontend_dev_output}}": prev_outputs.get("frontend_dev", {}).get("output", "未提供")[:3000],
         "{{development_output}}": prev_outputs.get("development", {}).get("output", "未提供")[:3000],
         "{{code_review_output}}": prev_outputs.get("code_review", {}).get("output", "未提供")[:2000],
         "{{testing_output}}": prev_outputs.get("testing", {}).get("output", "未提供")[:2000],
         "{{commit_output}}": prev_outputs.get("commit", {}).get("output", "未提供")[:1000],
+        "{{backend_tech}}": backend_tech or "未指定",
+        "{{frontend_tech}}": frontend_tech or "未指定",
         # 截断版本（report 阶段用）
         "{{requirement_output_short}}": (prev_outputs.get("requirement", {}).get("output", "未提供") or "")[:500],
         "{{code_review_output_short}}": (prev_outputs.get("code_review", {}).get("output", "未提供") or "")[:500],
@@ -331,7 +422,7 @@ def _parse_agent_output(stage_key: str, raw_output: str) -> Dict[str, Any]:
     """解析 Agent 输出，提取结构化数据"""
     result = {"output": raw_output}
 
-    if stage_key == "ui_preview":
+    if stage_key in ("ui_preview", "prototype"):
         import re
         # 匹配 ```html 或 ```HTML 后面的内容，直到下一个 ```
         pattern = re.compile(r"```(?:html|HTML)\s*\n(.*?)```", re.DOTALL)
@@ -362,7 +453,7 @@ def _parse_agent_output(stage_key: str, raw_output: str) -> Dict[str, Any]:
                     else:
                         result["preview_html"] = raw_output[start:].strip()
 
-    if stage_key == "development":
+    if stage_key in ("development", "frontend_dev", "backend_dev"):
         files = {}
         current_file = None
         current_content = []
@@ -439,32 +530,220 @@ def _is_retriable_error(e: Exception) -> bool:
 
 
 async def _call_agent_with_retry(agent_service: AgentService, session_id: str,
-                                  message: str, agent_type: str) -> str:
+                                  message: str, agent_type: str,
+                                  max_tokens_override: int = None) -> str:
     """调用 Agent，自动重试可恢复的错误"""
     last_error = None
+    original_max_tokens = None
 
-    for attempt in range(MAX_LLM_RETRIES):
-        try:
-            result = await agent_service.chat(
-                session_id=session_id,
-                message=message,
-                agent_type=agent_type,
-            )
-            return result["reply"]
+    # HTML 生成阶段需要更高的 max_tokens 防止截断
+    if max_tokens_override:
+        from app.ai.agents import AgentFactory
+        agent = AgentFactory.get_agent(agent_type)
+        if hasattr(agent, 'llm') and agent.llm and hasattr(agent.llm, 'max_tokens'):
+            original_max_tokens = agent.llm.max_tokens
+            agent.llm.max_tokens = max_tokens_override
 
-        except Exception as e:
-            last_error = e
-            if not _is_retriable_error(e):
-                logger.error(f"Agent call failed (permanent): {e}")
-                raise
+    try:
+        for attempt in range(MAX_LLM_RETRIES):
+            try:
+                result = await agent_service.chat(
+                    session_id=session_id,
+                    message=message,
+                    agent_type=agent_type,
+                )
+                return result["reply"]
 
-            delay = RETRY_BASE_DELAY * (2 ** attempt)
-            logger.warning(f"Agent call failed (retriable, attempt {attempt + 1}/{MAX_LLM_RETRIES}): {e}. "
-                         f"Retrying in {delay}s...")
-            await asyncio.sleep(delay)
+            except Exception as e:
+                last_error = e
+                if not _is_retriable_error(e):
+                    logger.error(f"Agent call failed (permanent): {e}")
+                    raise
 
-    logger.error(f"Agent call failed after {MAX_LLM_RETRIES} retries: {last_error}")
-    raise last_error
+                delay = RETRY_BASE_DELAY * (2 ** attempt)
+                logger.warning(f"Agent call failed (retriable, attempt {attempt + 1}/{MAX_LLM_RETRIES}): {e}. "
+                             f"Retrying in {delay}s...")
+                await asyncio.sleep(delay)
+
+        logger.error(f"Agent call failed after {MAX_LLM_RETRIES} retries: {last_error}")
+        raise last_error
+    finally:
+        # 恢复原始 max_tokens
+        if original_max_tokens is not None:
+            from app.ai.agents import AgentFactory
+            agent = AgentFactory.get_agent(agent_type)
+            if hasattr(agent, 'llm') and agent.llm and hasattr(agent.llm, 'max_tokens'):
+                agent.llm.max_tokens = original_max_tokens
+
+
+# ==================== 项目上下文加载 ====================
+
+# 项目文件缓存（进程级，避免重复克隆）
+_project_cache: Dict[str, Dict[str, str]] = {}
+
+
+async def _load_project_context(project_id: str, project_type: str) -> str:
+    """从 Generator 获取项目信息，从 Git 拉取关键文件，返回上下文文本。
+    project_type: "frontend" 或 "backend"
+    """
+    if not project_id:
+        return ""
+
+    cache_key = f"{project_id}:{project_type}"
+    if cache_key in _project_cache:
+        files = _project_cache[cache_key]
+    else:
+        files = await _fetch_project_files_from_git(project_id)
+        _project_cache[cache_key] = files
+
+    if not files:
+        return ""
+
+    # 筛选关键文件
+    key_patterns = _get_key_file_patterns(project_type)
+    key_files = {}
+    for path, content in files.items():
+        if any(path.endswith(p) or path.endswith("/" + p) for p in key_patterns):
+            key_files[path] = content
+    if not key_files:
+        # 没匹配到关键文件，取前 3 个非空文件
+        for path, content in list(files.items())[:3]:
+            if content.strip():
+                key_files[path] = content[:2000]
+
+    # 构建上下文文本（总长度限制 6000 字符）
+    sections = []
+    total = 0
+    for path, content in sorted(key_files.items()):
+        chunk = f"### {path}\n```\n{content[:1500]}\n```\n"
+        if total + len(chunk) > 6000:
+            break
+        sections.append(chunk)
+        total += len(chunk)
+
+    return "\n".join(sections) if sections else ""
+
+
+def _get_key_file_patterns(project_type: str) -> list:
+    """根据项目类型返回关键文件模式"""
+    if project_type == "frontend":
+        return [
+            "package.json",
+            "src/main.js", "src/main.ts", "src/App.vue", "src/App.tsx",
+            "src/router/index.js", "src/router/index.ts",
+            "src/views/Home.vue", "src/pages/index.vue",
+            "src/layouts/BasicLayout.vue", "src/layout/index.vue",
+            "src/components/",
+            "vite.config.js", "vue.config.js",
+            ".env",
+        ]
+    else:
+        return [
+            "pom.xml", "build.gradle", "go.mod", "requirements.txt",
+            "composer.json", "package.json",
+            "src/main/resources/application.yml", "src/main/resources/application.properties",
+            "src/main/java/",
+            "config.yaml", "config.json",
+        ]
+
+
+async def _fetch_project_files_from_git(project_id: str) -> Dict[str, str]:
+    """从 Generator 获取项目 Git 地址，浅克隆并读取关键文件"""
+    import httpx
+    import tempfile
+    import os
+
+    try:
+        # 1. 从 Generator 获取项目信息
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"http://localhost:8082/generator/projects/{project_id}")
+            if resp.status_code != 200:
+                return {}
+            proj_data = resp.json().get("data", {})
+
+        repo_url = proj_data.get("repo_url", "")
+        branch = proj_data.get("branch", "main")
+        if not repo_url:
+            return {}
+
+        # 2. 浅克隆到临时目录
+        tmp_dir = tempfile.mkdtemp(prefix="pipe-ctx-")
+        token = await _get_git_token_for_repo(repo_url)
+        clone_url = _inject_git_credentials(repo_url, token)
+
+        proc = await asyncio.create_subprocess_exec(
+            "git", "clone", "--depth", "1", "--branch", branch, clone_url, tmp_dir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+        if proc.returncode != 0:
+            logger.warning(f"Git clone failed for project {project_id}: {stderr.decode()[:200]}")
+            return {}
+
+        # 3. 读取关键文件
+        files = {}
+        for root, dirs, filenames in os.walk(tmp_dir):
+            # 跳过 .git, node_modules, dist 等
+            dirs[:] = [d for d in dirs if d not in {'.git', 'node_modules', 'dist', '.nuxt', '.next', '__pycache__', 'vendor', 'target', 'build'}]
+            for fname in filenames:
+                fpath = os.path.join(root, fname)
+                rel_path = os.path.relpath(fpath, tmp_dir)
+                # 只读代码文件，跳过二进制
+                if any(rel_path.endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.woff', '.woff2', '.ttf', '.eot', '.mp4', '.mp3', '.zip', '.tar', '.gz']):
+                    continue
+                try:
+                    with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read(5000)
+                    files[rel_path] = content
+                except Exception:
+                    pass
+
+        # 清理临时目录
+        import shutil
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        logger.info(f"Loaded {len(files)} files from project {project_id}")
+        return files
+
+    except Exception as e:
+        logger.warning(f"Failed to load project context for {project_id}: {e}")
+        return {}
+
+
+def _inject_git_credentials(repo_url: str, token: str = "") -> str:
+    """为 Git URL 注入凭证（支持 http/https）"""
+    if not token:
+        import os
+        token = os.environ.get("GIT_TOKEN", "")
+    if not token:
+        return repo_url
+
+    if repo_url.startswith("https://"):
+        return repo_url.replace("https://", f"https://oauth2:{token}@", 1)
+    elif repo_url.startswith("http://"):
+        return repo_url.replace("http://", f"http://oauth2:{token}@", 1)
+    return repo_url
+
+
+async def _get_git_token_for_repo(repo_url: str) -> str:
+    """根据仓库 URL 从数据库查找对应的 Git token"""
+    from sqlalchemy import text
+    async with async_session_maker() as session:
+        result = await session.execute(
+            text("SELECT platform, access_token, base_url FROM sys_git_config WHERE status = 1 LIMIT 10")
+        )
+        for row in result.fetchall():
+            platform, access_token, base_url = row[0], row[1], row[2] or ""
+            if not access_token:
+                continue
+            if base_url and base_url in repo_url:
+                return access_token
+            if platform == "gitlab" and "gitlab" in repo_url:
+                return access_token
+            if platform == "github" and "github" in repo_url:
+                return access_token
+    return ""
 
 
 # ==================== 流水线管理器 ====================
@@ -478,10 +757,23 @@ class DevPipelineManager:
     async def create_pipeline(self, project_id: str = "", user_request: str = "",
                               tenant_id: int = 0, creator_id: int = 0,
                               git_config_id: int = None, git_repo_url: str = "",
-                              git_branch: str = "main", skill_config: dict = None) -> str:
+                              git_branch: str = "main", skill_config: dict = None,
+                              backend_tech: str = "", frontend_tech: str = "",
+                              backend_project_id: str = "", frontend_project_id: str = "") -> str:
         pipeline_id = f"pipe_{uuid.uuid4().hex[:12]}"
         now = int(time.time() * 1000)
         stages = _init_stages()
+
+        # 把技术栈信息存到 skill_config 中，后续 prompt 构建时会用到
+        config = skill_config or {}
+        if backend_tech:
+            config["backend_tech"] = backend_tech
+        if frontend_tech:
+            config["frontend_tech"] = frontend_tech
+        if backend_project_id:
+            config["backend_project_id"] = backend_project_id
+        if frontend_project_id:
+            config["frontend_project_id"] = frontend_project_id
 
         db_obj = DevPipeline(
             pipeline_id=pipeline_id,
@@ -496,7 +788,7 @@ class DevPipelineManager:
             git_config_id=git_config_id,
             git_repo_url=git_repo_url,
             git_branch=git_branch,
-            skill_config=json.dumps(skill_config, ensure_ascii=False) if skill_config else None,
+            skill_config=json.dumps(config, ensure_ascii=False),
             create_time=now,
             update_time=now,
         )
@@ -809,25 +1101,64 @@ class DevPipelineManager:
                     pipeline_id, current_stage, pipe.tenant_id, session
                 )
 
+                # 加载技术栈配置
+                pipe_config = json.loads(pipe.skill_config or "{}")
+
+                # 加载关联项目的知识库上下文
+                project_ctx_section = ""
+                fe_proj_id = pipe_config.get("frontend_project_id", "")
+                be_proj_id = pipe_config.get("backend_project_id", "")
+                ctx_parts = []
+                if fe_proj_id:
+                    from app.services.knowledge_service import get_project_knowledge_text
+                    fe_knowledge = await get_project_knowledge_text(fe_proj_id)
+                    if fe_knowledge:
+                        ctx_parts.append(fe_knowledge)
+                    else:
+                        # 知识库没有，尝试加载原始代码
+                        fe_ctx = await _load_project_context(fe_proj_id, "frontend")
+                        if fe_ctx:
+                            ctx_parts.append(f"## 前端项目代码参考\n{fe_ctx}")
+                if be_proj_id:
+                    from app.services.knowledge_service import get_project_knowledge_text
+                    be_knowledge = await get_project_knowledge_text(be_proj_id)
+                    if be_knowledge:
+                        ctx_parts.append(be_knowledge)
+                    else:
+                        be_ctx = await _load_project_context(be_proj_id, "backend")
+                        if be_ctx:
+                            ctx_parts.append(f"## 后端项目代码参考\n{be_ctx}")
+                if ctx_parts:
+                    project_ctx_section = "\n\n".join(ctx_parts)
+
                 # 构建 prompt（加载项目级自定义 prompt）
                 context = {
                     "user_request": user_input or pipe.user_request or "",
                     "stage_outputs": {k: v for k, v in stages.items() if v.get("status") == "completed"},
                     "fix_feedback": fix_feedback,
                     "memories_text": memories_text,
+                    "backend_tech": pipe_config.get("backend_tech", ""),
+                    "frontend_tech": pipe_config.get("frontend_tech", ""),
                 }
                 project_prompts = await self._load_project_prompts(pipe.project_id or "")
                 prompt = _build_pipeline_prompt(current_stage, context,
                                                  custom_prompts=project_prompts)
+                # 注入项目代码上下文
+                if project_ctx_section:
+                    prompt = f"{project_ctx_section}\n\n---\n\n{prompt}"
                 if user_input:
                     prompt = f"{user_input}\n\n{prompt}"
                     user_input = ""
 
                 # 调用 Agent（带重试）
                 session_id = f"{pipeline_id}_{current_stage}"
+                # HTML 生成阶段需要更多 token 防止截断
+                html_stages = {"prototype", "ui_preview"}
+                max_tok = 16384 if current_stage in html_stages else None
                 try:
                     raw_output = await _call_agent_with_retry(
-                        self.agent_service, session_id, prompt, agent_type
+                        self.agent_service, session_id, prompt, agent_type,
+                        max_tokens_override=max_tok,
                     )
 
                     # 解析输出
@@ -938,7 +1269,11 @@ class DevPipelineManager:
                         pipe.retry_count = 0
 
                     # 正常推进到下一阶段
-                    idx = STAGE_KEYS.index(current_stage)
+                    try:
+                        idx = STAGE_KEYS.index(current_stage)
+                    except ValueError:
+                        # 旧流水线阶段不在当前定义中，跳到末尾
+                        idx = len(STAGE_KEYS) - 1
                     if idx + 1 >= len(STAGE_KEYS):
                         pipe.status = PipelineStatus.COMPLETED.value
                         pipe.stages_data = json.dumps(stages, ensure_ascii=False)
@@ -993,22 +1328,31 @@ class DevPipelineManager:
             current_stage = pipe.current_stage
 
             if not confirmed:
-                # 用户拒绝，退回该阶段并重新生成
+                # 用户拒绝，退回该阶段
                 stages[current_stage]["status"] = "pending"
                 stages[current_stage]["output"] = ""
                 stages[current_stage]["structured_output"] = {}
                 stages[current_stage]["preview_html"] = ""
                 pipe.status = PipelineStatus.PENDING.value
                 if feedback:
-                    pipe.user_request = feedback
+                    # 追加反馈而不是覆盖原始需求
+                    pipe.user_request = f"{pipe.user_request}\n\n[修订意见]: {feedback}"
                 pipe.stages_data = json.dumps(stages, ensure_ascii=False)
                 pipe.update_time = int(time.time() * 1000)
                 await session.commit()
-                # 自动重新执行该阶段（带 feedback 作为用户输入）
-                return await self.execute_stage(pipeline_id, feedback)
+                # 退回后由前端调用 execute 重新执行（不在这里同步调用 LLM，避免超时）
+                return {
+                    "pipeline_id": pipeline_id,
+                    "stage": current_stage,
+                    "status": "pending",
+                    "message": "已退回，可重新执行",
+                }
 
             # 确认通过，推进到下一阶段
-            idx = STAGE_KEYS.index(current_stage)
+            try:
+                idx = STAGE_KEYS.index(current_stage)
+            except ValueError:
+                idx = len(STAGE_KEYS) - 1
             if idx + 1 >= len(STAGE_KEYS):
                 pipe.status = PipelineStatus.COMPLETED.value
                 pipe.update_time = int(time.time() * 1000)
@@ -1022,8 +1366,15 @@ class DevPipelineManager:
             pipe.update_time = int(time.time() * 1000)
             await session.commit()
 
-            # 自动执行下一阶段
-            return await self.execute_stage(pipeline_id, feedback)
+            # 返回推进结果，前端负责调用 execute 触发下一阶段
+            next_needs_confirm = _stage_needs_confirm(next_stage)
+            return {
+                "pipeline_id": pipeline_id,
+                "stage": next_stage,
+                "status": "pending",
+                "need_confirm": next_needs_confirm,
+                "message": f"已推进到 {STAGE_NAMES.get(next_stage, next_stage)}",
+            }
 
     # ==================== 查询方法 ====================
 

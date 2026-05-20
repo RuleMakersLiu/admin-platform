@@ -12,8 +12,8 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
   const [isStreaming, setIsStreaming] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  const { addMessage, updateMessage, appendMessageContent, currentSessionId, settings } =
-    useChatStore.getState();
+  const _storeState = useChatStore.getState();
+  void _storeState;
 
   const sendMessage = useCallback(
     async (message: string) => {

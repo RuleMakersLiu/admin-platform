@@ -52,6 +52,8 @@ type Task struct {
 type Project struct {
 	Name       string   `json:"name"`
 	Type       string   `json:"type"`
+	RepoURL    string   `json:"repo_url"`
+	Branch     string   `json:"branch"`
 	BuildCmd   string   `json:"build_cmd"`
 	Dockerfile string   `json:"dockerfile"`
 	Image      string   `json:"image"`
@@ -625,6 +627,6 @@ func (s *DeployService) RemoveContainerByID(containerID string) error {
 // RemoveImageByID 删除镜像
 func (s *DeployService) RemoveImageByID(imageID string) error {
 	ctx := context.Background()
-	_, err := s.docker.ImageRemove(ctx, imageID, image.RemoveOptions{})
+	_, err := s.docker.ImageRemove(ctx, imageID, types.ImageRemoveOptions{})
 	return err
 }

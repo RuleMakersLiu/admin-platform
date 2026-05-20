@@ -664,3 +664,256 @@ class KnowledgeService:
 
 
 knowledge_service = KnowledgeService()
+
+
+# ==================== 项目知识自动分析 ===================
+
+ANALYSIS_PROMPT = """你是一个资深的技术架构分析师。请分析以下项目的源代码，提炼出结构化的知识。
+
+## 项目信息
+- 名称: {name}
+- 语言: {language}
+- 框架: {framework}
+
+## 项目源码关键文件
+{files_text}
+
+## 请输出 JSON 格式的分析结果（不要用 markdown 代码块包裹，直接输出 JSON）
+
+{{
+  "tech_summary": "技术栈总结（3-5句话描述项目用了什么技术、什么版本、什么构建工具）",
+  "architecture": "架构描述（目录结构、分层设计、模块划分、路由组织方式）",
+  "component_patterns": "组件/模块模式（常用组件封装方式、表单处理、表格处理、弹窗处理等代码模式）",
+  "api_patterns": "接口规范（接口路径风格、请求/响应格式、错误码规范、认证方式）",
+  "permission_model": "权限模型（路由权限、按钮权限、角色体系的实现方式）",
+  "coding_style": "编码风格（命名规范、注释风格、文件组织习惯、状态管理方式）",
+  "key_files": ["关键文件路径1", "关键文件路径2"]
+}}"""
+
+
+async def analyze_project(project_id: str) -> Optional[Dict]:
+    """分析项目并存储到知识库。后台任务，不阻塞调用方。"""
+    from app.models.agent_models import ProjectKnowledge
+    import httpx
+
+    # 检查是否已分析过
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(ProjectKnowledge).where(ProjectKnowledge.project_id == int(project_id))
+        )
+        existing = result.scalar_one_or_none()
+        if existing and existing.analysis_status == "done":
+            logger.info(f"Project {project_id} already analyzed")
+            return _knowledge_to_dict(existing)
+
+    # 获取项目信息
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"http://localhost:8082/generator/projects/{project_id}")
+            if resp.status_code != 200:
+                return None
+            proj = resp.json().get("data", {})
+    except Exception as e:
+        logger.error(f"Failed to fetch project info: {e}")
+        return None
+
+    project_name = proj.get("name", "")
+    language = proj.get("language", "")
+    framework = proj.get("framework", "")
+
+    # 创建知识记录
+    async with async_session_maker() as session:
+        knowledge = ProjectKnowledge(
+            project_id=int(project_id),
+            project_name=project_name,
+            repo_url=proj.get("repo_url", ""),
+            language=language,
+            framework=framework,
+            analysis_status="analyzing",
+            tenant_id=proj.get("tenant_id", 0),
+        )
+        session.add(knowledge)
+        await session.commit()
+
+    # 拉取项目文件
+    try:
+        from app.ai.flow_manager import _fetch_project_files_from_git
+        files = await _fetch_project_files_from_git(project_id)
+    except Exception as e:
+        logger.error(f"Failed to fetch files: {e}")
+        files = {}
+
+    if not files:
+        async with async_session_maker() as session:
+            result = await session.execute(
+                select(ProjectKnowledge).where(ProjectKnowledge.project_id == int(project_id))
+            )
+            k = result.scalar_one_or_none()
+            if k:
+                k.tech_summary = f"{language}/{framework} 项目，暂无源码"
+                k.analysis_status = "done"
+                k.update_time = int(time.time() * 1000)
+                await session.commit()
+        return None
+
+    files_text = _select_key_files(files, language, framework)
+
+    # 调用 LLM 分析
+    prompt = ANALYSIS_PROMPT.format(
+        name=project_name, language=language, framework=framework, files_text=files_text,
+    )
+    try:
+        from app.ai.agents import AgentFactory
+        async with async_session_maker() as cfg_session:
+            await AgentFactory.load_llm_from_db(cfg_session)
+        agent = AgentFactory.get_agent("PM")
+        raw_output = await agent.process(prompt, [])
+        analysis = _parse_analysis_json(raw_output)
+    except Exception as e:
+        logger.error(f"LLM analysis failed: {e}")
+        analysis = {"tech_summary": f"分析失败: {e}", "architecture": "",
+                     "component_patterns": "", "api_patterns": "",
+                     "permission_model": "", "coding_style": "", "key_files": []}
+
+    # 存储
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(ProjectKnowledge).where(ProjectKnowledge.project_id == int(project_id))
+        )
+        k = result.scalar_one_or_none()
+        if k:
+            k.tech_summary = analysis.get("tech_summary", "")
+            k.architecture = analysis.get("architecture", "")
+            k.component_patterns = analysis.get("component_patterns", "")
+            k.api_patterns = analysis.get("api_patterns", "")
+            k.permission_model = analysis.get("permission_model", "")
+            k.coding_style = analysis.get("coding_style", "")
+            k.key_files = json.dumps(analysis.get("key_files", []), ensure_ascii=False)
+            k.raw_files = files_text[:8000]
+            k.analysis_status = "done"
+            k.update_time = int(time.time() * 1000)
+            await session.commit()
+
+    # 同步到通用知识库（方便搜索）
+    try:
+        content = f"技术栈: {analysis.get('tech_summary', '')}\n"
+        content += f"架构: {analysis.get('architecture', '')}\n"
+        content += f"组件模式: {analysis.get('component_patterns', '')}\n"
+        content += f"接口规范: {analysis.get('api_patterns', '')}\n"
+        content += f"权限模型: {analysis.get('permission_model', '')}\n"
+        content += f"编码风格: {analysis.get('coding_style', '')}"
+        await KnowledgeService.create_knowledge(
+            title=f"项目分析: {project_name}",
+            content=content,
+            category="project_analysis",
+            tags=[language, framework, project_name, "auto-analysis"],
+            source="project_auto_analysis",
+            project_id=int(project_id),
+        )
+    except Exception as e:
+        logger.warning(f"Failed to sync to general knowledge base: {e}")
+
+    logger.info(f"Project {project_id} analysis completed")
+    return analysis
+
+
+async def get_project_knowledge_text(project_id: str) -> Optional[str]:
+    """获取项目的知识库上下文文本，用于注入 pipeline prompt"""
+    from app.models.agent_models import ProjectKnowledge
+
+    if not project_id:
+        return None
+
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(ProjectKnowledge).where(ProjectKnowledge.project_id == int(project_id))
+        )
+        k = result.scalar_one_or_none()
+        if not k or k.analysis_status != "done":
+            return None
+
+    sections = []
+    if k.tech_summary:
+        sections.append(f"- 技术栈: {k.tech_summary}")
+    if k.architecture:
+        sections.append(f"- 架构: {k.architecture}")
+    if k.component_patterns:
+        sections.append(f"- 组件模式: {k.component_patterns}")
+    if k.api_patterns:
+        sections.append(f"- 接口规范: {k.api_patterns}")
+    if k.permission_model:
+        sections.append(f"- 权限模型: {k.permission_model}")
+    if k.coding_style:
+        sections.append(f"- 编码风格: {k.coding_style}")
+
+    if not sections:
+        return None
+
+    return f"## 项目「{k.project_name}」知识库\n" + "\n".join(sections)
+
+
+def _select_key_files(files: Dict, language: str, framework: str) -> str:
+    """筛选关键文件"""
+    import os as _os
+    priority = [
+        "package.json", "pom.xml", "go.mod", "requirements.txt", "composer.json",
+        "src/main.js", "src/main.ts", "src/App.vue", "src/App.tsx",
+        "src/router/", "src/routes/", "src/views/", "src/api/",
+        "src/store/", "src/stores/", "src/utils/request",
+        "src/main/java/", "src/controller/", "src/service/",
+        "config/", ".env", "vite.config", "vue.config",
+        "src/components/", "src/layouts/",
+    ]
+    selected = {}
+    total = 0
+    for pattern in priority:
+        for path, content in sorted(files.items()):
+            if path in selected or not content.strip():
+                continue
+            if pattern in path:
+                chunk = f"### {path}\n```\n{content[:2000]}\n```\n"
+                if total + len(chunk) > 12000:
+                    break
+                selected[path] = chunk
+                total += len(chunk)
+        if total > 10000:
+            break
+
+    if total < 8000:
+        for path, content in sorted(files.items()):
+            if path in selected or not content.strip():
+                continue
+            ext = _os.path.splitext(path)[1]
+            if ext in ('.vue', '.jsx', '.tsx', '.java', '.go', '.py', '.php'):
+                chunk = f"### {path}\n```\n{content[:1500]}\n```\n"
+                if total + len(chunk) > 12000:
+                    break
+                selected[path] = chunk
+                total += len(chunk)
+
+    return "\n".join(selected.values())
+
+
+def _parse_analysis_json(raw: str) -> Dict:
+    text = raw.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        text = "\n".join(lines[1:])
+        if text.endswith("```"):
+            text = text[:-3]
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    if start >= 0 and end > start:
+        try:
+            return json.loads(text[start:end])
+        except json.JSONDecodeError:
+            pass
+    return {"tech_summary": text[:500], "architecture": "", "component_patterns": "",
+            "api_patterns": "", "permission_model": "", "coding_style": "", "key_files": []}
+
+
+def _knowledge_to_dict(k) -> Dict:
+    return {"tech_summary": k.tech_summary or "", "architecture": k.architecture or "",
+            "component_patterns": k.component_patterns or "", "api_patterns": k.api_patterns or "",
+            "permission_model": k.permission_model or "", "coding_style": k.coding_style or "",
+            "key_files": json.loads(k.key_files or "[]")}

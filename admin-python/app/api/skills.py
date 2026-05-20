@@ -64,6 +64,85 @@ async def get_toolset(name: str):
     return {"code": 200, "data": info}
 
 
+@router.get("/market")
+async def market_list(page: int = 1, pageSize: int = 12, sortBy: str = "newest"):
+    """技能市场列表"""
+    skills = skill_registry.list_skills()
+    return {
+        "code": 200,
+        "data": {
+            "items": [
+                {
+                    "id": i,
+                    "skill_id": s.skill_id,
+                    "name": s.name,
+                    "description": s.description,
+                    "category": s.category or "通用",
+                    "author": "系统",
+                    "downloads": 0,
+                    "rating": 0,
+                    "created_at": "",
+                }
+                for i, s in enumerate(skills)
+            ],
+            "total": len(skills),
+            "page": page,
+            "pageSize": pageSize,
+        },
+    }
+
+
+@router.get("/market/categories")
+async def market_categories():
+    """技能市场分类"""
+    skills = skill_registry.list_skills()
+    categories = list(set(s.category or "通用" for s in skills))
+    return {
+        "code": 200,
+        "data": [
+            {"id": c, "name": c, "count": sum(1 for s in skills if (s.category or "通用") == c)}
+            for c in categories
+        ],
+    }
+
+
+@router.get("/market/{skill_id}")
+async def market_get_skill(skill_id: str):
+    """技能市场详情"""
+    skill = skill_registry.get_skill(skill_id)
+    if not skill:
+        raise HTTPException(status_code=404, detail="Skill not found")
+    return {
+        "code": 200,
+        "data": {
+            "id": skill_id,
+            "skill_id": skill.skill_id,
+            "name": skill.name,
+            "description": skill.description,
+            "category": skill.category or "通用",
+            "author": "系统",
+            "content": skill.instructions if hasattr(skill, "instructions") else "",
+            "input_schema": skill.input_schema,
+            "output_schema": skill.output_schema,
+            "downloads": 0,
+            "rating": 0,
+            "ratings": [],
+        },
+    }
+
+
+@router.post("/market/download/{skill_id}")
+async def market_download(skill_id: str):
+    """下载/安装技能"""
+    return {"code": 200, "data": {"message": "技能已安装"}}
+
+
+@router.get("/market/{skill_id}/ratings")
+async def market_ratings(skill_id: str, page: int = 1, pageSize: int = 10):
+    """技能评分列表"""
+    return {"code": 200, "data": {"items": [], "total": 0}}
+
+
 @router.get("/{skill_id}")
 async def get_skill(skill_id: str):
     """获取 Skill 详情"""

@@ -17,6 +17,9 @@ import WebChatPage from '@/pages/webchat'
 import SkillMarketPage from '@/pages/skills/market'
 import KanbanPage from '@/pages/kanban'
 import PipelinePage from '@/pages/pipeline'
+import ProjectCreate from '@/pages/project/create'
+import ProjectList from '@/pages/project/list'
+import ProjectTest from '@/pages/project/test'
 
 // Error Boundary
 class ErrorBoundary extends Component<{ children: React.ReactNode }, { error: Error | null }> {
@@ -80,6 +83,12 @@ function App() {
             <Route path="project" element={<AgentProject />} />
             <Route path="bug" element={<AgentBug />} />
           </Route>
+          {/* 项目管理 */}
+          <Route path="project">
+            <Route path="create" element={<ProjectCreate />} />
+            <Route path="list" element={<ProjectList />} />
+            <Route path="test" element={<ProjectTest />} />
+          </Route>
           {/* WebChat */}
           <Route path="webchat" element={<WebChatPage />} />
           {/* 看板 */}
@@ -90,7 +99,7 @@ function App() {
           <Route path="skills">
             <Route path="market" element={<SkillMarketPage />} />
           </Route>
-          <Route path="" element={<Navigate to="/system/admin" replace />} />
+          <Route path="" element={<Navigate to="/project/create" replace />} />
         </Route>
       </Routes>
     </BrowserRouter>

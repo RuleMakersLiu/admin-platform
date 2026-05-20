@@ -16,20 +16,40 @@ func Setup(r *gin.Engine) {
 	// 生成器路由
 	gen := r.Group("/generator")
 	{
-		// 对话生成
+		// 对话生成（保留原有）
 		gen.POST("/chat", handler.Chat)
 		gen.GET("/chat/:sessionId", handler.GetChatHistory)
 
-		// 功能配置
+		// 功能配置（保留原有）
 		gen.GET("/config", handler.ListConfig)
 		gen.POST("/config", handler.CreateConfig)
 		gen.GET("/config/:id", handler.GetConfig)
 		gen.PUT("/config/:id", handler.UpdateConfig)
 		gen.DELETE("/config/:id", handler.DeleteConfig)
 
-		// 代码生成
+		// 代码生成（保留原有）
 		gen.POST("/generate", handler.GenerateCode)
 		gen.GET("/preview/:id", handler.PreviewCode)
 		gen.GET("/download/:id", handler.DownloadCode)
+
+		// ========== 新增：项目模板 ==========
+		gen.GET("/templates", handler.ListTemplates)
+		gen.GET("/templates/:id", handler.GetTemplate)
+		gen.POST("/templates", handler.CreateTemplate)
+		gen.PUT("/templates/:id", handler.UpdateTemplate)
+		gen.DELETE("/templates/:id", handler.DeleteTemplate)
+		gen.GET("/languages", handler.ListLanguages)
+
+		// ========== 新增：项目生成 ==========
+		gen.GET("/projects", handler.ListProjects)
+		gen.POST("/projects", handler.CreateProject)
+		gen.POST("/projects/import", handler.ImportProject)
+		gen.GET("/projects/:id", handler.GetProject)
+		gen.PUT("/projects/:id", handler.UpdateProject)
+		gen.DELETE("/projects/:id", handler.DeleteProject)
+		gen.GET("/projects/:id/preview", handler.PreviewProject)
+		gen.GET("/projects/:id/download", handler.DownloadProject)
+		gen.POST("/projects/:id/regenerate", handler.RegenerateProject)
+		gen.GET("/projects/:id/test-config", handler.GetProjectTestConfig)
 	}
 }

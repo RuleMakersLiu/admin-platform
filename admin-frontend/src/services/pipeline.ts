@@ -42,14 +42,22 @@ export interface PipelineListItem {
 const BASE = '/flow/pipeline'
 
 export const pipelineApi = {
-  create: (data: { project_id?: string; user_request: string }) =>
+  create: (data: {
+    user_request: string
+    project_id?: string
+    project_name?: string
+    backend_project_id?: string
+    frontend_project_id?: string
+    backend_tech?: string
+    frontend_tech?: string
+  }) =>
     api.post(`${BASE}/create`, data) as any as Promise<{ pipeline_id: string; status: string }>,
 
   execute: (id: string, user_input?: string) =>
-    api.post(`${BASE}/${id}/execute`, { user_input: user_input || '' }) as any,
+    api.post(`${BASE}/${id}/execute`, { user_input: user_input || '' }, { timeout: 300000 }) as any,
 
   confirm: (id: string, confirmed: boolean, feedback?: string) =>
-    api.post(`${BASE}/${id}/confirm`, { confirmed, feedback: feedback || '' }) as any,
+    api.post(`${BASE}/${id}/confirm`, { confirmed, feedback: feedback || '' }, { timeout: 300000 }) as any,
 
   getStatus: (id: string) =>
     api.get(`${BASE}/${id}/status`) as any as Promise<PipelineStatus>,

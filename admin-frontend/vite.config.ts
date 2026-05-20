@@ -12,6 +12,16 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
+      '/api/generator': {
+        target: 'http://localhost:8082',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, ''),
+      },
+      '/api/deploy': {
+        target: 'http://localhost:8083',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, ''),
+      },
       '/api': {
         target: 'http://localhost:8081',
         changeOrigin: true,

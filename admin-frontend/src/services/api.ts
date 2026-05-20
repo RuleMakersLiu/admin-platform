@@ -42,6 +42,10 @@ api.interceptors.response.use(
       const msg = data?.detail || data?.message || '请求失败'
       return Promise.reject(new Error(msg))
     }
+    // 网络不通/超时：如果没有 token 也跳登录页
+    if (!useAuthStore.getState().token) {
+      window.location.href = '/login'
+    }
     return Promise.reject(new Error('网络错误，请检查网络连接'))
   }
 )
@@ -72,6 +76,29 @@ export const generatorApi = {
   deleteConfig: (id: number) => api.delete(`/generator/config/${id}`),
   previewCode: (id: number) => api.get(`/generator/preview/${id}`),
   downloadCode: (id: number) => api.get(`/generator/download/${id}`),
+
+  // 项目模板
+  getTemplates: (params?: { language?: string }) =>
+    api.get('/generator/templates', { params }),
+  getTemplate: (id: number) => api.get(`/generator/templates/${id}`),
+  createTemplate: (data: any) => api.post('/generator/templates', data),
+  updateTemplate: (id: number, data: any) => api.put(`/generator/templates/${id}`, data),
+  deleteTemplate: (id: number) => api.delete(`/generator/templates/${id}`),
+  getLanguages: () => api.get('/generator/languages'),
+
+  // 项目生成
+  getProjects: (params?: any) => api.get('/generator/projects', { params }),
+  createProject: (data: any) => api.post('/generator/projects', data),
+  importProject: (data: any) => api.post('/generator/projects/import', data),
+  getProject: (id: number) => api.get(`/generator/projects/${id}`),
+  updateProject: (id: number, data: any) => api.put(`/generator/projects/${id}`, data),
+  deleteProject: (id: number) => api.delete(`/generator/projects/${id}`),
+  previewProject: (id: number) => api.get(`/generator/projects/${id}/preview`),
+  downloadProject: (id: number) => {
+    window.open(`/api/generator/projects/${id}/download`, '_blank')
+  },
+  regenerateProject: (id: number) => api.post(`/generator/projects/${id}/regenerate`),
+  getProjectTestConfig: (id: number) => api.get(`/generator/projects/${id}/test-config`),
 }
 
 // 部署接口
@@ -85,6 +112,14 @@ export const deployApi = {
   getContainerLogs: (id: string) => api.get(`/deploy/containers/${id}/logs`),
   startContainer: (id: string) => api.post(`/deploy/containers/${id}/start`),
   stopContainer: (id: string) => api.post(`/deploy/containers/${id}/stop`),
+
+  // 测试任务
+  getTestTasks: (params?: any) => api.get('/deploy/tests', { params }),
+  getTestTask: (id: number) => api.get(`/deploy/tests/${id}`),
+  createTestTask: (data: any) => api.post('/deploy/tests', data),
+  executeTestTask: (id: number) => api.post(`/deploy/tests/${id}/execute`),
+  cancelTestTask: (id: number) => api.post(`/deploy/tests/${id}/cancel`),
+  getTestTaskLogs: (id: number) => api.get(`/deploy/tests/${id}/logs`),
 }
 
 // 智能分身接口
