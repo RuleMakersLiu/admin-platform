@@ -613,7 +613,13 @@ const PipelinePage: React.FC = () => {
         }
       }
       setPipeline(data)
-    } catch { /* ignore */ }
+    } catch {
+      // pipeline 不存在或已过期，清除无效 ID
+      setPipelineId('')
+      setPipeline(null)
+      setShowCreate(true)
+      localStorage.removeItem('lastPipelineId')
+    }
   }, [pipelineId])
 
   useEffect(() => { refreshStatus() }, [refreshStatus])
