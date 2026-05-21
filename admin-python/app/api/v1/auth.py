@@ -1,4 +1,5 @@
 """认证路由"""
+import json
 from typing import List, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -6,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.core.database import get_db
+from app.core.redis import get_gateway_redis
 from app.schemas.common import LoginRequest, LoginResponse, Response, UserInfo
 from app.services.auth import AuthService
 from app.models.models import SysTenant, SysMenu, SysAdminGroup
@@ -50,6 +52,12 @@ async def login(request: LoginRequest, db: AsyncSession = Depends(get_db)):
     if not result:
         return Response(code=401, message="用户名或密码错误")
 
+    # 缓存用户权限到 Gateway Redis (db 0)
+    try:
+        await _cache_user_permissions(db, result.admin_id)
+    except Exception:
+        pass  # 不阻塞登录
+
     return Response(data=result.model_dump(by_alias=True))
 
 
@@ -70,7 +78,45 @@ async def get_info(
     if not info:
         raise HTTPException(status_code=404, detail="用户不存在")
 
+    # 刷新权限缓存
+    try:
+        await _cache_user_permissions(db, admin_id)
+    except Exception:
+        pass
+
     return Response(data=info.model_dump(by_alias=True))
+
+
+async def _cache_user_permissions(db: AsyncSession, admin_id: int):
+    """将用户权限缓存到 Gateway Redis (db 0)"""
+    from app.models.models import SysAdmin
+    admin_stmt = select(SysAdmin).where(SysAdmin.id == admin_id)
+    admin_result = await db.execute(admin_stmt)
+    admin = admin_result.scalar_one_or_none()
+    if not admin:
+        return
+
+    group_stmt = select(SysAdminGroup).where(SysAdminGroup.id == admin.admin_group_id)
+    group_result = await db.execute(group_stmt)
+    group = group_result.scalar_one_or_none()
+
+    permissions = []
+    if group and group.power:
+        try:
+            permissions = json.loads(group.power) if isinstance(group.power, str) else group.power
+        except json.JSONDecodeError:
+            permissions = []
+
+    # 超级管理员添加通配符权限
+    if group and group.is_super == 1:
+        permissions = ["*"]
+
+    r = await get_gateway_redis()
+    cache_key = f"admin:permission:{admin_id}"
+    await r.delete(cache_key)
+    if permissions:
+        await r.sadd(cache_key, *permissions)
+    await r.expire(cache_key, 86400)  # 24h TTL
 
 
 def build_menu_tree(menus: List[SysMenu]) -> List[dict]:
@@ -155,7 +201,6 @@ async def get_menus(
         return Response(data=menus)
 
     # 否则根据权限过滤菜单
-    import json
     permissions = []
     if group and group.power:
         try:

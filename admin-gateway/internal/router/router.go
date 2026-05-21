@@ -62,6 +62,9 @@ func Setup(r *gin.Engine) {
 				// 智能分身 -> Python后端
 				protected.Any("/agent/*action", handler.ProxyToPython)
 
+				// 技能管理 -> Python后端
+				protected.Any("/skills/*action", handler.ProxyToPython)
+
 				// 智能体流程（流水线） -> Python后端
 				protected.Any("/flow/*action", handler.ProxyToPython)
 
