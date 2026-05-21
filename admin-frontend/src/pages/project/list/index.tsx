@@ -105,14 +105,7 @@ const ProjectListPage: React.FC = () => {
     }
   }
 
-  const handleRegenerate = async (id: number) => {
-    try {
-      await generatorApi.regenerateProject(id)
-      message.success('重新生成成功')
-    } catch (e: any) {
-      message.error(e?.message || '重新生成失败')
-    }
-  }
+
 
   const handleSetRepo = (record: any) => {
     setEditingProject(record)
