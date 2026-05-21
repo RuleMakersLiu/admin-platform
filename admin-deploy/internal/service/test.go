@@ -577,11 +577,6 @@ func (s *TestService) failTestTask(taskID int64, errMsg string) {
 
 func (s *TestService) finishTestTask(taskID int64, status int, result *TestResult, resultJSON string) {
 	db := config.GetDB()
-	updates := map[string]interface{}{
-		"status":       status,
-		"total_cases":  result.TotalCases,
-		"passed_cases": result.PassedCases,
-		"failed_cases": result.FailedCases,
 	// MySQL json column rejects empty string — use empty object
 	rj := truncateString(resultJSON, 50000)
 	if rj == "" {

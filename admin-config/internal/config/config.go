@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"os"
+	"regexp"
+	"strconv"
 
 	"github.com/spf13/viper"
 )
@@ -87,13 +89,24 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("读取配置文件失败: %w", err)
 	}
 
-	// 展开环境变量
+	// 展开环境变量 ${VAR:default} 或 ${VAR} 格式
+	re := regexp.MustCompile(`\$\{([^}:]+)(?::([^}]*))?\}`)
 	for _, key := range v.AllKeys() {
 		val := v.GetString(key)
-		if len(val) > 0 && val[0] == '$' {
-			envKey := val[1:]
+		resolved := re.ReplaceAllStringFunc(val, func(match string) string {
+			sub := re.FindStringSubmatch(match)
+			envKey := sub[1]
+			defaultVal := sub[2]
 			if envVal := os.Getenv(envKey); envVal != "" {
-				v.Set(key, envVal)
+				return envVal
+			}
+			return defaultVal
+		})
+		if resolved != val {
+			if n, err := strconv.Atoi(resolved); err == nil {
+				v.Set(key, n)
+			} else {
+				v.Set(key, resolved)
 			}
 		}
 	}
