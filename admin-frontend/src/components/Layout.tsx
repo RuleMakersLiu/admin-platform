@@ -20,6 +20,7 @@ import {
 import { useAuthStore } from '@/stores/auth'
 import { authApi } from '@/services/api'
 import type { MenuProps } from 'antd'
+import ProfileModal from '@/components/ProfileModal'
 import './Layout.css'
 
 const { Header, Sider, Content } = AntLayout
@@ -70,6 +71,7 @@ const menuItems: MenuItem[] = [
 
 export default function LayoutComponent() {
   const [collapsed, setCollapsed] = useState(false)
+  const [profileOpen, setProfileOpen] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
   const { user, logout } = useAuthStore()
@@ -94,7 +96,9 @@ export default function LayoutComponent() {
   ]
 
   const handleUserMenuClick: MenuProps['onClick'] = ({ key }) => {
-    if (key === 'logout') {
+    if (key === 'profile') {
+      setProfileOpen(true)
+    } else if (key === 'logout') {
       handleLogout()
     }
   }
@@ -194,6 +198,8 @@ export default function LayoutComponent() {
           </div>
         </Content>
       </AntLayout>
+
+      <ProfileModal open={profileOpen} onClose={() => setProfileOpen(false)} />
     </AntLayout>
   )
 }
