@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Table, Tag, Button, Space, Modal, Typography, message, Tooltip, Progress, Card, Input, Form } from 'antd'
+import { Table, Tag, Button, Space, Modal, Typography, message, Tooltip, Progress, Card, Input, Form, Select } from 'antd'
 import {
   DeleteOutlined, EyeOutlined, ReloadOutlined, DownloadOutlined,
   BugOutlined, PlusOutlined, LinkOutlined, BranchesOutlined,
@@ -29,6 +29,10 @@ const ProjectListPage: React.FC = () => {
   const [repoForm] = Form.useForm()
   const [knowledgeMap, setKnowledgeMap] = useState<Record<number, string>>({})
   const [analyzingIds, setAnalyzingIds] = useState<Set<number>>(new Set())
+  const [langModalVisible, setLangModalVisible] = useState(false)
+  const [langEditProject, setLangEditProject] = useState<any>(null)
+  const [editLang, setEditLang] = useState<string>('')
+  const [editFw, setEditFw] = useState<string>('')
 
   const fetchProjects = async (p = page) => {
     setLoading(true)
@@ -132,6 +136,19 @@ const ProjectListPage: React.FC = () => {
     }
   }
 
+  const handleSaveLang = async () => {
+    if (!langEditProject) return
+    if (!editLang) { message.warning('请选择语言'); return }
+    try {
+      await generatorApi.updateProject(langEditProject.id, { language: editLang, framework: editFw })
+      message.success('已更新')
+      setLangModalVisible(false)
+      fetchProjects()
+    } catch (e: any) {
+      message.error(e?.message || '更新失败')
+    }
+  }
+
   const columns = [
     {
       title: '项目名称',
@@ -155,57 +172,10 @@ const ProjectListPage: React.FC = () => {
             <Tag
               style={{ cursor: 'pointer', background: 'rgba(250,173,20,0.1)', border: '1px dashed rgba(250,173,20,0.4)', color: '#faad14' }}
               onClick={() => {
-                Modal.confirm({
-                  title: <span style={{ color: '#e0e0e0' }}>设置语言/框架</span>,
-                  content: (
-                    <div style={{ marginTop: 12 }}>
-                      <Select
-                        id="lang-select"
-                        defaultValue=""
-                        style={{ width: '100%', marginBottom: 8 }}
-                        placeholder="选择语言"
-                        options={[
-                          { label: 'Java', value: 'java' },
-                          { label: 'Go', value: 'go' },
-                          { label: 'Python', value: 'python' },
-                          { label: 'PHP', value: 'php' },
-                          { label: 'JavaScript/TypeScript', value: 'javascript' },
-                          { label: 'Node.js', value: 'node' },
-                        ]}
-                        onChange={(v) => { (window as any).__lang_val = v }}
-                      />
-                      <Select
-                        id="fw-select"
-                        defaultValue=""
-                        style={{ width: '100%' }}
-                        placeholder="选择框架"
-                        options={[
-                          { label: 'Spring Boot', value: 'spring-boot' },
-                          { label: 'Gin', value: 'gin' },
-                          { label: 'FastAPI', value: 'fastapi' },
-                          { label: 'Laravel', value: 'laravel' },
-                          { label: 'Vue', value: 'vue' },
-                          { label: 'React', value: 'react' },
-                          { label: 'Express', value: 'express' },
-                        ]}
-                        onChange={(v) => { (window as any).__fw_val = v }}
-                      />
-                    </div>
-                  ),
-                  okText: '保存',
-                  onOk: async () => {
-                    const language = (window as any).__lang_val || ''
-                    const framework = (window as any).__fw_val || ''
-                    if (!language) { message.warning('请选择语言'); return }
-                    try {
-                      await generatorApi.updateProject(record.id, { language, framework })
-                      message.success('已更新')
-                      fetchProjects()
-                    } catch (e: any) {
-                      message.error(e?.message || '更新失败')
-                    }
-                  },
-                })
+                setLangEditProject(record)
+                setEditLang('')
+                setEditFw('')
+                setLangModalVisible(true)
               }}
             >
               未识别，点击设置
@@ -403,6 +373,50 @@ const ProjectListPage: React.FC = () => {
             <Input placeholder="main" />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* 设置语言/框架 */}
+      <Modal
+        title="设置语言/框架"
+        open={langModalVisible}
+        onCancel={() => setLangModalVisible(false)}
+        onOk={handleSaveLang}
+        okText="保存"
+        width={440}
+      >
+        <div style={{ marginTop: 12 }}>
+          <div style={{ marginBottom: 8, color: '#ccc' }}>语言</div>
+          <Select
+            value={editLang || undefined}
+            style={{ width: '100%', marginBottom: 16 }}
+            placeholder="选择语言"
+            options={[
+              { label: 'Java', value: 'java' },
+              { label: 'Go', value: 'go' },
+              { label: 'Python', value: 'python' },
+              { label: 'PHP', value: 'php' },
+              { label: 'JavaScript/TypeScript', value: 'javascript' },
+              { label: 'Node.js', value: 'node' },
+            ]}
+            onChange={setEditLang}
+          />
+          <div style={{ marginBottom: 8, color: '#ccc' }}>框架</div>
+          <Select
+            value={editFw || undefined}
+            style={{ width: '100%' }}
+            placeholder="选择框架"
+            options={[
+              { label: 'Spring Boot', value: 'spring-boot' },
+              { label: 'Gin', value: 'gin' },
+              { label: 'FastAPI', value: 'fastapi' },
+              { label: 'Laravel', value: 'laravel' },
+              { label: 'Vue', value: 'vue' },
+              { label: 'React', value: 'react' },
+              { label: 'Express', value: 'express' },
+            ]}
+            onChange={setEditFw}
+          />
+        </div>
       </Modal>
     </div>
   )
