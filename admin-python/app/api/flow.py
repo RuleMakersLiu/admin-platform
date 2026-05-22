@@ -2,6 +2,7 @@
 import json
 import logging
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional, Dict
 
@@ -48,6 +49,13 @@ def _get_admin_id(request: Request) -> int:
         return 0
 
 
+def _sse_event(event: Dict) -> str:
+    """Format a pipeline event as an SSE frame."""
+    event_type = event.get("type") or "message"
+    data = json.dumps(event, ensure_ascii=False)
+    return f"event: {event_type}\ndata: {data}\n\n"
+
+
 @router.post("/pipeline/create")
 async def create_pipeline(request: CreatePipelineRequest, http_request: Request):
     """创建开发流水线"""
@@ -88,6 +96,32 @@ async def execute_stage(pipeline_id: str, request: ExecuteStageRequest = None):
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/pipeline/{pipeline_id}/execute-stream")
+async def execute_stage_stream(pipeline_id: str, request: ExecuteStageRequest = None):
+    """Stream current pipeline execution as SSE events."""
+    user_input = request.user_input if request else ""
+
+    async def event_generator():
+        try:
+            async for event in pipeline_manager.execute_stage_stream(pipeline_id, user_input):
+                yield _sse_event(event)
+        except ValueError as e:
+            yield _sse_event({"type": "error", "pipeline_id": pipeline_id, "error": str(e)})
+        except Exception as e:
+            logging.getLogger(__name__).exception("Pipeline stream failed")
+            yield _sse_event({"type": "error", "pipeline_id": pipeline_id, "error": str(e)})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/pipeline/{pipeline_id}/confirm")

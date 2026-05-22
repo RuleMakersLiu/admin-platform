@@ -15,7 +15,7 @@ import logging
 import time
 from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Awaitable, Callable, AsyncGenerator, Dict, List, Optional, Any, Tuple
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -718,6 +718,113 @@ async def _call_agent_with_retry(agent_service: AgentService, session_id: str,
                 agent.llm.max_tokens = original_max_tokens
 
 
+def _normalize_stream_chunk(chunk: Any) -> Tuple[str, bool, Optional[str]]:
+    """Normalize raw LLM stream chunks into content/done/error fields."""
+    if chunk is None:
+        return "", False, None
+
+    if not isinstance(chunk, str):
+        return str(chunk), False, None
+
+    raw = chunk.strip()
+    if not raw:
+        return "", False, None
+    if raw == "[DONE]" or raw == "data: [DONE]":
+        return "", True, None
+    if raw.startswith("data:"):
+        raw = raw[5:].strip()
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return chunk, False, None
+
+    if not isinstance(data, dict):
+        return str(data), False, None
+
+    error = data.get("error")
+    if data.get("type") == "error":
+        error = error or data.get("message")
+    content = data.get("content") or data.get("delta") or data.get("text") or ""
+    done = bool(data.get("done")) or data.get("type") in {"done", "complete"}
+    return str(content), done, str(error) if error else None
+
+
+async def _call_agent_with_retry_stream(
+    agent_service: AgentService,
+    session_id: str,
+    message: str,
+    agent_type: str,
+    on_chunk: Callable[[str], Awaitable[None]],
+    max_tokens_override: int = None,
+) -> str:
+    """Call an agent with streaming chunks while preserving the final reply."""
+    last_error = None
+    original_max_tokens = None
+
+    if max_tokens_override:
+        from app.ai.agents import AgentFactory
+        agent = AgentFactory.get_agent(agent_type)
+        if hasattr(agent, 'llm') and agent.llm and hasattr(agent.llm, 'max_tokens'):
+            original_max_tokens = agent.llm.max_tokens
+            agent.llm.max_tokens = max_tokens_override
+
+    try:
+        for attempt in range(MAX_LLM_RETRIES):
+            emitted_any = False
+            chunks: List[str] = []
+            try:
+                logger.info(
+                    f"LLM stream attempt {attempt + 1}/{MAX_LLM_RETRIES} for {session_id}"
+                )
+
+                from app.ai.agents import AgentFactory
+                agent = AgentFactory.get_agent(agent_type)
+                history = agent_service.sessions.get(session_id, [])
+
+                async for raw_chunk in agent.astream(message, history):
+                    content, done, error = _normalize_stream_chunk(raw_chunk)
+                    if error:
+                        raise RuntimeError(error)
+                    if content:
+                        emitted_any = True
+                        chunks.append(content)
+                        await on_chunk(content)
+                    if done:
+                        break
+
+                full_reply = "".join(chunks)
+                if session_id not in agent_service.sessions:
+                    agent_service.sessions[session_id] = []
+                agent_service.sessions[session_id].append({"role": "user", "content": message})
+                agent_service.sessions[session_id].append({"role": "assistant", "content": full_reply})
+                if len(agent_service.sessions[session_id]) > 20:
+                    agent_service.sessions[session_id] = agent_service.sessions[session_id][-20:]
+                return full_reply
+
+            except Exception as e:
+                last_error = e
+                if emitted_any or not _is_retriable_error(e):
+                    logger.error(f"Agent stream failed: {e}")
+                    raise
+
+                delay = RETRY_BASE_DELAY * (2 ** attempt)
+                logger.warning(
+                    f"Agent stream failed (retriable, attempt {attempt + 1}/{MAX_LLM_RETRIES}): "
+                    f"{e}. Retrying in {delay}s..."
+                )
+                await asyncio.sleep(delay)
+
+        logger.error(f"Agent stream failed after {MAX_LLM_RETRIES} retries: {last_error}")
+        raise last_error
+    finally:
+        if original_max_tokens is not None:
+            from app.ai.agents import AgentFactory
+            agent = AgentFactory.get_agent(agent_type)
+            if hasattr(agent, 'llm') and agent.llm and hasattr(agent.llm, 'max_tokens'):
+                agent.llm.max_tokens = original_max_tokens
+
+
 # ==================== 项目上下文加载 ====================
 
 # 项目文件缓存（进程级，避免重复克隆）
@@ -1237,6 +1344,7 @@ class DevPipelineManager:
         self, pipeline_id: str, stage_key: str, stages: Dict[str, Any],
         pipe: 'DevPipeline', fix_feedback: str, user_input: str,
         session: AsyncSession,
+        on_chunk: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """执行单个阶段：构建 prompt → 调用 LLM → 解析输出。
         返回 (raw_output, parsed)。
@@ -1311,13 +1419,23 @@ class DevPipelineManager:
         html_stages = {"prototype", "ui_preview"}
         max_tok = 16384 if stage_key in html_stages else None
 
-        raw_output = await asyncio.wait_for(
-            _call_agent_with_retry(
-                self.agent_service, session_id, prompt, agent_type,
-                max_tokens_override=max_tok,
-            ),
-            timeout=LLM_STAGE_TIMEOUT,
-        )
+        if on_chunk:
+            raw_output = await asyncio.wait_for(
+                _call_agent_with_retry_stream(
+                    self.agent_service, session_id, prompt, agent_type,
+                    on_chunk=on_chunk,
+                    max_tokens_override=max_tok,
+                ),
+                timeout=LLM_STAGE_TIMEOUT,
+            )
+        else:
+            raw_output = await asyncio.wait_for(
+                _call_agent_with_retry(
+                    self.agent_service, session_id, prompt, agent_type,
+                    max_tokens_override=max_tok,
+                ),
+                timeout=LLM_STAGE_TIMEOUT,
+            )
 
         parsed = _parse_agent_output(stage_key, raw_output)
         return raw_output, parsed
@@ -1342,12 +1460,21 @@ class DevPipelineManager:
             logger.warning(f"Failed to load project prompts for {project_id}: {e}")
         return {}
 
-    async def execute_stage(self, pipeline_id: str, user_input: str = "") -> Dict[str, Any]:
+    async def execute_stage(
+        self,
+        pipeline_id: str,
+        user_input: str = "",
+        stream_callback: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
+    ) -> Dict[str, Any]:
         """执行流水线（迭代循环，带自修复分支和并行 Fan-out）"""
         # Ensure LLM config is loaded from DB before executing
         from app.ai.agents import AgentFactory
         async with async_session_maker() as cfg_session:
             await AgentFactory.load_llm_from_db(cfg_session)
+
+        async def emit(event: Dict[str, Any]) -> None:
+            if stream_callback:
+                await stream_callback({"pipeline_id": pipeline_id, **event})
 
         async with async_session_maker() as session:
             pipe = await self._load_pipeline(session, pipeline_id)
@@ -1368,16 +1495,32 @@ class DevPipelineManager:
                     pipe.stages_data = json.dumps(stages, ensure_ascii=False)
                     pipe.update_time = int(time.time() * 1000)
                     await session.commit()
+                    await emit({"type": "stage_started", "stage": "frontend_dev"})
+                    await emit({"type": "stage_started", "stage": "backend_dev"})
 
                     try:
                         fe_result, be_result = await asyncio.gather(
                             self._run_single_stage(
                                 pipeline_id, "frontend_dev", stages,
                                 pipe, fix_feedback, user_input, session,
+                                on_chunk=(
+                                    lambda content: emit({
+                                        "type": "chunk",
+                                        "stage": "frontend_dev",
+                                        "content": content,
+                                    })
+                                ) if stream_callback else None,
                             ),
                             self._run_single_stage(
                                 pipeline_id, "backend_dev", stages,
                                 pipe, fix_feedback, user_input, session,
+                                on_chunk=(
+                                    lambda content: emit({
+                                        "type": "chunk",
+                                        "stage": "backend_dev",
+                                        "content": content,
+                                    })
+                                ) if stream_callback else None,
                             ),
                             return_exceptions=True,
                         )
@@ -1398,6 +1541,11 @@ class DevPipelineManager:
                             pipeline_id, "frontend_dev", "FE",
                             fe_output, fe_parsed, pipe.tenant_id, db_session=session,
                         )
+                        await emit({
+                            "type": "stage_completed",
+                            "stage": "frontend_dev",
+                            "output": fe_output,
+                        })
 
                         # 处理后端结果
                         if isinstance(be_result, Exception):
@@ -1414,6 +1562,11 @@ class DevPipelineManager:
                             pipeline_id, "backend_dev", "BE",
                             be_output, be_parsed, pipe.tenant_id, db_session=session,
                         )
+                        await emit({
+                            "type": "stage_completed",
+                            "stage": "backend_dev",
+                            "output": be_output,
+                        })
 
                         # 执行 Skill（写文件）
                         for sk, prs in [("frontend_dev", fe_parsed), ("backend_dev", be_parsed)]:
@@ -1438,6 +1591,11 @@ class DevPipelineManager:
                             pipe.status = PipelineStatus.WAITING_CONFIRM.value
                             pipe.update_time = int(time.time() * 1000)
                             await session.commit()
+                            await emit({
+                                "type": "waiting_confirm",
+                                "stage": "code_review",
+                                "need_confirm": True,
+                            })
                             return {
                                 "pipeline_id": pipeline_id,
                                 "stage": "frontend_dev+backend_dev",
@@ -1460,6 +1618,11 @@ class DevPipelineManager:
                         pipe.stages_data = json.dumps(stages, ensure_ascii=False)
                         pipe.update_time = int(time.time() * 1000)
                         await session.commit()
+                        await emit({
+                            "type": "failed",
+                            "stage": "frontend_dev+backend_dev",
+                            "error": err_msg,
+                        })
                         return {
                             "pipeline_id": pipeline_id,
                             "stage": "frontend_dev+backend_dev",
@@ -1474,11 +1637,19 @@ class DevPipelineManager:
                 pipe.stages_data = json.dumps(stages, ensure_ascii=False)
                 pipe.update_time = int(time.time() * 1000)
                 await session.commit()
+                await emit({"type": "stage_started", "stage": current_stage})
 
                 try:
                     raw_output, parsed = await self._run_single_stage(
                         pipeline_id, current_stage, stages,
                         pipe, fix_feedback, user_input, session,
+                        on_chunk=(
+                            lambda content: emit({
+                                "type": "chunk",
+                                "stage": current_stage,
+                                "content": content,
+                            })
+                        ) if stream_callback else None,
                     )
                     if user_input:
                         user_input = ""
@@ -1494,6 +1665,12 @@ class DevPipelineManager:
                     })
                     pipe.stages_data = json.dumps(stages, ensure_ascii=False)
                     await session.commit()
+                    await emit({
+                        "type": "stage_completed",
+                        "stage": current_stage,
+                        "output": raw_output,
+                        "preview_html": parsed.get("preview_html", ""),
+                    })
 
                     # 保存记忆
                     agent_type = _get_stage_agent(current_stage)
@@ -1587,6 +1764,12 @@ class DevPipelineManager:
                         pipe.status = PipelineStatus.WAITING_CONFIRM.value
                         pipe.update_time = int(time.time() * 1000)
                         await session.commit()
+                        await emit({
+                            "type": "waiting_confirm",
+                            "stage": current_stage,
+                            "need_confirm": True,
+                            "preview_html": parsed.get("preview_html", ""),
+                        })
                         return {
                             "pipeline_id": pipeline_id,
                             "stage": current_stage,
@@ -1612,6 +1795,7 @@ class DevPipelineManager:
                         pipe.update_time = int(time.time() * 1000)
                         await session.commit()
                         logger.info(f"Pipeline {pipeline_id}: All stages completed")
+                        await emit({"type": "completed", "stage": current_stage})
                         return {
                             "pipeline_id": pipeline_id,
                             "stage": current_stage,
@@ -1624,6 +1808,7 @@ class DevPipelineManager:
                     pipe.stages_data = json.dumps(stages, ensure_ascii=False)
                     pipe.update_time = int(time.time() * 1000)
                     await session.commit()
+                    await emit({"type": "stage_advanced", "stage": next_stage})
                     fix_feedback = ""  # 清除修复反馈
                     # 继续循环
 
@@ -1635,6 +1820,11 @@ class DevPipelineManager:
                     pipe.stages_data = json.dumps(stages, ensure_ascii=False)
                     pipe.update_time = int(time.time() * 1000)
                     await session.commit()
+                    await emit({
+                        "type": "failed",
+                        "stage": current_stage,
+                        "error": f"stage timed out after {LLM_STAGE_TIMEOUT}s",
+                    })
                     return {
                         "pipeline_id": pipeline_id,
                         "stage": current_stage,
@@ -1649,6 +1839,11 @@ class DevPipelineManager:
                     pipe.stages_data = json.dumps(stages, ensure_ascii=False)
                     pipe.update_time = int(time.time() * 1000)
                     await session.commit()
+                    await emit({
+                        "type": "failed",
+                        "stage": current_stage,
+                        "error": str(e),
+                    })
                     return {
                         "pipeline_id": pipeline_id,
                         "stage": current_stage,
@@ -1657,6 +1852,50 @@ class DevPipelineManager:
                     }
 
     # ==================== 用户确认 ====================
+
+    async def execute_stage_stream(
+        self, pipeline_id: str, user_input: str = ""
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Execute the pipeline and stream stage/chunk events for the UI."""
+        queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
+
+        async def publish(event: Dict[str, Any]) -> None:
+            await queue.put(event)
+
+        task = asyncio.create_task(
+            self.execute_stage(pipeline_id, user_input, stream_callback=publish)
+        )
+
+        try:
+            while True:
+                if task.done() and queue.empty():
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=1.0)
+                    yield event
+                except asyncio.TimeoutError:
+                    if task.done():
+                        continue
+                    yield {"type": "heartbeat", "pipeline_id": pipeline_id}
+
+            result = await task
+            yield {
+                "type": "done",
+                "pipeline_id": pipeline_id,
+                "status": result.get("status", ""),
+                "stage": result.get("stage", ""),
+                "result": result,
+            }
+        except Exception as e:
+            logger.error(f"Pipeline {pipeline_id} stream failed: {e}")
+            yield {
+                "type": "error",
+                "pipeline_id": pipeline_id,
+                "error": str(e),
+            }
+        finally:
+            if not task.done():
+                task.cancel()
 
     async def confirm_stage(self, pipeline_id: str, confirmed: bool,
                             feedback: str = "") -> Dict[str, Any]:

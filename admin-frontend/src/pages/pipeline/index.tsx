@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   Button, Spin, Input, Tag, Empty,
   message, Space, Typography, Alert, Drawer,
@@ -14,7 +14,7 @@ import {
   UndoOutlined, SettingOutlined, DeleteOutlined, ReloadOutlined,
 } from '@ant-design/icons'
 import { useSearchParams } from 'react-router-dom'
-import { pipelineApi, type PipelineStatus } from '@/services/pipeline'
+import { pipelineApi, type PipelineStatus, type PipelineStreamEvent } from '@/services/pipeline'
 import { generatorApi } from '@/services/api'
 import api from '@/services/api'
 import { MarkdownRenderer } from '@/utils/markdown'
@@ -149,6 +149,40 @@ const STAGE_AGENT_MAP: Record<string, string> = {
   commit: 'PJM',
   deploy: 'PJM',
   report: 'RPT',
+}
+
+const createPipelineShell = (
+  pipelineId: string,
+  userRequest: string,
+  currentStage = 'requirement',
+): PipelineStatus => {
+  const now = new Date().toISOString()
+  const stages = STAGE_KEYS.reduce<PipelineStatus['stages']>((acc, key) => {
+    acc[key] = {
+      stage: key,
+      agent_type: STAGE_AGENT_MAP[key] || 'PM',
+      status: key === currentStage ? 'running' : 'pending',
+      output: '',
+      structured_output: {},
+      preview_html: '',
+      code_files: {},
+      error: '',
+      started_at: key === currentStage ? now : null,
+      completed_at: null,
+    }
+    return acc
+  }, {})
+
+  return {
+    pipeline_id: pipelineId,
+    project_id: '',
+    user_request: userRequest,
+    status: 'running',
+    current_stage: currentStage,
+    stages,
+    created_at: now,
+    updated_at: now,
+  }
 }
 
 /* ============ Inline Styles ============ */
@@ -586,6 +620,14 @@ const PipelinePage: React.FC = () => {
   const [mergedPrompts, setMergedPrompts] = useState<Record<string, string>>({})
   const [pipelineHistory, setPipelineHistory] = useState<any[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
+  const [executionActive, setExecutionActive] = useState(false)
+  const [streamingStage, setStreamingStage] = useState('')
+  const [streamOutputByStage, setStreamOutputByStage] = useState<Record<string, string>>({})
+  const streamAbortRef = useRef<AbortController | null>(null)
+
+  useEffect(() => {
+    return () => streamAbortRef.current?.abort()
+  }, [])
 
   useEffect(() => {
     generatorApi.getProjects({ page: 1, page_size: 100 }).then((data: any) => {
@@ -593,10 +635,10 @@ const PipelinePage: React.FC = () => {
     }).catch(() => {})
   }, [])
 
-  const refreshStatus = useCallback(async () => {
-    if (!pipelineId) return
+  const refreshStatus = useCallback(async (targetId = pipelineId) => {
+    if (!targetId) return
     try {
-      const data = await pipelineApi.getStatus(pipelineId)
+      const data = await pipelineApi.getStatus(targetId)
       // 防御：确保每个 stage 的 output 是字符串（部分 LLM 返回 content blocks 数组）
       if (data?.stages) {
         for (const key of Object.keys(data.stages)) {
@@ -613,6 +655,11 @@ const PipelinePage: React.FC = () => {
         }
       }
       setPipeline(data)
+      if (['waiting_confirm', 'completed', 'failed', 'cancelled'].includes(data.status)) {
+        setExecutionActive(false)
+      } else if (data.status === 'running') {
+        setExecutionActive(true)
+      }
     } catch {
       // pipeline 不存在或已过期，清除无效 ID
       setPipelineId('')
@@ -676,10 +723,133 @@ const PipelinePage: React.FC = () => {
   // 运行中自动刷新
   useEffect(() => {
     if (!pipelineId || !pipeline) return
-    if (pipeline.status !== 'running') return
-    const timer = setInterval(refreshStatus, 3000)
+    if (pipeline.status !== 'running' && !executionActive) return
+    const timer = setInterval(() => refreshStatus(), 2000)
     return () => clearInterval(timer)
-  }, [pipelineId, pipeline?.status, refreshStatus])
+  }, [pipelineId, pipeline?.status, executionActive, refreshStatus])
+
+  const applyStreamEvent = useCallback((event: PipelineStreamEvent) => {
+    if (event.type === 'heartbeat') return
+
+    if (event.stage) {
+      setStreamingStage(event.stage)
+    }
+
+    if (event.type === 'stage_started' && event.stage) {
+      setExecutionActive(true)
+      setStreamOutputByStage((prev) => ({ ...prev, [event.stage as string]: '' }))
+      setPipeline((prev) => {
+        if (!prev) {
+          return createPipelineShell(
+            event.pipeline_id || pipelineId || '',
+            userRequest,
+            event.stage as string,
+          )
+        }
+        const stage = prev.stages?.[event.stage as string]
+        if (!stage) return { ...prev, status: 'running', current_stage: event.stage as string }
+        return {
+          ...prev,
+          status: 'running',
+          current_stage: event.stage as string,
+          stages: {
+            ...prev.stages,
+            [event.stage as string]: { ...stage, status: 'running', output: '' },
+          },
+        }
+      })
+      return
+    }
+
+    if (event.type === 'chunk' && event.stage && event.content) {
+      const stageKey = event.stage
+      setExecutionActive(true)
+      setStreamOutputByStage((prev) => ({
+        ...prev,
+        [stageKey]: `${prev[stageKey] || ''}${event.content || ''}`,
+      }))
+      setPipeline((prev) => {
+        if (!prev) return prev
+        const stage = prev.stages?.[stageKey]
+        if (!stage) return prev
+        return {
+          ...prev,
+          status: 'running',
+          current_stage: stageKey,
+          stages: {
+            ...prev.stages,
+            [stageKey]: {
+              ...stage,
+              status: 'running',
+              output: `${stage.output || ''}${event.content || ''}`,
+            },
+          },
+        }
+      })
+      return
+    }
+
+    if (event.type === 'stage_completed' && event.stage) {
+      const stageKey = event.stage
+      setPipeline((prev) => {
+        if (!prev) return prev
+        const stage = prev.stages?.[stageKey]
+        if (!stage) return prev
+        return {
+          ...prev,
+          stages: {
+            ...prev.stages,
+            [stageKey]: {
+              ...stage,
+              status: 'completed',
+              output: event.output || stage.output,
+              preview_html: event.preview_html || stage.preview_html,
+            },
+          },
+        }
+      })
+      return
+    }
+
+    if (['waiting_confirm', 'completed', 'failed', 'done', 'error'].includes(event.type)) {
+      setExecutionActive(false)
+    }
+  }, [pipelineId, userRequest])
+
+  const runPipelineStream = useCallback(async (targetId: string, input = '') => {
+    streamAbortRef.current?.abort()
+    const controller = new AbortController()
+    streamAbortRef.current = controller
+    setExecutionActive(true)
+    let receivedEvent = false
+
+    try {
+      await pipelineApi.executeStream(
+        targetId,
+        input,
+        (event) => {
+          receivedEvent = true
+          applyStreamEvent(event)
+        },
+        controller.signal,
+      )
+      await refreshStatus(targetId)
+    } catch (e: any) {
+      if (e?.name === 'AbortError') return
+      if (!receivedEvent) {
+        await pipelineApi.execute(targetId, input)
+        await refreshStatus(targetId)
+        return
+      }
+      message.error(e?.message || '流式执行中断，请刷新状态后重试')
+      await refreshStatus(targetId)
+    } finally {
+      if (streamAbortRef.current === controller) {
+        streamAbortRef.current = null
+      }
+      setExecutionActive(false)
+    }
+  }, [applyStreamEvent, refreshStatus])
 
   const handleCreate = async () => {
     if (!userRequest.trim()) {
@@ -701,13 +871,14 @@ const PipelinePage: React.FC = () => {
       })
       const id = data.pipeline_id
       setPipelineId(id)
+      setPipeline(createPipelineShell(id, userRequest))
       setSearchParams({ id })
       localStorage.setItem('lastPipelineId', id)
       setShowCreate(false)
       message.success('流水线创建成功')
       // 自动执行第一阶段（LLM调用可能较慢，需要较长超时）
-      await pipelineApi.execute(id, userRequest)
-      await refreshStatus()
+      await runPipelineStream(id, userRequest)
+      await refreshStatus(id)
     } catch (e: any) {
       message.error(e?.message || '创建失败')
     } finally {
@@ -725,10 +896,10 @@ const PipelinePage: React.FC = () => {
       await refreshStatus()
       if (confirmed && result?.stage) {
         // 确认后自动触发下一阶段
-        pipelineApi.execute(pipelineId, feedback).catch(() => {})
+        runPipelineStream(pipelineId, feedback).catch(() => {})
       } else if (!confirmed) {
         // 退回后自动重新执行当前阶段
-        pipelineApi.execute(pipelineId, feedback).then(() => refreshStatus()).catch(() => {})
+        runPipelineStream(pipelineId, feedback).catch(() => {})
       }
     } catch (e: any) {
       message.error(e?.message || '操作失败')
@@ -742,9 +913,9 @@ const PipelinePage: React.FC = () => {
     if (!pipelineId) return
     setLoading(true)
     try {
-      await pipelineApi.execute(pipelineId, feedback)
+      await runPipelineStream(pipelineId, feedback)
       setFeedback('')
-      await refreshStatus()
+      await refreshStatus(pipelineId)
     } catch (e: any) {
       message.error(e?.message || '执行失败')
     } finally {
@@ -783,22 +954,23 @@ const PipelinePage: React.FC = () => {
   const activeStageKey = selectedStage || pipeline?.current_stage || ''
   const currentStage = pipeline?.stages?.[activeStageKey]
   const isViewingCurrent = activeStageKey === pipeline?.current_stage
+  const liveStageOutput = (isViewingCurrent && streamOutputByStage[activeStageKey]) || currentStage?.output || ''
 
   const htmlBlocks = useMemo(() => {
-    if (!currentStage?.output) return []
-    return extractHtmlBlocks(currentStage.output)
-  }, [currentStage?.output])
+    if (!liveStageOutput) return []
+    return extractHtmlBlocks(liveStageOutput)
+  }, [liveStageOutput])
 
   // For prototype/ui_preview, also try direct HTML extraction if blocks are empty
   const previewHtmlContent = useMemo(() => {
     if (!['ui_preview', 'prototype'].includes(activeStageKey)) return ''
-    if (!currentStage?.output) return ''
+    if (!liveStageOutput) return ''
     // Try extracted blocks first
     if (htmlBlocks.length > 0) {
       return htmlBlocks.map((b: any) => b.code || b).join('\n')
     }
     // Fallback: extract between ```html and ```
-    const raw = currentStage.output
+    const raw = liveStageOutput
     const startIdx = raw.indexOf('```html')
     if (startIdx === -1) return ''
     const htmlStart = raw.indexOf('\n', startIdx) + 1
@@ -808,27 +980,27 @@ const PipelinePage: React.FC = () => {
     }
     // Last resort: take everything after ```html
     return raw.substring(htmlStart).trim()
-  }, [activeStageKey, currentStage?.output, htmlBlocks])
+  }, [activeStageKey, liveStageOutput, htmlBlocks])
 
   const hasHtmlPreview = previewHtmlContent.length > 0 && ['ui_preview', 'prototype'].includes(activeStageKey)
 
   // Strip markdown/prg code block wrappers for text stages
   const displayOutput = useMemo(() => {
-    if (!currentStage?.output) return ''
-    const raw = String(currentStage.output)
+    if (!liveStageOutput) return ''
+    const raw = String(liveStageOutput)
     // If this is a code-heavy stage, return as-is
     if (['development', 'testing', 'code_review'].includes(activeStageKey)) return raw
     // Strip ```markdown, ```prg, ```md wrappers
     const stripped = raw.replace(/^```(?:markdown|prg|md)\s*\n?/i, '').replace(/\n?```\s*$/i, '')
     return stripped
-  }, [currentStage?.output, activeStageKey])
+  }, [liveStageOutput, activeStageKey])
 
   const inlinePreviewSrc = useMemo(() => {
     if (!hasHtmlPreview) return ''
     return prepareUIPreviewHtml(repairTruncatedHtml(previewHtmlContent))
   }, [hasHtmlPreview, previewHtmlContent])
 
-  const isRunning = pipeline?.status === 'running'
+  const isRunning = pipeline?.status === 'running' || executionActive
   const isCompleted = pipeline?.status === 'completed'
   const isFailed = pipeline?.status === 'failed'
 
@@ -1267,7 +1439,7 @@ const PipelinePage: React.FC = () => {
 
             {/* Detail Body */}
             <div style={styles.stageDetailBody}>
-              {loading && (
+              {loading && !executionActive && (
                 <div style={{ textAlign: 'center', padding: 40 }}>
                   <Spin size="large" tip="Agent 正在工作..." />
                 </div>
@@ -1285,8 +1457,30 @@ const PipelinePage: React.FC = () => {
                 </div>
               )}
 
+              {executionActive && isViewingCurrent && (
+                <div style={{
+                  padding: 14,
+                  marginBottom: 16,
+                  background: 'rgba(0, 212, 255, 0.06)',
+                  border: '1px solid rgba(0, 212, 255, 0.16)',
+                  borderRadius: 10,
+                }}>
+                  <Space size={8} style={{ marginBottom: liveStageOutput ? 8 : 0 }}>
+                    <LoadingOutlined style={{ color: '#00d4ff' }} />
+                    <Text style={{ color: '#bdefff', fontSize: 13 }}>
+                      Agent 正在实时输出{streamingStage ? `：${STAGE_NAMES[streamingStage] || streamingStage}` : ''}
+                    </Text>
+                  </Space>
+                  {liveStageOutput && (
+                    <Text style={{ color: 'rgba(255,255,255,0.55)', fontSize: 12 }}>
+                      可以先看方向是否对；当前阶段结束后可直接确认、退回或补充修改意见。
+                    </Text>
+                  )}
+                </div>
+              )}
+
               {/* Output */}
-              {currentStage?.output && !loading && (
+              {liveStageOutput && (!loading || executionActive) && (
                 <div style={styles.outputContainer}>
                   <span style={styles.outputLabel}>OUTPUT</span>
                   {hasHtmlPreview ? (

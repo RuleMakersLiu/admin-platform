@@ -1,4 +1,5 @@
 import api from './api'
+import { useAuthStore } from '@/stores/auth'
 
 export interface StageDef {
   key: string
@@ -39,7 +40,34 @@ export interface PipelineListItem {
   created_at: string
 }
 
+export interface PipelineStreamEvent {
+  type: 'stage_started' | 'chunk' | 'stage_completed' | 'waiting_confirm' | 'stage_advanced' | 'completed' | 'failed' | 'done' | 'error' | 'heartbeat'
+  pipeline_id?: string
+  stage?: string
+  status?: string
+  content?: string
+  output?: string
+  preview_html?: string
+  need_confirm?: boolean
+  error?: string
+  result?: Record<string, any>
+}
+
 const BASE = '/flow/pipeline'
+
+const parseSseFrame = (frame: string): PipelineStreamEvent | null => {
+  const dataLines = frame
+    .split('\n')
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).trim())
+
+  if (!dataLines.length) return null
+  try {
+    return JSON.parse(dataLines.join('\n')) as PipelineStreamEvent
+  } catch {
+    return null
+  }
+}
 
 export const pipelineApi = {
   create: (data: {
@@ -55,6 +83,64 @@ export const pipelineApi = {
 
   execute: (id: string, user_input?: string) =>
     api.post(`${BASE}/${id}/execute`, { user_input: user_input || '' }, { timeout: 300000 }) as any,
+
+  executeStream: async (
+    id: string,
+    user_input: string | undefined,
+    onEvent: (event: PipelineStreamEvent) => void,
+    signal?: AbortSignal,
+  ) => {
+    const { token, user } = useAuthStore.getState()
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    }
+    if (token) headers.Authorization = `Bearer ${token}`
+    if (user) {
+      headers['X-Admin-Id'] = String(user.adminId)
+      headers['X-Tenant-Id'] = String(user.tenantId)
+    }
+
+    const response = await fetch(`/api${BASE}/${id}/execute-stream`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ user_input: user_input || '' }),
+      signal,
+    })
+
+    if (!response.ok) {
+      throw new Error(await response.text() || 'Pipeline stream failed')
+    }
+    if (!response.body) {
+      throw new Error('Pipeline stream is not readable')
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    let reading = true
+    while (reading) {
+      const { done, value } = await reader.read()
+      if (done) {
+        reading = false
+        break
+      }
+
+      buffer += decoder.decode(value, { stream: true })
+      const frames = buffer.split(/\r?\n\r?\n/)
+      buffer = frames.pop() || ''
+
+      for (const frame of frames) {
+        const event = parseSseFrame(frame)
+        if (event) onEvent(event)
+      }
+    }
+
+    if (buffer.trim()) {
+      const event = parseSseFrame(buffer)
+      if (event) onEvent(event)
+    }
+  },
 
   confirm: (id: string, confirmed: boolean, feedback?: string) =>
     api.post(`${BASE}/${id}/confirm`, { confirmed, feedback: feedback || '' }, { timeout: 300000 }) as any,
