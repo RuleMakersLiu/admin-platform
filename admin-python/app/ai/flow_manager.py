@@ -413,6 +413,65 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 }
 
 
+PM_REQUIREMENT_REVIEW_CONTRACT = """
+
+## 产品经理质量门
+请把这份 PRD 当作要交给前端、后端、QA 继续执行的正式输入，必须覆盖：
+- 业务目标、目标用户、使用场景、范围边界和不做范围
+- 功能清单，按 P0/P1/P2/P3 标注优先级
+- 角色与权限矩阵，写清页面级权限和按钮/操作级权限
+- 数据对象与关键字段，包含字段名、类型、是否必填、校验规则、默认值
+- 主流程、异常流程、空数据、加载中、无权限、失败重试等状态
+- 可验收的 Acceptance Criteria，每条都能被 QA 直接测试
+- 明确假设与待确认问题，避免把不确定内容伪装成事实
+
+文档末尾额外输出一个 JSON 代码块，便于系统做质量评审，格式如下：
+```json
+{
+  "pm_quality": {
+    "score": 0,
+    "ready_for_review": false,
+    "missing_items": [],
+    "review_focus": [],
+    "primary_pages": [],
+    "permission_points": [],
+    "data_entities": [],
+    "acceptance_criteria": []
+  }
+}
+```
+"""
+
+
+PM_PAGE_DESIGN_REVIEW_CONTRACT = """
+
+## 页面设计质量门
+请把页面设计写到前端可以直接做原型、后端可以直接拆接口的程度，必须覆盖：
+- 页面清单、路由/入口、层级关系和默认落点
+- 每个页面的表格列、搜索项、表单字段、详情字段和字段校验
+- 按钮、批量操作、危险操作、二次确认、抽屉/弹窗交互
+- 页面状态：空数据、加载中、无权限、搜索无结果、接口异常、提交成功/失败
+- 权限点：菜单权限、页面权限、按钮权限、数据范围权限
+- 与 wealth-admin-home / Java / Node / PHP 生成链路相关的实现约束或待确认点
+
+文档末尾额外输出一个 JSON 代码块，便于系统做质量评审，格式如下：
+```json
+{
+  "design_quality": {
+    "score": 0,
+    "ready_for_review": false,
+    "missing_items": [],
+    "review_focus": [],
+    "primary_pages": [],
+    "permission_points": [],
+    "data_entities": [],
+    "acceptance_criteria": []
+  }
+}
+```
+"""
+
+
 def _render_prompt_template(template: str, context: Dict[str, Any]) -> str:
     """渲染 prompt 模板，替换变量占位符"""
     user_request = context.get("user_request", "")
@@ -482,6 +541,10 @@ def _build_pipeline_prompt(stage_key: str, context: Dict[str, Any],
         template = DEFAULT_STAGE_PROMPTS.get(stage_key, f"请处理 {stage_key} 阶段的任务。")
 
     prompt = _render_prompt_template(template, context)
+    if stage_key == "requirement" and "pm_quality" not in prompt:
+        prompt += PM_REQUIREMENT_REVIEW_CONTRACT
+    if stage_key == "page_design" and "design_quality" not in prompt:
+        prompt += PM_PAGE_DESIGN_REVIEW_CONTRACT
     return memory_section + fix_section + prompt
 
 
@@ -567,6 +630,133 @@ def _try_parse_json_block(raw_output: str, expected_keys: List[str]) -> Optional
     return None
 
 
+def _extract_markdown_fence(raw_output: str, tags: List[str]) -> Optional[str]:
+    """Extract a fenced Markdown block for legacy PM outputs."""
+    import re
+    tag_expr = "|".join(re.escape(tag) for tag in tags)
+    pattern = re.compile(rf"```(?:{tag_expr})\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+    match = pattern.search(raw_output)
+    return match.group(1).strip() if match else None
+
+
+def _remove_quality_json_blocks(raw_output: str) -> str:
+    """Remove machine-readable quality JSON from human-facing PM documents."""
+    import re
+    pattern = re.compile(r"\n?```(?:json|JSON)\s*\n.*?```\s*", re.DOTALL)
+    return pattern.sub("\n", raw_output).strip()
+
+
+def _coerce_string_list(value: Any, fallback: Optional[List[str]] = None) -> List[str]:
+    """Normalize LLM quality fields that may arrive as strings, lists, or nulls."""
+    if value is None:
+        return fallback or []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        parts = [part.strip(" -\t") for part in value.replace("；", "\n").replace(";", "\n").split("\n")]
+        return [part for part in parts if part]
+    return fallback or []
+
+
+def _coerce_quality_score(value: Any, fallback: int) -> int:
+    try:
+        score = int(float(value))
+    except (TypeError, ValueError):
+        score = fallback
+    return max(0, min(100, score))
+
+
+def _coerce_bool(value: Any, fallback: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "y", "1", "ready"}:
+            return True
+        if normalized in {"false", "no", "n", "0", "not_ready"}:
+            return False
+    if value is None:
+        return fallback
+    return bool(value)
+
+
+def _fallback_quality(
+    raw_output: str,
+    marker_groups: List[Tuple[str, str, List[str]]],
+    default_review_focus: List[str],
+) -> Dict[str, Any]:
+    """Create a deterministic review summary when the LLM omits quality JSON."""
+    lowered = raw_output.lower()
+    missing_items = []
+    matched = 0
+    for _key, label, keywords in marker_groups:
+        if any(keyword.lower() in lowered for keyword in keywords):
+            matched += 1
+        else:
+            missing_items.append(label)
+
+    score = int(round((matched / len(marker_groups)) * 100)) if marker_groups else 0
+    return {
+        "score": score,
+        "ready_for_review": score >= 80 and not missing_items,
+        "missing_items": missing_items,
+        "review_focus": default_review_focus,
+        "primary_pages": [],
+        "permission_points": [],
+        "data_entities": [],
+        "acceptance_criteria": [],
+    }
+
+
+def _merge_quality_payload(payload: Any, fallback: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge LLM-provided quality JSON with deterministic fallback defaults."""
+    if not isinstance(payload, dict):
+        return fallback
+
+    merged = dict(fallback)
+    merged.update(payload)
+    merged["score"] = _coerce_quality_score(payload.get("score"), fallback["score"])
+    merged["ready_for_review"] = _coerce_bool(
+        payload.get("ready_for_review"),
+        merged["score"] >= 80 and not merged.get("missing_items"),
+    )
+    for key in (
+        "missing_items",
+        "review_focus",
+        "primary_pages",
+        "permission_points",
+        "data_entities",
+        "acceptance_criteria",
+    ):
+        merged[key] = _coerce_string_list(payload.get(key), fallback.get(key, []))
+    return merged
+
+
+PM_REQUIREMENT_MARKERS: List[Tuple[str, str, List[str]]] = [
+    ("project_overview", "项目概述/业务目标", ["项目概述", "业务目标", "目标用户", "使用场景"]),
+    ("scope", "范围边界", ["范围", "不做范围", "边界", "scope"]),
+    ("features", "功能清单与优先级", ["功能需求", "功能清单", "P0", "P1", "优先级"]),
+    ("user_stories", "用户故事/用户旅程", ["用户故事", "作为", "我希望", "用户旅程"]),
+    ("permissions", "角色与权限矩阵", ["权限", "角色", "权限矩阵", "按钮权限", "页面权限"]),
+    ("data_fields", "数据对象与字段", ["数据对象", "关键字段", "字段名", "必填", "校验规则"]),
+    ("states", "页面/业务状态", ["空数据", "加载中", "无权限", "异常", "失败"]),
+    ("acceptance", "验收标准", ["验收标准", "Acceptance Criteria", "Given", "When", "Then"]),
+    ("questions", "假设与待确认问题", ["待确认", "假设", "开放问题", "需确认"]),
+]
+
+
+PM_PAGE_DESIGN_MARKERS: List[Tuple[str, str, List[str]]] = [
+    ("pages", "页面清单与层级", ["页面列表", "页面清单", "层级", "路由", "入口"]),
+    ("fields", "字段与校验", ["字段", "字段名", "必填", "校验", "表单"]),
+    ("table_search", "表格列与筛选", ["表格", "列", "搜索", "筛选", "过滤"]),
+    ("actions", "按钮与操作", ["按钮", "操作", "新增", "编辑", "删除", "导出"]),
+    ("dialogs", "弹窗/抽屉交互", ["弹窗", "抽屉", "二次确认", "确认弹窗"]),
+    ("states", "页面状态", ["空数据", "加载中", "无权限", "搜索无结果", "异常"]),
+    ("permissions", "权限控制点", ["权限", "菜单权限", "页面权限", "按钮权限", "数据范围"]),
+    ("handoff", "开发确认要点", ["开发确认", "待确认", "接口", "实现约束", "wealth-admin-home"]),
+]
+
+
 def _parse_agent_output(stage_key: str, raw_output: str) -> Dict[str, Any]:
     """解析 Agent 输出，提取结构化数据"""
     result = {"output": raw_output}
@@ -612,16 +802,34 @@ def _parse_agent_output(stage_key: str, raw_output: str) -> Dict[str, Any]:
             result["code_files"] = files
 
     if stage_key == "requirement":
-        # Try extracting from code block wrappers (prg, markdown, md)
-        for tag in ["```prg", "```markdown", "```md"]:
-            parts = raw_output.split(tag)
-            for part in parts[1:]:
-                end = part.find("```")
-                if end > 0:
-                    result["prd_document"] = part[:end].strip()
-                    break
-            if result.get("prd_document"):
-                break
+        prd_document = _extract_markdown_fence(raw_output, ["prg", "markdown", "md"])
+        result["prd_document"] = prd_document or _remove_quality_json_blocks(raw_output)
+
+        fallback = _fallback_quality(
+            result["prd_document"],
+            PM_REQUIREMENT_MARKERS,
+            ["重点核对权限矩阵、字段校验、验收标准和待确认问题。"],
+        )
+        json_result = _try_parse_json_block(raw_output, ["pm_quality"])
+        result["pm_quality"] = _merge_quality_payload(
+            json_result.get("pm_quality") if json_result else None,
+            fallback,
+        )
+
+    if stage_key == "page_design":
+        page_design_document = _extract_markdown_fence(raw_output, ["markdown", "md"])
+        result["page_design_document"] = page_design_document or _remove_quality_json_blocks(raw_output)
+
+        fallback = _fallback_quality(
+            result["page_design_document"],
+            PM_PAGE_DESIGN_MARKERS,
+            ["重点核对页面状态、按钮权限、字段校验、弹窗交互和开发确认点。"],
+        )
+        json_result = _try_parse_json_block(raw_output, ["design_quality"])
+        result["design_quality"] = _merge_quality_payload(
+            json_result.get("design_quality") if json_result else None,
+            fallback,
+        )
 
     if stage_key == "code_review":
         # 优先尝试 JSON 结构化输出
@@ -1360,15 +1568,22 @@ class DevPipelineManager:
         # 加载技术栈配置
         pipe_config = json.loads(pipe.skill_config or "{}")
 
-        # 加载技术栈配置
-        pipe_config = json.loads(pipe.skill_config or "{}")
-
-        # 构建 context（先构建，后续语义搜索需要用到 user_request）
-        user_request = user_input or pipe.user_request or ""
+        # 构建 context（先构建，后续语义搜索需要用到原始 user_request）
+        # user_input 是阶段修订意见，不能替代原始需求，否则 PM 后续阶段会丢上下文。
+        user_request = pipe.user_request or ""
+        revision_feedback = "\n".join(
+            part.strip()
+            for part in [
+                fix_feedback,
+                stages.get(stage_key, {}).get("revision_feedback", ""),
+                user_input or "",
+            ]
+            if part and part.strip()
+        )
         context = {
             "user_request": user_request,
             "stage_outputs": {k: v for k, v in stages.items() if v.get("status") == "completed"},
-            "fix_feedback": fix_feedback,
+            "fix_feedback": revision_feedback,
             "memories_text": memories_text,
             "backend_tech": pipe_config.get("backend_tech", ""),
             "frontend_tech": pipe_config.get("frontend_tech", ""),
@@ -1408,9 +1623,11 @@ class DevPipelineManager:
         if ctx_parts:
             project_ctx_section = "\n\n".join(ctx_parts)
 
-        # 构建 prompt
+        # 构建 prompt。流水线级 prompt（来自前端本次编辑）优先，项目级 prompt 作为兜底。
         project_prompts = await self._load_project_prompts(pipe.project_id or "")
-        prompt = _build_pipeline_prompt(stage_key, context, custom_prompts=project_prompts)
+        pipeline_prompts = pipe_config.get("custom_prompts") or {}
+        custom_prompts = {**project_prompts, **pipeline_prompts}
+        prompt = _build_pipeline_prompt(stage_key, context, custom_prompts=custom_prompts)
         if project_ctx_section:
             prompt = f"{project_ctx_section}\n\n---\n\n{prompt}"
 
@@ -1535,6 +1752,7 @@ class DevPipelineManager:
                             "structured_output": fe_parsed,
                             "preview_html": fe_parsed.get("preview_html", ""),
                             "code_files": fe_parsed.get("code_files", {}),
+                            "revision_feedback": "",
                             "completed_at": datetime.now().isoformat(),
                         })
                         await self._save_stage_memory(
@@ -1545,6 +1763,7 @@ class DevPipelineManager:
                             "type": "stage_completed",
                             "stage": "frontend_dev",
                             "output": fe_output,
+                            "result": fe_parsed,
                         })
 
                         # 处理后端结果
@@ -1556,6 +1775,7 @@ class DevPipelineManager:
                             "output": be_output,
                             "structured_output": be_parsed,
                             "code_files": be_parsed.get("code_files", {}),
+                            "revision_feedback": "",
                             "completed_at": datetime.now().isoformat(),
                         })
                         await self._save_stage_memory(
@@ -1566,6 +1786,7 @@ class DevPipelineManager:
                             "type": "stage_completed",
                             "stage": "backend_dev",
                             "output": be_output,
+                            "result": be_parsed,
                         })
 
                         # 执行 Skill（写文件）
@@ -1661,6 +1882,7 @@ class DevPipelineManager:
                         "structured_output": parsed,
                         "preview_html": parsed.get("preview_html", ""),
                         "code_files": parsed.get("code_files", {}),
+                        "revision_feedback": "",
                         "completed_at": datetime.now().isoformat(),
                     })
                     pipe.stages_data = json.dumps(stages, ensure_ascii=False)
@@ -1670,6 +1892,7 @@ class DevPipelineManager:
                         "stage": current_stage,
                         "output": raw_output,
                         "preview_html": parsed.get("preview_html", ""),
+                        "result": parsed,
                     })
 
                     # 保存记忆
@@ -1769,6 +1992,7 @@ class DevPipelineManager:
                             "stage": current_stage,
                             "need_confirm": True,
                             "preview_html": parsed.get("preview_html", ""),
+                            "result": parsed,
                         })
                         return {
                             "pipeline_id": pipeline_id,
@@ -1918,10 +2142,10 @@ class DevPipelineManager:
                 stages[current_stage]["output"] = ""
                 stages[current_stage]["structured_output"] = {}
                 stages[current_stage]["preview_html"] = ""
+                stages[current_stage]["code_files"] = {}
+                stages[current_stage]["error"] = ""
+                stages[current_stage]["revision_feedback"] = feedback.strip() if feedback else ""
                 pipe.status = PipelineStatus.PENDING.value
-                if feedback:
-                    # 追加反馈而不是覆盖原始需求
-                    pipe.user_request = f"{pipe.user_request}\n\n[修订意见]: {feedback}"
                 pipe.stages_data = json.dumps(stages, ensure_ascii=False)
                 pipe.update_time = int(time.time() * 1000)
                 await session.commit()
@@ -1972,11 +2196,13 @@ class DevPipelineManager:
         async with async_session_maker() as session:
             pipe = await self._load_pipeline(session, pipeline_id)
             stages = self._parse_stages(pipe)
-            ui_stage = stages.get("ui_preview", {})
+            preview_stage = stages.get("prototype", {}) or stages.get("ui_preview", {})
+            if not preview_stage.get("preview_html"):
+                preview_stage = stages.get("ui_preview", {}) or preview_stage
             return {
                 "pipeline_id": pipeline_id,
-                "preview_html": ui_stage.get("preview_html", ""),
-                "output": ui_stage.get("output", ""),
+                "preview_html": preview_stage.get("preview_html", ""),
+                "output": preview_stage.get("output", ""),
             }
 
     async def get_stage_output(self, pipeline_id: str, stage: str = "") -> Dict[str, Any]:

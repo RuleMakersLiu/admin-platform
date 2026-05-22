@@ -3,6 +3,7 @@ import {
   Button, Spin, Input, Tag, Empty,
   message, Space, Typography, Alert, Drawer,
   Tooltip, Badge, Collapse, Select, Modal,
+  Progress,
 } from 'antd'
 import {
   CheckCircleOutlined, CloseCircleOutlined,
@@ -183,6 +184,104 @@ const createPipelineShell = (
     created_at: now,
     updated_at: now,
   }
+}
+
+interface PMQualitySummary {
+  score?: number
+  ready_for_review?: boolean
+  missing_items?: string[]
+  review_focus?: string[]
+  primary_pages?: string[]
+  permission_points?: string[]
+  data_entities?: string[]
+  acceptance_criteria?: string[]
+}
+
+const toList = (value: unknown): string[] => {
+  if (Array.isArray(value)) return value.map((item) => String(item)).filter(Boolean)
+  if (typeof value === 'string' && value.trim()) return [value.trim()]
+  return []
+}
+
+const PMQualityPanel: React.FC<{
+  stageKey: string
+  quality?: PMQualitySummary
+}> = ({ stageKey, quality }) => {
+  if (!quality) return null
+
+  const score = Math.max(0, Math.min(100, Number(quality.score || 0)))
+  const ready = Boolean(quality.ready_for_review)
+  const missingItems = toList(quality.missing_items)
+  const reviewFocus = toList(quality.review_focus)
+  const permissionPoints = toList(quality.permission_points)
+  const dataEntities = toList(quality.data_entities)
+  const acceptanceCriteria = toList(quality.acceptance_criteria)
+  const primaryPages = toList(quality.primary_pages)
+  const title = stageKey === 'requirement' ? 'PM 需求质量门' : 'PM 页面设计质量门'
+
+  const block = (label: string, items: string[], color: string) => {
+    if (!items.length) return null
+    return (
+      <div style={{ minWidth: 180, flex: '1 1 220px' }}>
+        <Text style={{ display: 'block', color: '#8aa4b8', fontSize: 12, marginBottom: 8 }}>
+          {label}
+        </Text>
+        <Space size={[6, 6]} wrap>
+          {items.slice(0, 8).map((item) => (
+            <Tag key={item} color={color} style={{ margin: 0, borderRadius: 6 }}>
+              {item}
+            </Tag>
+          ))}
+        </Space>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{
+      marginBottom: 16,
+      padding: 16,
+      borderRadius: 10,
+      border: ready ? '1px solid rgba(82, 196, 26, 0.24)' : '1px solid rgba(250, 173, 20, 0.28)',
+      background: ready ? 'rgba(82, 196, 26, 0.06)' : 'rgba(250, 173, 20, 0.06)',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+        <CheckCircleOutlined style={{ color: ready ? '#52c41a' : '#faad14' }} />
+        <Text strong style={{ color: '#e0e0e0' }}>{title}</Text>
+        <Tag color={ready ? 'success' : 'warning'} style={{ marginLeft: 'auto', borderRadius: 6 }}>
+          {ready ? '可评审' : '需补充'}
+        </Tag>
+      </div>
+      <Progress
+        percent={score}
+        size="small"
+        status={ready ? 'success' : 'active'}
+        strokeColor={ready ? '#52c41a' : '#faad14'}
+        trailColor="rgba(255,255,255,0.08)"
+      />
+      {missingItems.length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          message="建议退回补齐后再进入下一阶段"
+          description={missingItems.join('、')}
+          style={{
+            marginTop: 12,
+            borderRadius: 8,
+            background: 'rgba(250, 173, 20, 0.08)',
+            border: '1px solid rgba(250, 173, 20, 0.16)',
+          }}
+        />
+      )}
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 14 }}>
+        {block('评审重点', reviewFocus, 'blue')}
+        {block('核心页面', primaryPages, 'cyan')}
+        {block('权限点', permissionPoints, 'purple')}
+        {block('数据对象', dataEntities, 'geekblue')}
+        {block('验收标准', acceptanceCriteria, 'green')}
+      </div>
+    </div>
+  )
 }
 
 /* ============ Inline Styles ============ */
@@ -803,6 +902,7 @@ const PipelinePage: React.FC = () => {
               ...stage,
               status: 'completed',
               output: event.output || stage.output,
+              structured_output: event.result || stage.structured_output,
               preview_html: event.preview_html || stage.preview_html,
             },
           },
@@ -860,24 +960,33 @@ const PipelinePage: React.FC = () => {
     try {
       const backendProj = projects.find(p => String(p.id) === backendProjectId)
       const frontendProj = projects.find(p => String(p.id) === frontendProjectId)
+      const customPrompts = Object.fromEntries(
+        Object.entries(editedPrompts)
+          .filter(([key, value]) => value !== undefined && value !== defaultPrompts[key])
+          .map(([key, value]) => [key, value.trim()]),
+      )
+      const skillConfig = Object.keys(customPrompts).length
+        ? { custom_prompts: customPrompts }
+        : undefined
       const data = await pipelineApi.create({
-        user_request: userRequest,
+        user_request: userRequest.trim(),
         project_id: '',
         project_name: '',
         backend_project_id: backendProjectId || '',
         frontend_project_id: frontendProjectId || '',
         backend_tech: backendProj ? `${backendProj.language}/${backendProj.framework}` : '',
         frontend_tech: frontendProj ? `${frontendProj.language}/${frontendProj.framework}` : '',
+        skill_config: skillConfig,
       })
       const id = data.pipeline_id
       setPipelineId(id)
-      setPipeline(createPipelineShell(id, userRequest))
+      setPipeline(createPipelineShell(id, userRequest.trim()))
       setSearchParams({ id })
       localStorage.setItem('lastPipelineId', id)
       setShowCreate(false)
       message.success('流水线创建成功')
       // 自动执行第一阶段（LLM调用可能较慢，需要较长超时）
-      await runPipelineStream(id, userRequest)
+      await runPipelineStream(id)
       await refreshStatus(id)
     } catch (e: any) {
       message.error(e?.message || '创建失败')
@@ -890,16 +999,17 @@ const PipelinePage: React.FC = () => {
     if (!pipelineId) return
     setLoading(true)
     try {
-      const result = await pipelineApi.confirm(pipelineId, confirmed, feedback)
+      const submittedFeedback = feedback.trim()
+      const result = await pipelineApi.confirm(pipelineId, confirmed, submittedFeedback)
       message.success(confirmed ? '已确认，推进下一阶段' : '已退回，正在重新执行')
       setFeedback('')
       await refreshStatus()
       if (confirmed && result?.stage) {
         // 确认后自动触发下一阶段
-        runPipelineStream(pipelineId, feedback).catch(() => {})
+        runPipelineStream(pipelineId).catch(() => {})
       } else if (!confirmed) {
         // 退回后自动重新执行当前阶段
-        runPipelineStream(pipelineId, feedback).catch(() => {})
+        runPipelineStream(pipelineId).catch(() => {})
       }
     } catch (e: any) {
       message.error(e?.message || '操作失败')
@@ -955,6 +1065,11 @@ const PipelinePage: React.FC = () => {
   const currentStage = pipeline?.stages?.[activeStageKey]
   const isViewingCurrent = activeStageKey === pipeline?.current_stage
   const liveStageOutput = (isViewingCurrent && streamOutputByStage[activeStageKey]) || currentStage?.output || ''
+  const pmQuality = activeStageKey === 'requirement'
+    ? currentStage?.structured_output?.pm_quality
+    : activeStageKey === 'page_design'
+      ? currentStage?.structured_output?.design_quality
+      : undefined
 
   const htmlBlocks = useMemo(() => {
     if (!liveStageOutput) return []
@@ -964,6 +1079,7 @@ const PipelinePage: React.FC = () => {
   // For prototype/ui_preview, also try direct HTML extraction if blocks are empty
   const previewHtmlContent = useMemo(() => {
     if (!['ui_preview', 'prototype'].includes(activeStageKey)) return ''
+    if (currentStage?.preview_html) return currentStage.preview_html
     if (!liveStageOutput) return ''
     // Try extracted blocks first
     if (htmlBlocks.length > 0) {
@@ -980,7 +1096,7 @@ const PipelinePage: React.FC = () => {
     }
     // Last resort: take everything after ```html
     return raw.substring(htmlStart).trim()
-  }, [activeStageKey, liveStageOutput, htmlBlocks])
+  }, [activeStageKey, liveStageOutput, htmlBlocks, currentStage?.preview_html])
 
   const hasHtmlPreview = previewHtmlContent.length > 0 && ['ui_preview', 'prototype'].includes(activeStageKey)
 
@@ -1477,6 +1593,10 @@ const PipelinePage: React.FC = () => {
                     </Text>
                   )}
                 </div>
+              )}
+
+              {pmQuality && (
+                <PMQualityPanel stageKey={activeStageKey} quality={pmQuality} />
               )}
 
               {/* Output */}

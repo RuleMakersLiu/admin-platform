@@ -78,6 +78,7 @@ export const pipelineApi = {
     frontend_project_id?: string
     backend_tech?: string
     frontend_tech?: string
+    skill_config?: Record<string, unknown>
   }) =>
     api.post(`${BASE}/create`, data) as any as Promise<{ pipeline_id: string; status: string }>,
 

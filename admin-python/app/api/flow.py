@@ -60,11 +60,14 @@ def _sse_event(event: Dict) -> str:
 async def create_pipeline(request: CreatePipelineRequest, http_request: Request):
     """创建开发流水线"""
     try:
+        if not request.user_request or not request.user_request.strip():
+            raise HTTPException(status_code=400, detail="需求描述不能为空")
+
         tenant_id = _get_tenant_id(http_request)
         admin_id = _get_admin_id(http_request)
         pipeline_id = await pipeline_manager.create_pipeline(
             project_id=request.project_id,
-            user_request=request.user_request,
+            user_request=request.user_request.strip(),
             tenant_id=tenant_id,
             creator_id=admin_id,
             git_config_id=request.git_config_id,
@@ -81,6 +84,8 @@ async def create_pipeline(request: CreatePipelineRequest, http_request: Request)
             "message": "流水线创建成功",
             "data": {"pipeline_id": pipeline_id, "status": "pending"},
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
