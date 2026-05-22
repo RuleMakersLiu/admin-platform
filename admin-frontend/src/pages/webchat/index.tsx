@@ -108,7 +108,7 @@ const WebChatPage: React.FC = () => {
   const handleStreamEvent = useCallback(
     (event: any) => {
       switch (event.type) {
-        case 'start':
+        case 'start': {
           // 创建 AI 回复消息
           const aiMessageId = generateUniqueId();
           addMessage({
@@ -120,6 +120,7 @@ const WebChatPage: React.FC = () => {
             createdAt: Date.now(),
           });
           break;
+        }
 
         case 'content':
           // 追加内容

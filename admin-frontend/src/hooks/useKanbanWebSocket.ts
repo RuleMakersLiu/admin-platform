@@ -96,31 +96,35 @@ export const useKanbanWebSocket = (options: UseKanbanWebSocketOptions = {}) => {
           message.success('新任务已创建');
           break;
 
-        case 'task.updated':
+        case 'task.updated': {
           const updatedTaskId = data.payload.taskId;
           updateTask(updatedTaskId, data.payload.updates);
           break;
+        }
 
         case 'task.deleted':
           deleteTask(data.payload.taskId);
           message.info('任务已删除');
           break;
 
-        case 'task.moved':
+        case 'task.moved': {
           const movedTaskId = data.payload.taskId;
           moveTask(movedTaskId, data.payload.newStatus, data.payload.newAgent);
           break;
+        }
 
-        case 'agent.status_changed':
+        case 'agent.status_changed': {
           const { agentId, status } = data.payload;
           updateAgentStatus(agentId, status);
           break;
+        }
 
-        case 'agent.assigned':
+        case 'agent.assigned': {
           const { agentId: aid, taskId: tid } = data.payload;
           updateTask(tid, { assignedAgent: aid });
           updateAgent(aid, { currentTask: tid });
           break;
+        }
 
         case 'error':
           message.error(data.payload.message || '发生错误');

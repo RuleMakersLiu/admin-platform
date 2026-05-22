@@ -240,9 +240,9 @@ func TestAuth_UnauthorizedResponse_HasCorrectStructure(t *testing.T) {
 
 func TestSkipPermissionCheck(t *testing.T) {
 	tests := []struct {
-		name  string
-		path  string
-		skip  bool
+		name string
+		path string
+		skip bool
 	}{
 		{"login path", "/api/auth/login", true},
 		{"logout path", "/api/auth/logout", true},

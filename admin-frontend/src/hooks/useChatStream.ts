@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { useChatStore } from '@/stores/chat';
+import { useAuthStore } from '@/stores/auth';
 
 interface UseChatStreamOptions {
   agentType?: string;
@@ -48,7 +49,7 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
       abortControllerRef.current = new AbortController();
 
       try {
-        const token = useAuthStore_getToken();
+        const token = getAuthToken();
         const response = await fetch('/api/chat/stream', {
           method: 'POST',
           headers: {
@@ -73,9 +74,13 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
         const decoder = new TextDecoder();
         let fullContent = '';
 
-        while (true) {
+        let doneReading = false;
+        while (!doneReading) {
           const { done, value } = await reader.read();
-          if (done) break;
+          if (done) {
+            doneReading = true;
+            continue;
+          }
 
           const text = decoder.decode(value, { stream: true });
           const lines = text.split('\n');
@@ -133,9 +138,8 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
   return { sendMessage, cancel, isStreaming };
 }
 
-function useAuthStore_getToken(): string | null {
+function getAuthToken(): string | null {
   try {
-    const { useAuthStore } = require('@/stores/auth');
     return useAuthStore.getState().token;
   } catch {
     return null;

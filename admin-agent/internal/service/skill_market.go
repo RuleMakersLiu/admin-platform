@@ -45,7 +45,7 @@ type MarketQueryParams struct {
 	CategoryID string `json:"category_id"`
 	Status     string `json:"status"`
 	AuthorID   int64  `json:"author_id"`
-	SortBy     string `json:"sort_by"`     // downloads, rating, newest, views
+	SortBy     string `json:"sort_by"` // downloads, rating, newest, views
 	Featured   *bool  `json:"featured"`
 	TenantID   int64  `json:"tenant_id"`
 }
@@ -85,7 +85,7 @@ type MarketSkillItem struct {
 
 // SkillMarketService 技能市场服务
 type SkillMarketService struct {
-	db          *gorm.DB
+	db           *gorm.DB
 	skillService *SkillService
 }
 
@@ -398,7 +398,7 @@ func (s *SkillMarketService) DownloadSkill(ctx context.Context, marketSkillID uu
 	// 5. 创建用户私有技能副本
 	newSkill := &model.Skill{
 		ID:           uuid.New(),
-		Name:         fmt.Sprintf("%s_%s", marketSkill.Name, userID),
+		Name:         fmt.Sprintf("%s_%d", marketSkill.Name, userID),
 		DisplayName:  marketSkill.DisplayName,
 		Description:  marketSkill.Description,
 		Category:     marketSkill.CategoryName,

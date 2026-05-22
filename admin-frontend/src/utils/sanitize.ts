@@ -213,7 +213,7 @@ const PURIFY_CONFIG = {
   ],
 
   // 允许的 URI 协议
-  ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
+  ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp):|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i,
 
   // 禁止的标签
   FORBID_TAGS: DANGEROUS_TAGS,
