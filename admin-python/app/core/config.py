@@ -24,8 +24,8 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/1"
 
     # JWT配置
-    # SECURITY: 生产环境必须设置 JWT_SECRET 环境变量
-    jwt_secret: str = "CHANGE-ME-IN-PRODUCTION-USE-openssl-rand-hex-32"
+    # SECURITY: production must set JWT_SECRET. The dev default is shared with admin-gateway.
+    jwt_secret: str = "admin-platform-jwt-secret-key-2026-dev-only"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 1440  # 24小时
 

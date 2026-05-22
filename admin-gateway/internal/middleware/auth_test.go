@@ -250,8 +250,7 @@ func TestSkipPermissionCheck(t *testing.T) {
 		{"auth info", "/api/auth/info", true},
 		{"auth menus", "/api/auth/menus", true},
 		{"auth tenants", "/api/auth/tenants", true},
-		{"config prefix", "/api/config/database", true},
-		{"agent chat", "/api/agent/chat", true},
+		{"tracking prefix", "/api/tracking/events", true},
 		{"doc.html", "/doc.html", true},
 		{"swagger", "/swagger/index.html", true},
 		{"health", "/health", true},
@@ -280,34 +279,34 @@ func TestBuildPermissionIdentifier(t *testing.T) {
 		wantPrefix string
 	}{
 		{
-			name:       "user list",
-			path:       "/api/admin/user/list",
+			name:       "user list canonical",
+			path:       "/api/system/admin/list",
 			method:     "GET",
-			wantPrefix: "admin_user_list",
+			wantPrefix: "system:admin:list",
 		},
 		{
-			name:       "role create",
-			path:       "/api/admin/role/create",
+			name:       "role create canonical",
+			path:       "/api/system/group/create",
 			method:     "POST",
-			wantPrefix: "admin_role_create",
+			wantPrefix: "system:group:create",
 		},
 		{
-			name:       "user delete with path param",
-			path:       "/api/admin/user/:id",
+			name:       "user delete with path param canonical",
+			path:       "/api/system/admin/:id",
 			method:     "DELETE",
-			wantPrefix: "admin_user",
+			wantPrefix: "system:admin:delete",
 		},
 		{
 			name:       "nested resource",
 			path:       "/api/system/menu/sub/list",
 			method:     "GET",
-			wantPrefix: "system_menu_sub_list",
+			wantPrefix: "system:menu:list",
 		},
 		{
 			name:       "deeply nested with param",
 			path:       "/api/admin/tenant/:tenantId/user/:userId",
 			method:     "PUT",
-			wantPrefix: "admin_tenant_user",
+			wantPrefix: "admin:tenant:edit",
 		},
 	}
 
@@ -319,6 +318,17 @@ func TestBuildPermissionIdentifier(t *testing.T) {
 					tt.path, tt.method, result, tt.wantPrefix)
 			}
 		})
+	}
+}
+
+func TestBuildPermissionCandidates_IncludesLegacyAliases(t *testing.T) {
+	candidates := buildPermissionCandidates("/api/system/admin/list", http.MethodGet)
+
+	if !contains(candidates, "system:admin:list") {
+		t.Fatalf("expected canonical permission, got %v", candidates)
+	}
+	if !contains(candidates, "system_admin_list") {
+		t.Fatalf("expected legacy underscore permission, got %v", candidates)
 	}
 }
 

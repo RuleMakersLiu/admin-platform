@@ -1,13 +1,16 @@
-import { useState, useEffect } from 'react'
-import { Table, Card, Button, Space, Tag, message, Popconfirm, Modal, Form, Input, Switch } from 'antd'
+import { useState, useEffect, type Key } from 'react'
+import { Table, Card, Button, Space, Tag, message, Popconfirm, Modal, Form, Input, Switch, Tree, Alert } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import api from '@/services/api'
+import { useAuthStore } from '@/stores/auth'
 
 interface Group {
   id: number
   groupName: string
-  power: string
+  power: string[] | string
+  powerText?: string
+  isSuper?: boolean
   status: number
   createTime: number
 }
@@ -24,11 +27,18 @@ export default function GroupList() {
   const [modalVisible, setModalVisible] = useState(false)
   const [modalLoading, setModalLoading] = useState(false)
   const [editingGroup, setEditingGroup] = useState<Group | null>(null)
+  const [permissionTree, setPermissionTree] = useState<any[]>([])
+  const [checkedPermissions, setCheckedPermissions] = useState<Key[]>([])
+  const { hasPermission } = useAuthStore()
+  const canCreate = hasPermission('system:group:create')
+  const canEdit = hasPermission('system:group:edit')
+  const canDelete = hasPermission('system:group:delete')
 
   const [form] = Form.useForm()
 
   useEffect(() => {
     fetchData()
+    fetchPermissionTree()
   }, [page, pageSize])
 
   const fetchData = async () => {
@@ -49,6 +59,25 @@ export default function GroupList() {
     }
   }
 
+  const fetchPermissionTree = async () => {
+    try {
+      const result = await api.get('/system/permission/tree') as any[]
+      setPermissionTree(result || [])
+    } catch (error) {
+      setPermissionTree([])
+    }
+  }
+
+  const parsePower = (power: Group['power']) => {
+    if (Array.isArray(power)) return power
+    if (!power) return []
+    try {
+      return JSON.parse(power)
+    } catch {
+      return String(power).split(',').map((item) => item.trim()).filter(Boolean)
+    }
+  }
+
   const handleSearch = () => {
     setPage(1)
     fetchData()
@@ -57,15 +86,16 @@ export default function GroupList() {
   const handleCreate = () => {
     setEditingGroup(null)
     form.resetFields()
-    form.setFieldsValue({ status: 1, power: '[]' })
+    setCheckedPermissions([])
+    form.setFieldsValue({ status: 1 })
     setModalVisible(true)
   }
 
   const handleEdit = (record: Group) => {
     setEditingGroup(record)
+    setCheckedPermissions(parsePower(record.power))
     form.setFieldsValue({
       group_name: record.groupName,
-      power: record.power,
       status: record.status,
     })
     setModalVisible(true)
@@ -90,7 +120,7 @@ export default function GroupList() {
         // 更新
         await api.put(`/system/group/${editingGroup.id}`, {
           group_name: values.group_name,
-          power: values.power,
+          power: checkedPermissions,
           status: values.status ? 1 : 0,
         })
         message.success('更新成功')
@@ -98,7 +128,7 @@ export default function GroupList() {
         // 创建
         await api.post('/system/group', {
           group_name: values.group_name,
-          power: values.power || '[]',
+          power: checkedPermissions,
           status: values.status ? 1 : 0,
         })
         message.success('创建成功')
@@ -123,6 +153,12 @@ export default function GroupList() {
     { title: 'ID', dataIndex: 'id', width: 80 },
     { title: '角色名称', dataIndex: 'groupName' },
     {
+      title: '权限数',
+      dataIndex: 'power',
+      width: 100,
+      render: (power) => <Tag color="blue">{parsePower(power).filter((item: string) => item !== '*').length}</Tag>,
+    },
+    {
       title: '状态',
       dataIndex: 'status',
       width: 100,
@@ -143,17 +179,21 @@ export default function GroupList() {
       width: 150,
       render: (_, record) => (
         <Space>
-          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>
-            编辑
-          </Button>
-          <Popconfirm
-            title="确定删除该角色吗？"
-            onConfirm={() => handleDelete(record.id)}
-          >
-            <Button type="link" size="small" danger icon={<DeleteOutlined />}>
-              删除
+          {canEdit && (
+            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>
+              编辑
             </Button>
-          </Popconfirm>
+          )}
+          {canDelete && (
+            <Popconfirm
+              title="确定删除该角色吗？"
+              onConfirm={() => handleDelete(record.id)}
+            >
+              <Button type="link" size="small" danger icon={<DeleteOutlined />}>
+                删除
+              </Button>
+            </Popconfirm>
+          )}
         </Space>
       ),
     },
@@ -172,9 +212,11 @@ export default function GroupList() {
             onChange={(e) => setKeyword(e.target.value)}
             onSearch={handleSearch}
           />
-          <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
-            新增角色
-          </Button>
+          {canCreate && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
+              新增角色
+            </Button>
+          )}
         </Space>
       }
     >
@@ -203,9 +245,9 @@ export default function GroupList() {
         onOk={handleModalOk}
         onCancel={() => setModalVisible(false)}
         confirmLoading={modalLoading}
-        width={500}
+        width={720}
       >
-        <Form form={form} layout="vertical" initialValues={{ status: 1, power: '[]' }}>
+        <Form form={form} layout="vertical" initialValues={{ status: 1 }}>
           <Form.Item
             name="group_name"
             label="角色名称"
@@ -214,10 +256,22 @@ export default function GroupList() {
             <Input placeholder="请输入角色名称" />
           </Form.Item>
 
-          <Form.Item name="power" label="权限配置">
-            <Input.TextArea
-              placeholder="JSON格式的权限列表，如: [&quot;system:admin:view&quot;, &quot;system:admin:edit&quot;]"
-              rows={4}
+          <Form.Item label="权限配置">
+            <Alert
+              type="info"
+              showIcon
+              message="按菜单和按钮勾选权限"
+              description="保存后会写入角色 power，并同步给网关做接口鉴权；超级管理员角色可使用 * 通配权限。"
+              style={{ marginBottom: 12 }}
+            />
+            <Tree
+              checkable
+              selectable={false}
+              treeData={permissionTree}
+              checkedKeys={checkedPermissions}
+              onCheck={(keys) => setCheckedPermissions(Array.isArray(keys) ? keys : keys.checked)}
+              height={320}
+              defaultExpandAll
             />
           </Form.Item>
 

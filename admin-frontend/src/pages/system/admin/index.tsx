@@ -3,6 +3,7 @@ import { Table, Card, Button, Space, Tag, message, Popconfirm, Modal, Form, Inpu
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import api from '@/services/api'
+import { useAuthStore } from '@/stores/auth'
 
 const { Option } = Select
 
@@ -46,6 +47,10 @@ export default function AdminList() {
   const [editingAdmin, setEditingAdmin] = useState<Admin | null>(null)
   const [groups, setGroups] = useState<Group[]>([])
   const [tenants, setTenants] = useState<Tenant[]>([])
+  const { hasPermission } = useAuthStore()
+  const canCreate = hasPermission('system:admin:create')
+  const canEdit = hasPermission('system:admin:edit')
+  const canDelete = hasPermission('system:admin:delete')
 
   const [form] = Form.useForm()
 
@@ -206,17 +211,21 @@ export default function AdminList() {
       width: 150,
       render: (_, record) => (
         <Space>
-          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>
-            编辑
-          </Button>
-          <Popconfirm
-            title="确定删除该用户吗？"
-            onConfirm={() => handleDelete(record.id)}
-          >
-            <Button type="link" size="small" danger icon={<DeleteOutlined />}>
-              删除
+          {canEdit && (
+            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>
+              编辑
             </Button>
-          </Popconfirm>
+          )}
+          {canDelete && (
+            <Popconfirm
+              title="确定删除该用户吗？"
+              onConfirm={() => handleDelete(record.id)}
+            >
+              <Button type="link" size="small" danger icon={<DeleteOutlined />}>
+                删除
+              </Button>
+            </Popconfirm>
+          )}
         </Space>
       ),
     },
@@ -235,9 +244,11 @@ export default function AdminList() {
             onChange={(e) => setKeyword(e.target.value)}
             onSearch={handleSearch}
           />
-          <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
-            新增用户
-          </Button>
+          {canCreate && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
+              新增用户
+            </Button>
+          )}
         </Space>
       }
     >

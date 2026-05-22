@@ -62,7 +62,10 @@ class UserInfo(BaseModel):
     phone: Optional[str] = None
     email: Optional[str] = None
     status: int = 1
-    admin_group_id: int = Field(alias="adminGroupId")
+    admin_group_id: Optional[int] = Field(None, alias="adminGroupId")
+    group_name: Optional[str] = Field(None, alias="groupName")
+    is_super: bool = Field(False, alias="isSuper")
+    permissions: List[str] = Field(default_factory=list)
     tenant_id: int = Field(alias="tenantId")
 
     class Config:

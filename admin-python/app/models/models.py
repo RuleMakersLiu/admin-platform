@@ -19,8 +19,8 @@ class SysAdmin(Base):
     phone: Mapped[Optional[str]] = mapped_column(String(20))
     email: Mapped[Optional[str]] = mapped_column(String(128))
     status: Mapped[int] = mapped_column(Integer, default=1)
-    # 数据库列名是 admin_group_id
-    admin_group_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    # Keep the Python attribute stable while matching the existing DB column.
+    admin_group_id: Mapped[Optional[int]] = mapped_column("group_id", BigInteger, nullable=True)
     tenant_id: Mapped[int] = mapped_column(BigInteger, index=True)
     create_time: Mapped[int] = mapped_column(BigInteger, default=lambda: int(time.time() * 1000))
     update_time: Mapped[int] = mapped_column(BigInteger, default=lambda: int(time.time() * 1000))
@@ -54,8 +54,9 @@ class SysMenu(Base):
     component: Mapped[Optional[str]] = mapped_column(String(255))
     permission: Mapped[Optional[str]] = mapped_column(String(100))
     icon: Mapped[Optional[str]] = mapped_column(String(64))
-    # 数据库列名是 menu_type
-    menu_type: Mapped[int] = mapped_column(Integer)
+    # Keep the Python attribute stable while matching the existing DB column.
+    menu_type: Mapped[int] = mapped_column("type", Integer)
+    visible: Mapped[int] = mapped_column(Integer, default=1)
     sort: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[int] = mapped_column(Integer, default=1)
     tenant_id: Mapped[int] = mapped_column(BigInteger, index=True)

@@ -146,7 +146,8 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 
 ## 输出要求
 - 只输出一个 ```html 代码块，不要在代码块前后写任何文字说明
-- HTML 必须完整输出，不能被截断，控制在 350 行以内
+- HTML 必须完整输出，不能被截断，控制在 420 行以内
+- `<body>` 必须包含 `data-preview-ready="true"`，主内容容器必须使用 `id="preview-root"`，便于系统自动检查预览是否可用
 
 ## 重要：参考项目代码
 如果上方有「前端项目代码参考」，参考其组件用法、样式风格和布局结构来设计原型。
@@ -163,12 +164,15 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 不要用任何框架、不要用模板语法、不要用数据绑定。
 
 ## 实现要求
-1. 纯 HTML + antd CSS 类名 + 少量原生 JS，不引入任何框架
-2. 实现：主列表页 + 搜索 + 批量处理弹窗 + 删除确认弹窗
-3. 弹窗默认隐藏，点击按钮显示，点取消/确定关闭
-4. 表格放 3 条 mock 数据（中文），列和字段要与页面设计一致
-5. 所有文字使用中文
-6. 弹窗中的表单字段要能输入""",
+1. 纯 HTML + antd CSS 类名 + 内联 `<style>` + 少量原生 JS，不引入任何框架
+2. 第一屏必须是完整后台工作台：左侧菜单、顶部标题区、搜索筛选区、表格区、操作按钮区，不要做营销页或空白说明页
+3. 实现：主列表页 + 搜索 + 新增/编辑弹窗或抽屉 + 批量处理弹窗 + 删除确认弹窗
+4. 弹窗默认隐藏，点击按钮显示，点取消/确定关闭；保存/删除/批量操作要有 toast 或 alert 反馈
+5. 表格放 5 条 mock 数据（中文），列和字段要与页面设计一致，状态用 tag 展示
+6. 必须展示页面状态：空数据、加载中、无权限、搜索无结果、接口异常，至少以独立区域或提示条形式出现
+7. 必须展示权限效果：菜单/页面/按钮/数据范围至少 3 类；无权限按钮要 disabled 并解释原因
+8. 弹窗中的表单字段要能输入，关键字段要有必填/格式提示
+9. 视觉风格要像成熟管理后台：信息密度适中、对齐清晰、颜色克制，避免大面积霓虹、渐变球、营销 hero 和占位文案""",
 
     "delivery": """基于需求分析、页面设计和原型预览，整理一份完整的交付文档包。
 
@@ -201,7 +205,8 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 
 ## 输出要求
 - 只输出一个 ```html 代码块，不要在代码块前后写任何文字说明
-- HTML 必须完整输出，不能被截断，控制在 300 行以内
+- HTML 必须完整输出，不能被截断，控制在 360 行以内
+- `<body>` 必须包含 `data-preview-ready="true"`，主内容容器必须使用 `id="preview-root"`，便于系统自动检查预览是否可用
 
 ## 技术方案
 纯静态 HTML，不需要 Vue/React/JS，只引入 antd CSS：
@@ -210,9 +215,12 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 
 ## 实现要求
 1. 纯静态 HTML + CSS，不需要 <script>
-2. 主列表页 + 新增/编辑弹窗 + 删除确认
-3. 表格放 3 条 mock 数据（中文）
-4. 所有文字使用中文""",
+2. 第一屏必须是后台工作台，不要做 landing page：左侧菜单、标题区、搜索筛选、主表格、关键操作按钮齐全
+3. 主列表页 + 新增/编辑弹窗静态样式 + 删除确认静态样式 + 无权限/空数据/加载中/异常状态
+4. 表格放 5 条 mock 数据（中文），状态用 tag 展示，列和字段要贴合需求
+5. 必须展示权限效果：菜单/页面/按钮/数据范围至少 3 类；无权限按钮要 disabled 并解释原因
+6. 视觉风格要像成熟管理后台：信息密度适中、对齐清晰、颜色克制，避免大面积霓虹、渐变球、营销 hero 和占位文案
+7. 所有文字使用中文""",
 
     "backend_dev": """基于以下需求文档和交付包，生成完整的后端代码。
 
@@ -420,6 +428,8 @@ PM_REQUIREMENT_REVIEW_CONTRACT = """
 - 业务目标、目标用户、使用场景、范围边界和不做范围
 - 功能清单，按 P0/P1/P2/P3 标注优先级
 - 角色与权限矩阵，写清页面级权限和按钮/操作级权限
+- 参考成熟权限体系的表达方式：RBAC 用 `subject/role/resource/action`，ABAC 补充租户、部门、本人/下级、状态等条件，资源权限按菜单/页面/按钮/API/数据范围拆开
+- 给出至少 3 条策略样例，例如 `role=运营主管, resource=order, action=export, condition=同部门数据`，并说明拒绝态、隐藏态、禁用态和审计日志
 - 数据对象与关键字段，包含字段名、类型、是否必填、校验规则、默认值
 - 主流程、异常流程、空数据、加载中、无权限、失败重试等状态
 - 可验收的 Acceptance Criteria，每条都能被 QA 直接测试
@@ -435,6 +445,9 @@ PM_REQUIREMENT_REVIEW_CONTRACT = """
     "review_focus": [],
     "primary_pages": [],
     "permission_points": [],
+    "permission_model": [],
+    "data_scope_rules": [],
+    "policy_examples": [],
     "data_entities": [],
     "acceptance_criteria": []
   }
@@ -451,7 +464,8 @@ PM_PAGE_DESIGN_REVIEW_CONTRACT = """
 - 每个页面的表格列、搜索项、表单字段、详情字段和字段校验
 - 按钮、批量操作、危险操作、二次确认、抽屉/弹窗交互
 - 页面状态：空数据、加载中、无权限、搜索无结果、接口异常、提交成功/失败
-- 权限点：菜单权限、页面权限、按钮权限、数据范围权限
+- 权限点：菜单权限、页面权限、按钮权限、API 权限、数据范围权限；必须写清 permission key 命名、禁用/隐藏/无权限提示和审计点
+- 权限设计参考成熟项目模式：RBAC 负责角色到资源动作，ABAC/条件策略负责租户、部门、本人/下级、状态、金额等上下文约束；前端按路由、菜单、按钮、表格行操作分别呈现
 - 与 wealth-admin-home / Java / Node / PHP 生成链路相关的实现约束或待确认点
 
 文档末尾额外输出一个 JSON 代码块，便于系统做质量评审，格式如下：
@@ -464,6 +478,9 @@ PM_PAGE_DESIGN_REVIEW_CONTRACT = """
     "review_focus": [],
     "primary_pages": [],
     "permission_points": [],
+    "permission_model": [],
+    "data_scope_rules": [],
+    "policy_examples": [],
     "data_entities": [],
     "acceptance_criteria": []
   }
@@ -703,6 +720,9 @@ def _fallback_quality(
         "review_focus": default_review_focus,
         "primary_pages": [],
         "permission_points": [],
+        "permission_model": [],
+        "data_scope_rules": [],
+        "policy_examples": [],
         "data_entities": [],
         "acceptance_criteria": [],
     }
@@ -725,11 +745,67 @@ def _merge_quality_payload(payload: Any, fallback: Dict[str, Any]) -> Dict[str, 
         "review_focus",
         "primary_pages",
         "permission_points",
+        "permission_model",
+        "data_scope_rules",
+        "policy_examples",
         "data_entities",
         "acceptance_criteria",
     ):
         merged[key] = _coerce_string_list(payload.get(key), fallback.get(key, []))
     return merged
+
+
+def _validate_preview_html(html: str) -> Dict[str, Any]:
+    """Return deterministic quality signals for generated HTML previews."""
+    preview = (html or "").strip()
+    lowered = preview.lower()
+    issues: List[str] = []
+
+    checks = [
+        ("完整 HTML 结构", "<html" in lowered and "</html>" in lowered),
+        (
+            "预览就绪标记",
+            'data-preview-ready="true"' in lowered
+            or "data-preview-ready='true'" in lowered
+            or 'id="preview-root"' in lowered
+            or "id='preview-root'" in lowered,
+        ),
+        ("内联样式", "<style" in lowered and "</style>" in lowered),
+        ("后台导航结构", any(keyword in preview for keyword in ["菜单", "导航", "侧边栏", "工作台"])),
+        ("搜索筛选区", any(keyword in preview for keyword in ["搜索", "筛选", "查询"]) and ("ant-input" in lowered or "<input" in lowered)),
+        ("表格或列表数据", "<table" in lowered or "ant-table" in lowered or preview.count("<tr") >= 4),
+        ("弹窗或抽屉", any(keyword in preview for keyword in ["弹窗", "抽屉", "确认"]) or "ant-modal" in lowered),
+        ("操作按钮", "ant-btn" in lowered or "<button" in lowered),
+        ("页面状态", all(keyword in preview for keyword in ["无权限", "空数据"]) and any(keyword in preview for keyword in ["加载", "异常", "失败"])),
+        ("权限呈现", any(keyword in preview for keyword in ["菜单权限", "页面权限", "按钮权限", "数据范围", "disabled"])),
+    ]
+
+    if len(preview) < 900:
+        issues.append("HTML 内容过短，预览可能只是片段或占位")
+    if "<html" in lowered and "</html>" not in lowered:
+        issues.append("缺少 </html> 结束标签，输出可能被截断")
+    if "<body" not in lowered:
+        issues.append("缺少 <body> 主体结构")
+
+    passed_checks = []
+    for label, passed in checks:
+        if passed:
+            passed_checks.append(label)
+        else:
+            issues.append(f"缺少{label}")
+
+    score = int(round((len(passed_checks) / len(checks)) * 100)) if checks else 0
+    if len(preview) < 900:
+        score = min(score, 65)
+    if "</html>" not in lowered:
+        score = min(score, 70)
+
+    return {
+        "score": max(0, min(100, score)),
+        "ready_for_preview": score >= 80 and not any("截断" in issue or "过短" in issue for issue in issues),
+        "issues": issues[:8],
+        "passed_checks": passed_checks,
+    }
 
 
 PM_REQUIREMENT_MARKERS: List[Tuple[str, str, List[str]]] = [
@@ -738,6 +814,8 @@ PM_REQUIREMENT_MARKERS: List[Tuple[str, str, List[str]]] = [
     ("features", "功能清单与优先级", ["功能需求", "功能清单", "P0", "P1", "优先级"]),
     ("user_stories", "用户故事/用户旅程", ["用户故事", "作为", "我希望", "用户旅程"]),
     ("permissions", "角色与权限矩阵", ["权限", "角色", "权限矩阵", "按钮权限", "页面权限"]),
+    ("permission_model", "权限模型与策略样例", ["RBAC", "ABAC", "resource", "action", "策略样例", "permission key"]),
+    ("data_scope", "数据范围与条件权限", ["数据范围", "租户", "部门", "本人", "下级", "condition"]),
     ("data_fields", "数据对象与字段", ["数据对象", "关键字段", "字段名", "必填", "校验规则"]),
     ("states", "页面/业务状态", ["空数据", "加载中", "无权限", "异常", "失败"]),
     ("acceptance", "验收标准", ["验收标准", "Acceptance Criteria", "Given", "When", "Then"]),
@@ -753,6 +831,8 @@ PM_PAGE_DESIGN_MARKERS: List[Tuple[str, str, List[str]]] = [
     ("dialogs", "弹窗/抽屉交互", ["弹窗", "抽屉", "二次确认", "确认弹窗"]),
     ("states", "页面状态", ["空数据", "加载中", "无权限", "搜索无结果", "异常"]),
     ("permissions", "权限控制点", ["权限", "菜单权限", "页面权限", "按钮权限", "数据范围"]),
+    ("permission_model", "权限模型与策略样例", ["RBAC", "ABAC", "resource", "action", "策略样例", "permission key"]),
+    ("permission_states", "权限呈现状态", ["隐藏", "禁用", "无权限提示", "审计", "disabled"]),
     ("handoff", "开发确认要点", ["开发确认", "待确认", "接口", "实现约束", "wealth-admin-home"]),
 ]
 
@@ -791,6 +871,7 @@ def _parse_agent_output(stage_key: str, raw_output: str) -> Dict[str, Any]:
                         result["preview_html"] = raw_output[start:end + len("</html>")].strip()
                     else:
                         result["preview_html"] = raw_output[start:].strip()
+        result["preview_quality"] = _validate_preview_html(result.get("preview_html", ""))
 
     if stage_key in ("development", "frontend_dev", "backend_dev", "testing"):
         # 优先尝试解析 JSON 结构化输出

@@ -3,6 +3,7 @@ import { Table, Card, Button, Space, Tag, message, Popconfirm, Modal, Form, Inpu
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import api from '@/services/api'
+import { useAuthStore } from '@/stores/auth'
 
 const { Option } = Select
 
@@ -17,6 +18,7 @@ interface Menu {
   icon: string
   sort: number
   status: number
+  visible: number
   children?: Menu[]
 }
 
@@ -28,6 +30,10 @@ export default function MenuList() {
   const [modalVisible, setModalVisible] = useState(false)
   const [modalLoading, setModalLoading] = useState(false)
   const [editingMenu, setEditingMenu] = useState<Menu | null>(null)
+  const { hasPermission } = useAuthStore()
+  const canCreate = hasPermission('system:menu:create')
+  const canEdit = hasPermission('system:menu:edit')
+  const canDelete = hasPermission('system:menu:delete')
 
   const [form] = Form.useForm()
 
@@ -62,7 +68,7 @@ export default function MenuList() {
   const handleCreate = () => {
     setEditingMenu(null)
     form.resetFields()
-    form.setFieldsValue({ status: 1, menu_type: 1, sort: 0, parent_id: 0 })
+    form.setFieldsValue({ status: 1, visible: 1, menu_type: 2, sort: 0, parent_id: 0 })
     setModalVisible(true)
   }
 
@@ -78,6 +84,7 @@ export default function MenuList() {
       icon: record.icon,
       sort: record.sort,
       status: record.status,
+      visible: record.visible,
     })
     setModalVisible(true)
   }
@@ -107,6 +114,7 @@ export default function MenuList() {
           icon: values.icon,
           sort: values.sort,
           status: values.status ? 1 : 0,
+          visible: values.visible ? 1 : 0,
         })
         message.success('更新成功')
       } else {
@@ -120,6 +128,7 @@ export default function MenuList() {
           icon: values.icon,
           sort: values.sort,
           status: values.status ? 1 : 0,
+          visible: values.visible ? 1 : 0,
         })
         message.success('创建成功')
       }
@@ -152,9 +161,9 @@ export default function MenuList() {
       width: 80,
       render: (type) => {
         const config: Record<number, { color: string; text: string }> = {
-          0: { color: 'blue', text: '目录' },
-          1: { color: 'green', text: '菜单' },
-          2: { color: 'orange', text: '按钮' },
+          1: { color: 'blue', text: '目录' },
+          2: { color: 'green', text: '菜单' },
+          3: { color: 'orange', text: '按钮' },
         }
         const c = config[type] || { color: 'default', text: '未知' }
         return <Tag color={c.color}>{c.text}</Tag>
@@ -179,17 +188,21 @@ export default function MenuList() {
       width: 150,
       render: (_, record) => (
         <Space>
-          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>
-            编辑
-          </Button>
-          <Popconfirm
-            title="确定删除该菜单吗？"
-            onConfirm={() => handleDelete(record.id)}
-          >
-            <Button type="link" size="small" danger icon={<DeleteOutlined />}>
-              删除
+          {canEdit && (
+            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>
+              编辑
             </Button>
-          </Popconfirm>
+          )}
+          {canDelete && (
+            <Popconfirm
+              title="确定删除该菜单吗？"
+              onConfirm={() => handleDelete(record.id)}
+            >
+              <Button type="link" size="small" danger icon={<DeleteOutlined />}>
+                删除
+              </Button>
+            </Popconfirm>
+          )}
         </Space>
       ),
     },
@@ -214,9 +227,11 @@ export default function MenuList() {
     <Card
       title="菜单管理"
       extra={
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
-          新增菜单
-        </Button>
+        canCreate && (
+          <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
+            新增菜单
+          </Button>
+        )
       }
     >
       <Table
@@ -236,7 +251,7 @@ export default function MenuList() {
         confirmLoading={modalLoading}
         width={550}
       >
-        <Form form={form} layout="vertical" initialValues={{ status: 1, menu_type: 1, sort: 0, parent_id: 0 }}>
+        <Form form={form} layout="vertical" initialValues={{ status: 1, visible: 1, menu_type: 2, sort: 0, parent_id: 0 }}>
           <Form.Item name="parent_id" label="上级菜单">
             <Select placeholder="请选择上级菜单">
               <Option value={0}>顶级菜单</Option>
@@ -256,9 +271,9 @@ export default function MenuList() {
 
           <Form.Item name="menu_type" label="菜单类型" rules={[{ required: true }]}>
             <Select placeholder="请选择菜单类型">
-              <Option value={0}>目录</Option>
-              <Option value={1}>菜单</Option>
-              <Option value={2}>按钮</Option>
+              <Option value={1}>目录</Option>
+              <Option value={2}>菜单</Option>
+              <Option value={3}>按钮</Option>
             </Select>
           </Form.Item>
 
@@ -284,6 +299,10 @@ export default function MenuList() {
 
           <Form.Item name="status" label="状态" valuePropName="checked">
             <Switch checkedChildren="启用" unCheckedChildren="禁用" />
+          </Form.Item>
+
+          <Form.Item name="visible" label="菜单可见" valuePropName="checked">
+            <Switch checkedChildren="显示" unCheckedChildren="隐藏" />
           </Form.Item>
         </Form>
       </Modal>

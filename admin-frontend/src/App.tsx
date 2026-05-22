@@ -1,5 +1,6 @@
 import { Component } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { Result } from 'antd'
 import { useAuthStore } from '@/stores/auth'
 import Layout from '@/components/Layout'
 import Login from '@/pages/login'
@@ -53,6 +54,21 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
   return token ? <>{children}</> : <Navigate to="/login" replace />
 }
 
+function PermissionRoute({ permission, children }: { permission: string; children: React.ReactNode }) {
+  const { user, hasPermission } = useAuthStore()
+  if (!user || (!user.isSuper && user.permissions.length === 0)) {
+    return <>{children}</>
+  }
+  if (!hasPermission(permission)) {
+    return <Result status="403" title="无权限访问" subTitle="当前角色没有该页面权限，请联系管理员分配权限。" />
+  }
+  return <>{children}</>
+}
+
+const withPermission = (permission: string, element: React.ReactNode) => (
+  <PermissionRoute permission={permission}>{element}</PermissionRoute>
+)
+
 function App() {
   return (
     <ErrorBoundary>
@@ -69,13 +85,13 @@ function App() {
         >
           {/* 系统管理 */}
           <Route path="system">
-            <Route path="admin" element={<AdminList />} />
-            <Route path="group" element={<GroupList />} />
-            <Route path="menu" element={<MenuList />} />
-            <Route path="tenant" element={<TenantList />} />
-            <Route path="llm" element={<LLMConfig />} />
-            <Route path="git" element={<GitConfig />} />
-            <Route path="knowledge" element={<KnowledgeList />} />
+            <Route path="admin" element={withPermission('system:admin:list', <AdminList />)} />
+            <Route path="group" element={withPermission('system:group:list', <GroupList />)} />
+            <Route path="menu" element={withPermission('system:menu:list', <MenuList />)} />
+            <Route path="tenant" element={withPermission('system:tenant:list', <TenantList />)} />
+            <Route path="llm" element={withPermission('system:llm:list', <LLMConfig />)} />
+            <Route path="git" element={withPermission('system:git:list', <GitConfig />)} />
+            <Route path="knowledge" element={withPermission('system:knowledge:list', <KnowledgeList />)} />
           </Route>
           {/* 智能分身 */}
           <Route path="agent">
@@ -94,10 +110,10 @@ function App() {
           {/* 看板 */}
           <Route path="kanban" element={<KanbanPage />} />
           {/* 开发流水线 */}
-          <Route path="pipeline" element={<PipelinePage />} />
+          <Route path="pipeline" element={withPermission('flow:pipeline:list', <PipelinePage />)} />
           {/* 技能市场 */}
           <Route path="skills">
-            <Route path="market" element={<SkillMarketPage />} />
+            <Route path="market" element={withPermission('skills:market:list', <SkillMarketPage />)} />
           </Route>
           <Route path="" element={<Navigate to="/project/create" replace />} />
         </Route>

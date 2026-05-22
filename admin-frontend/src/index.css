@@ -9,11 +9,11 @@ html, body, #root {
 }
 
 body {
-  font-family: 'Orbitron', 'Rajdhani', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: #0a0a0f;
-  color: #e0e0e0;
+  background: #0f172a;
+  color: #e5e7eb;
 }
 
 /* 科技风滚动条 */
@@ -23,9 +23,8 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, #00d4ff 0%, #7b2fff 100%);
+  background: #475569;
   border-radius: 4px;
-  box-shadow: 0 0 10px rgba(0, 212, 255, 0.5);
 }
 
 ::-webkit-scrollbar-track {
@@ -35,14 +34,14 @@ body {
 
 /* 科技风变量 */
 :root {
-  --primary-cyan: #00d4ff;
-  --primary-purple: #7b2fff;
-  --primary-pink: #ff2a6d;
-  --bg-dark: #0a0a0f;
-  --bg-card: rgba(20, 20, 30, 0.8);
-  --border-glow: rgba(0, 212, 255, 0.3);
-  --text-primary: #e0e0e0;
-  --text-secondary: #888;
+  --primary-cyan: #60a5fa;
+  --primary-purple: #8b5cf6;
+  --primary-pink: #f472b6;
+  --bg-dark: #0f172a;
+  --bg-card: #111827;
+  --border-glow: rgba(148, 163, 184, 0.18);
+  --text-primary: #e5e7eb;
+  --text-secondary: #94a3b8;
 }
 
 /* 玻璃拟态效果 */
@@ -117,12 +116,12 @@ body {
 
 /* Ant Design 暗色主题覆盖 */
 .ant-layout {
-  background: #0a0a0f !important;
+  background: #0f172a !important;
 }
 
 .ant-layout-sider {
-  background: linear-gradient(180deg, rgba(10, 10, 20, 0.95) 0%, rgba(20, 20, 40, 0.95) 100%) !important;
-  border-right: 1px solid rgba(0, 212, 255, 0.15) !important;
+  background: #0f172a !important;
+  border-right: 1px solid rgba(148, 163, 184, 0.16) !important;
 }
 
 .ant-menu-dark {
@@ -130,18 +129,18 @@ body {
 }
 
 .ant-menu-dark .ant-menu-item-selected {
-  background: linear-gradient(90deg, rgba(0, 212, 255, 0.2), transparent) !important;
-  border-left: 3px solid #00d4ff;
+  background: rgba(59, 130, 246, 0.16) !important;
+  border-left: 3px solid #60a5fa;
 }
 
 .ant-menu-dark .ant-menu-item:hover,
 .ant-menu-dark .ant-menu-submenu-title:hover {
-  background: rgba(0, 212, 255, 0.1) !important;
+  background: rgba(59, 130, 246, 0.12) !important;
 }
 
 .ant-layout-header {
-  background: rgba(15, 15, 25, 0.9) !important;
-  border-bottom: 1px solid rgba(0, 212, 255, 0.15) !important;
+  background: #111827 !important;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16) !important;
 }
 
 .ant-layout-content {
@@ -150,15 +149,15 @@ body {
 
 /* 表格科技风 */
 .ant-table {
-  background: rgba(15, 15, 25, 0.8) !important;
-  border: 1px solid rgba(0, 212, 255, 0.15) !important;
-  border-radius: 12px !important;
+  background: #111827 !important;
+  border: 1px solid rgba(148, 163, 184, 0.16) !important;
+  border-radius: 10px !important;
 }
 
 .ant-table-thead > tr > th {
-  background: rgba(0, 212, 255, 0.1) !important;
-  border-bottom: 1px solid rgba(0, 212, 255, 0.2) !important;
-  color: #00d4ff !important;
+  background: #0f172a !important;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16) !important;
+  color: #cbd5e1 !important;
 }
 
 .ant-table-tbody > tr > td {
@@ -166,19 +165,19 @@ body {
 }
 
 .ant-table-tbody > tr:hover > td {
-  background: rgba(0, 212, 255, 0.05) !important;
+  background: rgba(59, 130, 246, 0.08) !important;
 }
 
 /* 按钮科技风 */
 .ant-btn-primary {
-  background: linear-gradient(135deg, #00d4ff, #7b2fff) !important;
+  background: #2563eb !important;
   border: none !important;
-  box-shadow: 0 4px 15px rgba(0, 212, 255, 0.4) !important;
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.22) !important;
 }
 
 .ant-btn-primary:hover {
-  background: linear-gradient(135deg, #33ddff, #9050ff) !important;
-  box-shadow: 0 6px 20px rgba(0, 212, 255, 0.6) !important;
+  background: #1d4ed8 !important;
+  box-shadow: 0 10px 22px rgba(37, 99, 235, 0.28) !important;
 }
 
 /* 输入框科技风 */
@@ -186,17 +185,17 @@ body {
 .ant-input-password,
 .ant-input-number,
 .ant-select-selector {
-  background: rgba(20, 20, 30, 0.8) !important;
-  border: 1px solid rgba(0, 212, 255, 0.2) !important;
-  color: #e0e0e0 !important;
+  background: #0b1120 !important;
+  border: 1px solid rgba(148, 163, 184, 0.22) !important;
+  color: #e5e7eb !important;
 }
 
 .ant-input:focus,
 .ant-input-focused,
 .ant-input-password:focus,
 .ant-input-affix-wrapper-focused {
-  border-color: #00d4ff !important;
-  box-shadow: 0 0 0 2px rgba(0, 212, 255, 0.2) !important;
+  border-color: #60a5fa !important;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2) !important;
 }
 
 .ant-input::placeholder {
@@ -205,66 +204,63 @@ body {
 
 /* 卡片科技风 */
 .ant-card {
-  background: rgba(15, 15, 25, 0.9) !important;
-  border: 1px solid rgba(0, 212, 255, 0.15) !important;
-  border-radius: 12px !important;
+  background: #111827 !important;
+  border: 1px solid rgba(148, 163, 184, 0.16) !important;
+  border-radius: 10px !important;
 }
 
 .ant-card-head {
   background: transparent !important;
-  border-bottom: 1px solid rgba(0, 212, 255, 0.15) !important;
-  color: #00d4ff !important;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16) !important;
+  color: #e5e7eb !important;
 }
 
 /* 模态框科技风 */
 .ant-modal-content {
-  background: rgba(15, 15, 25, 0.95) !important;
-  border: 1px solid rgba(0, 212, 255, 0.2) !important;
-  border-radius: 16px !important;
-  backdrop-filter: blur(20px);
+  background: #111827 !important;
+  border: 1px solid rgba(148, 163, 184, 0.18) !important;
+  border-radius: 12px !important;
 }
 
 .ant-modal-header {
   background: transparent !important;
-  border-bottom: 1px solid rgba(0, 212, 255, 0.15) !important;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16) !important;
 }
 
 .ant-modal-title {
-  color: #00d4ff !important;
+  color: #f8fafc !important;
 }
 
-/* 分页器科技风 */
+/* 分页器 */
 .ant-pagination-item {
-  background: rgba(20, 20, 30, 0.8) !important;
-  border: 1px solid rgba(0, 212, 255, 0.2) !important;
+  background: #111827 !important;
+  border: 1px solid rgba(148, 163, 184, 0.18) !important;
 }
 
 .ant-pagination-item a {
-  color: #e0e0e0 !important;
+  color: #e5e7eb !important;
 }
 
 .ant-pagination-item-active {
-  background: linear-gradient(135deg, rgba(0, 212, 255, 0.3), rgba(123, 47, 255, 0.3)) !important;
-  border-color: #00d4ff !important;
+  background: rgba(59, 130, 246, 0.18) !important;
+  border-color: #60a5fa !important;
 }
 
 .ant-pagination-item-active a {
-  color: #00d4ff !important;
+  color: #bfdbfe !important;
 }
 
-/* 标签科技风 */
+/* 标签 */
 .ant-tag {
-  background: rgba(0, 212, 255, 0.1) !important;
-  border: 1px solid rgba(0, 212, 255, 0.3) !important;
-  color: #00d4ff !important;
+  border-radius: 6px;
+  font-weight: 500;
 }
 
-/* 下拉菜单科技风 */
+/* 下拉菜单 */
 .ant-dropdown-menu {
-  background: rgba(15, 15, 25, 0.95) !important;
-  border: 1px solid rgba(0, 212, 255, 0.2) !important;
+  background: #111827 !important;
+  border: 1px solid rgba(148, 163, 184, 0.18) !important;
   border-radius: 8px !important;
-  backdrop-filter: blur(20px);
 }
 
 .ant-dropdown-menu-item {
@@ -272,7 +268,7 @@ body {
 }
 
 .ant-dropdown-menu-item:hover {
-  background: rgba(0, 212, 255, 0.1) !important;
+  background: rgba(59, 130, 246, 0.12) !important;
 }
 
 /* 表单标签 */
@@ -282,19 +278,17 @@ body {
 
 /* 消息提示科技风 */
 .ant-message-notice-content {
-  background: rgba(15, 15, 25, 0.95) !important;
-  border: 1px solid rgba(0, 212, 255, 0.2) !important;
+  background: #111827 !important;
+  border: 1px solid rgba(148, 163, 184, 0.18) !important;
   border-radius: 8px !important;
-  backdrop-filter: blur(20px);
-  color: #e0e0e0 !important;
+  color: #e5e7eb !important;
 }
 
 /* 选择器下拉 */
 .ant-select-dropdown {
-  background: rgba(15, 15, 25, 0.95) !important;
-  border: 1px solid rgba(0, 212, 255, 0.2) !important;
+  background: #111827 !important;
+  border: 1px solid rgba(148, 163, 184, 0.18) !important;
   border-radius: 8px !important;
-  backdrop-filter: blur(20px);
 }
 
 .ant-select-item {
@@ -302,27 +296,27 @@ body {
 }
 
 .ant-select-item-option-selected {
-  background: rgba(0, 212, 255, 0.2) !important;
+  background: rgba(59, 130, 246, 0.18) !important;
 }
 
 .ant-select-item-option-active {
-  background: rgba(0, 212, 255, 0.1) !important;
+  background: rgba(59, 130, 246, 0.12) !important;
 }
 
 /* 开关科技风 */
 .ant-switch-checked {
-  background: linear-gradient(135deg, #00d4ff, #7b2fff) !important;
+  background: #2563eb !important;
 }
 
 /* 复选框科技风 */
 .ant-checkbox-inner {
-  background: rgba(20, 20, 30, 0.8) !important;
-  border-color: rgba(0, 212, 255, 0.3) !important;
+  background: #0b1120 !important;
+  border-color: rgba(148, 163, 184, 0.32) !important;
 }
 
 .ant-checkbox-checked .ant-checkbox-inner {
-  background: linear-gradient(135deg, #00d4ff, #7b2fff) !important;
-  border-color: #00d4ff !important;
+  background: #2563eb !important;
+  border-color: #2563eb !important;
 }
 
 /* ========== WebChat 主题变量 ========== */
@@ -475,9 +469,10 @@ body {
 
 .markdown-body {
   font-size: 14px;
-  line-height: 1.6;
+  line-height: 1.75;
   word-wrap: break-word;
-  color: #e0e0e0;
+  color: #dbe4ef;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
 
 .markdown-body p {
@@ -493,9 +488,9 @@ body {
 .markdown-body h4 {
   margin: 20px 0 10px 0;
   font-weight: 600;
-  color: #f0f0f0;
+  color: #f8fafc;
 }
-.markdown-body h1 { font-size: 22px; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 8px; }
+.markdown-body h1 { font-size: 22px; border-bottom: 1px solid rgba(148,163,184,0.18); padding-bottom: 8px; }
 .markdown-body h2 { font-size: 18px; }
 .markdown-body h3 { font-size: 16px; }
 .markdown-body h4 { font-size: 14px; }
@@ -512,9 +507,9 @@ body {
 .markdown-body blockquote {
   margin: 12px 0;
   padding: 8px 16px;
-  border-left: 4px solid #00d4ff;
-  background: rgba(0, 212, 255, 0.05);
-  color: #aaa;
+  border-left: 4px solid #60a5fa;
+  background: rgba(59, 130, 246, 0.08);
+  color: #cbd5e1;
 }
 
 .markdown-body hr {
@@ -524,18 +519,18 @@ body {
 }
 
 .markdown-body strong {
-  color: #f0f0f0;
+  color: #f8fafc;
   font-weight: 600;
 }
 
 /* 行内代码 */
 .inline-code {
   padding: 2px 6px;
-  background: rgba(0, 212, 255, 0.08);
+  background: rgba(59, 130, 246, 0.12);
   border-radius: 4px;
   font-family: 'Consolas', 'Monaco', monospace;
   font-size: 13px;
-  color: #00d4ff;
+  color: #93c5fd;
 }
 
 /* 代码块 */
@@ -543,22 +538,22 @@ body {
   margin: 12px 0;
   border-radius: 8px;
   overflow: hidden;
-  background: #1a1a2e;
-  border: 1px solid rgba(0, 212, 255, 0.1);
+  background: #020617;
+  border: 1px solid rgba(148, 163, 184, 0.16);
 }
 .code-block-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 6px 12px;
-  background: rgba(0, 212, 255, 0.05);
-  border-bottom: 1px solid rgba(0, 212, 255, 0.1);
+  background: rgba(15, 23, 42, 0.95);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
 }
 .code-language {
   font-size: 11px;
   color: #888;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0;
 }
 .code-action-btn {
   color: #888 !important;
@@ -589,14 +584,47 @@ body {
 .markdown-body th,
 .markdown-body td {
   padding: 8px 12px;
-  border: 1px solid rgba(255,255,255,0.08);
+  border: 1px solid rgba(148,163,184,0.16);
   text-align: left;
 }
 .markdown-body th {
-  background: rgba(0, 212, 255, 0.05);
+  background: rgba(15, 23, 42, 0.95);
   font-weight: 600;
-  color: #e0e0e0;
+  color: #e5e7eb;
 }
 .markdown-body td {
-  color: #ccc;
+  color: #cbd5e1;
+}
+
+.pipeline-workbench .pipeline-markdown {
+  max-width: 920px;
+}
+
+.pipeline-workbench .pipeline-markdown h1:first-child,
+.pipeline-workbench .pipeline-markdown h2:first-child {
+  margin-top: 0;
+}
+
+@media (max-width: 900px) {
+  .pipeline-workbench {
+    padding: 14px !important;
+  }
+
+  .pipeline-create-layout,
+  .pipeline-stage-layout {
+    flex-direction: column !important;
+  }
+
+  .pipeline-stage-sidebar {
+    width: 100% !important;
+    max-height: 280px;
+  }
+
+  .pipeline-stage-content {
+    width: 100% !important;
+  }
+
+  .pipeline-workbench .ant-btn {
+    max-width: 100%;
+  }
 }

@@ -47,6 +47,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/admin_platform
       - REDIS_URL=redis://redis:6379/5
+      - JWT_SECRET=admin-platform-jwt-secret-key-2026-dev-only
     depends_on:
       - postgres
       - redis
@@ -65,6 +66,7 @@ services:
     environment:
       - GIN_MODE=release
       - REDIS_HOST=redis
+      - JWT_SECRET=admin-platform-jwt-secret-key-2026-dev-only
     depends_on:
       - redis
       - admin-python

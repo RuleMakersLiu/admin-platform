@@ -9,10 +9,30 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
+from app.core.redis import get_gateway_redis
 from app.models.models import SysAdmin, SysAdminGroup, SysMenu, SysTenant, SysLlmConfig, SysGitConfig
 from app.schemas.common import PaginatedResult, Response
+from app.services.permissions import parse_power, serialize_power
 
 router = APIRouter(prefix="/system", tags=["系统管理"])
+
+
+async def invalidate_permission_cache(admin_ids: List[int]) -> None:
+    """Invalidate gateway permission cache after role or user permission changes."""
+    if not admin_ids:
+        return
+    try:
+        redis = await get_gateway_redis()
+        await redis.delete(*[f"admin:permission:{admin_id}" for admin_id in admin_ids])
+    except Exception:
+        pass
+
+
+async def invalidate_group_permission_cache(db: AsyncSession, group_id: int) -> None:
+    result = await db.execute(
+        select(SysAdmin.id).where(SysAdmin.admin_group_id == group_id, SysAdmin.is_deleted == 0)
+    )
+    await invalidate_permission_cache([row[0] for row in result.all()])
 
 
 # ==================== 请求模型 ====================
@@ -41,14 +61,14 @@ class UpdateAdminRequest(BaseModel):
 class CreateGroupRequest(BaseModel):
     """创建角色组请求"""
     group_name: str = Field(..., min_length=2, max_length=64)
-    power: str = "[]"
+    power: Any = Field(default_factory=list)
     status: int = 1
 
 
 class UpdateGroupRequest(BaseModel):
     """更新角色组请求"""
     group_name: Optional[str] = Field(None, min_length=2, max_length=64)
-    power: Optional[str] = None
+    power: Optional[Any] = None
     status: Optional[int] = None
 
 
@@ -56,13 +76,14 @@ class CreateMenuRequest(BaseModel):
     """创建菜单请求"""
     parent_id: int = 0
     menu_name: str = Field(..., min_length=2, max_length=64)
-    menu_type: int = 1
+    menu_type: int = 2
     path: Optional[str] = None
     component: Optional[str] = None
     permission: Optional[str] = None
     icon: Optional[str] = None
     sort: int = 0
     status: int = 1
+    visible: int = 1
 
 
 class UpdateMenuRequest(BaseModel):
@@ -75,6 +96,7 @@ class UpdateMenuRequest(BaseModel):
     icon: Optional[str] = None
     sort: Optional[int] = None
     status: Optional[int] = None
+    visible: Optional[int] = None
 
 
 # ==================== 用户管理 ====================
@@ -269,6 +291,7 @@ async def update_admin(
 
     admin.update_time = int(time.time() * 1000)
     await db.flush()
+    await invalidate_permission_cache([admin.id])
 
     return Response(data={"id": admin.id})
 
@@ -344,7 +367,9 @@ async def list_groups(
         "list": [{
             "id": g.id,
             "groupName": g.name,
-            "power": g.power,
+            "power": parse_power(g.power),
+            "powerText": g.power or "[]",
+            "isSuper": bool(g.is_super == 1),
             "status": g.status,
             "createTime": g.create_time,
         } for g in items],
@@ -364,7 +389,7 @@ async def create_group(
     now = int(time.time() * 1000)
     group = SysAdminGroup(
         name=request.group_name,
-        power=request.power,
+        power=serialize_power(parse_power(request.power)),
         status=request.status,
         tenant_id=tenant_id,
         create_time=now,
@@ -404,12 +429,13 @@ async def update_group(
     if request.group_name is not None:
         group.name = request.group_name
     if request.power is not None:
-        group.power = request.power
+        group.power = serialize_power(parse_power(request.power))
     if request.status is not None:
         group.status = request.status
 
     group.update_time = int(time.time() * 1000)
     await db.flush()
+    await invalidate_group_permission_cache(db, group.id)
 
     return Response(data={"id": group.id})
 
@@ -447,6 +473,7 @@ async def delete_group(
     group.is_deleted = 1
     group.update_time = int(time.time() * 1000)
     await db.flush()
+    await invalidate_group_permission_cache(db, group.id)
 
     return Response(message="删除成功")
 
@@ -486,9 +513,55 @@ async def list_menus(
         "icon": m.icon,
         "sort": m.sort,
         "status": m.status,
+        "visible": getattr(m, "visible", 1),
     } for m in menus]
 
     return Response(data=menu_list)
+
+
+@router.get("/permission/tree", response_model=Response)
+async def get_permission_tree(
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """获取角色授权树，包含目录、菜单和按钮权限。"""
+    tenant_id = user.get("tenantId")
+    is_super = user.get("isSuper")
+
+    conditions = [SysMenu.is_deleted == 0, SysMenu.status == 1]
+    if not is_super:
+        conditions.append(SysMenu.tenant_id == tenant_id)
+
+    result = await db.execute(
+        select(SysMenu).where(*conditions).order_by(SysMenu.sort, SysMenu.create_time)
+    )
+    menus = result.scalars().all()
+
+    children_map: Dict[int, List[SysMenu]] = {}
+    for menu in menus:
+        children_map.setdefault(menu.parent_id, []).append(menu)
+
+    type_names = {1: "目录", 2: "菜单", 3: "按钮"}
+
+    def build(parent_id: int = 0) -> List[dict]:
+        nodes = []
+        for menu in sorted(children_map.get(parent_id, []), key=lambda item: item.sort):
+            children = build(menu.id)
+            permission = menu.permission or f"menu:{menu.id}"
+            nodes.append({
+                "key": permission,
+                "title": menu.name,
+                "permission": menu.permission,
+                "menuType": menu.menu_type,
+                "typeName": type_names.get(menu.menu_type, "未知"),
+                "path": menu.path,
+                "children": children,
+                "disabled": not bool(menu.permission) and not children,
+                "disableCheckbox": not bool(menu.permission),
+            })
+        return nodes
+
+    return Response(data=build(0))
 
 
 @router.post("/menu", response_model=Response)
@@ -503,7 +576,7 @@ async def create_menu(
     now = int(time.time() * 1000)
     menu = SysMenu(
         parent_id=request.parent_id,
-        menu_name=request.menu_name,
+        name=request.menu_name,
         menu_type=request.menu_type,
         path=request.path,
         component=request.component,
@@ -511,6 +584,7 @@ async def create_menu(
         icon=request.icon,
         sort=request.sort,
         status=request.status,
+        visible=request.visible,
         tenant_id=tenant_id,
         create_time=now,
         update_time=now,
@@ -562,6 +636,8 @@ async def update_menu(
         menu.sort = request.sort
     if request.status is not None:
         menu.status = request.status
+    if request.visible is not None:
+        menu.visible = request.visible
 
     menu.update_time = int(time.time() * 1000)
     await db.flush()

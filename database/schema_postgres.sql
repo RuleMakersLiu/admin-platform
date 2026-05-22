@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS sys_admin (
   status SMALLINT NOT NULL DEFAULT 1,
   last_login_time BIGINT,
   last_login_ip VARCHAR(50),
+  is_deleted SMALLINT NOT NULL DEFAULT 0,
   create_time BIGINT NOT NULL,
   update_time BIGINT NOT NULL,
   CONSTRAINT uk_username_tenant UNIQUE (username, tenant_id)
@@ -34,6 +35,7 @@ CREATE TABLE IF NOT EXISTS sys_admin_group (
   tenant_id BIGINT NOT NULL DEFAULT 0,
   sort INTEGER NOT NULL DEFAULT 0,
   status SMALLINT NOT NULL DEFAULT 1,
+  is_deleted SMALLINT NOT NULL DEFAULT 0,
   create_time BIGINT NOT NULL,
   update_time BIGINT NOT NULL
 );
@@ -54,6 +56,7 @@ CREATE TABLE IF NOT EXISTS sys_menu (
   visible SMALLINT NOT NULL DEFAULT 1,
   sort INTEGER NOT NULL DEFAULT 0,
   status SMALLINT NOT NULL DEFAULT 1,
+  is_deleted SMALLINT NOT NULL DEFAULT 0,
   tenant_id BIGINT NOT NULL DEFAULT 0,
   create_time BIGINT NOT NULL,
   update_time BIGINT
@@ -69,6 +72,7 @@ CREATE TABLE IF NOT EXISTS sys_tenant (
   code VARCHAR(50) NOT NULL,
   description VARCHAR(255),
   status SMALLINT NOT NULL DEFAULT 1,
+  is_deleted SMALLINT NOT NULL DEFAULT 0,
   create_time BIGINT NOT NULL,
   update_time BIGINT,
   CONSTRAINT uk_tenant_code UNIQUE (code)
@@ -124,7 +128,7 @@ INSERT INTO sys_admin_group (id, name, power, is_super, tenant_id, status, creat
 ON CONFLICT DO NOTHING;
 
 INSERT INTO sys_admin (id, username, password, real_name, group_id, tenant_id, status, create_time, update_time) VALUES
-(1, 'admin', '\$2a\$10\$N.zmdr9k7uOCQb376NoUnuTJ8iAt6Z5EHsM8lE9lBOsl7iAt6Z5EH', '管理员', 1, 1, 1, EXTRACT(EPOCH FROM NOW()) * 1000, EXTRACT(EPOCH FROM NOW()) * 1000)
+(1, 'admin', '\$2b\$10\$WQflWNRwCU9PC/y8TT/VIecJy8Xn9dUO17m42LADu06D8HKxviLq6', '管理员', 1, 1, 1, EXTRACT(EPOCH FROM NOW()) * 1000, EXTRACT(EPOCH FROM NOW()) * 1000)
 ON CONFLICT DO NOTHING;
 
 -- 菜单数据
@@ -134,4 +138,19 @@ INSERT INTO sys_menu (id, parent_id, name, path, component, permission, icon, ty
 (3, 1, '角色管理', '/system/group', 'system/group/index', 'system_group_list', 'team', 2, 2, 1, 1, EXTRACT(EPOCH FROM NOW()) * 1000),
 (4, 1, '菜单管理', '/system/menu', 'system/menu/index', 'system_menu_list', 'menu', 2, 3, 1, 1, EXTRACT(EPOCH FROM NOW()) * 1000),
 (5, 1, '租户管理', '/system/tenant', 'system/tenant/index', 'system_tenant_list', 'bank', 2, 4, 1, 1, EXTRACT(EPOCH FROM NOW()) * 1000)
+ON CONFLICT DO NOTHING;
+
+INSERT INTO sys_menu (parent_id, name, path, component, permission, icon, type, sort, status, tenant_id, create_time) VALUES
+(2, '用户新增', NULL, NULL, 'system:admin:create', NULL, 3, 1, 1, 1, EXTRACT(EPOCH FROM NOW()) * 1000),
+(2, '用户编辑', NULL, NULL, 'system:admin:edit', NULL, 3, 2, 1, 1, EXTRACT(EPOCH FROM NOW()) * 1000),
+(2, '用户删除', NULL, NULL, 'system:admin:delete', NULL, 3, 3, 1, 1, EXTRACT(EPOCH FROM NOW()) * 1000),
+(3, '角色新增', NULL, NULL, 'system:group:create', NULL, 3, 1, 1, 1, EXTRACT(EPOCH FROM NOW()) * 1000),
+(3, '角色编辑', NULL, NULL, 'system:group:edit', NULL, 3, 2, 1, 1, EXTRACT(EPOCH FROM NOW()) * 1000),
+(3, '角色删除', NULL, NULL, 'system:group:delete', NULL, 3, 3, 1, 1, EXTRACT(EPOCH FROM NOW()) * 1000),
+(4, '菜单新增', NULL, NULL, 'system:menu:create', NULL, 3, 1, 1, 1, EXTRACT(EPOCH FROM NOW()) * 1000),
+(4, '菜单编辑', NULL, NULL, 'system:menu:edit', NULL, 3, 2, 1, 1, EXTRACT(EPOCH FROM NOW()) * 1000),
+(4, '菜单删除', NULL, NULL, 'system:menu:delete', NULL, 3, 3, 1, 1, EXTRACT(EPOCH FROM NOW()) * 1000),
+(5, '租户新增', NULL, NULL, 'system:tenant:create', NULL, 3, 1, 1, 1, EXTRACT(EPOCH FROM NOW()) * 1000),
+(5, '租户编辑', NULL, NULL, 'system:tenant:edit', NULL, 3, 2, 1, 1, EXTRACT(EPOCH FROM NOW()) * 1000),
+(5, '租户删除', NULL, NULL, 'system:tenant:delete', NULL, 3, 3, 1, 1, EXTRACT(EPOCH FROM NOW()) * 1000)
 ON CONFLICT DO NOTHING;

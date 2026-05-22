@@ -77,9 +77,7 @@ func Permission() gin.HandlerFunc {
 
 		_, _ = c.Get(ContextKeyTenantID)
 
-		// 生成权限标识
-		// 参考PHP项目: app/Http/Middleware/ApiAuthAdmin.php:45-80
-		// 路由: /api/admin/user/list -> 权限标识: admin_admin_user_list
+		// 生成权限标识。优先使用 module:resource:action，同时兼容旧版下划线 key。
 		path := c.Request.URL.Path
 		method := c.Request.Method
 
@@ -89,13 +87,10 @@ func Permission() gin.HandlerFunc {
 			return
 		}
 
-		permission := buildPermissionIdentifier(path, method)
-
-		// 从Redis缓存检查权限
 		ctx := c.Request.Context()
 		cacheKey := "admin:permission:" + int64ToString(adminID.(int64))
 
-		hasPermission, err := cache.SIsMember(ctx, cacheKey, permission)
+		permissions, err := cache.SMembers(ctx, cacheKey)
 		if err != nil {
 			// SECURITY: Redis异常时拒绝访问（安全优先于可用性）
 			response.Forbidden(c, "权限服务暂不可用，请稍后重试")
@@ -104,13 +99,12 @@ func Permission() gin.HandlerFunc {
 		}
 
 		// 检查是否是超级管理员（拥有所有权限）
-		permissions, _ := cache.SMembers(ctx, cacheKey)
 		if contains(permissions, "*") {
 			c.Next()
 			return
 		}
 
-		if !hasPermission {
+		if !hasAnyPermission(permissions, buildPermissionCandidates(path, method)) {
 			response.Forbidden(c, "无权访问")
 			c.Abort()
 			return
@@ -129,9 +123,7 @@ func skipPermissionCheck(path string) bool {
 		"/api/auth/info",
 		"/api/auth/menus",
 		"/api/auth/tenants",
-		"/api/config/",      // 配置管理（已通过 Auth 认证）
-		"/api/agent/chat",   // 智能对话
-		"/api/flow/",        // 智能体流程（流水线）
+		"/api/tracking/",
 		"/doc.html",
 		"/swagger",
 		"/health",
@@ -146,21 +138,111 @@ func skipPermissionCheck(path string) bool {
 }
 
 // buildPermissionIdentifier 构建权限标识
-// 参考PHP项目实现
 func buildPermissionIdentifier(path, method string) string {
+	candidates := buildPermissionCandidates(path, method)
+	if len(candidates) == 0 {
+		return ""
+	}
+	return candidates[0]
+}
+
+// buildPermissionCandidates returns canonical and legacy permission keys.
+func buildPermissionCandidates(path, method string) []string {
 	// 移除前缀 /api/
 	path = strings.TrimPrefix(path, "/api/")
-	// 替换 / 为 _
-	path = strings.ReplaceAll(path, "/", "_")
-	// 移除路径参数（如 :id）
-	parts := strings.Split(path, "_")
-	var result []string
+	parts := strings.Split(path, "/")
+	var clean []string
+	hadParam := false
 	for _, part := range parts {
-		if !strings.HasPrefix(part, ":") {
-			result = append(result, part)
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if isPathParamSegment(part) {
+			hadParam = true
+			continue
+		}
+		clean = append(clean, part)
+	}
+	if len(clean) == 0 {
+		return nil
+	}
+
+	module := clean[0]
+	resource := "index"
+	action := actionFromMethod(method)
+
+	if len(clean) >= 2 {
+		resource = clean[1]
+	}
+	if module == "system" && resource == "permission" {
+		resource = "group"
+		action = "list"
+	}
+
+	if module == "flow" {
+		resource = "pipeline"
+		if len(clean) >= 2 {
+			action = clean[len(clean)-1]
+		} else if method == "GET" {
+			action = "list"
+		}
+	} else if len(clean) >= 3 {
+		last := clean[len(clean)-1]
+		switch last {
+		case "list", "all", "tree", "options":
+			action = "list"
+		case "detail", "info":
+			action = "view"
+		case "create", "update", "edit", "delete", "remove", "save", "test", "execute", "confirm", "rollback", "default", "regenerate", "cancel":
+			action = last
+		default:
+			if method == "GET" {
+				action = "view"
+			}
+		}
+	} else if method == "GET" && len(clean) == 2 {
+		if hadParam {
+			action = "view"
+		} else {
+			action = "list"
 		}
 	}
-	return strings.Join(result, "_")
+
+	canonical := strings.ToLower(module + ":" + resource + ":" + action)
+	legacy := strings.ReplaceAll(canonical, ":", "_")
+	oldPathStyle := strings.ToLower(strings.Join(clean, "_"))
+	return uniqueStrings([]string{canonical, legacy, oldPathStyle})
+}
+
+func actionFromMethod(method string) string {
+	switch method {
+	case "GET":
+		return "view"
+	case "POST":
+		return "create"
+	case "PUT", "PATCH":
+		return "edit"
+	case "DELETE":
+		return "delete"
+	default:
+		return strings.ToLower(method)
+	}
+}
+
+func isPathParamSegment(part string) bool {
+	if strings.HasPrefix(part, ":") {
+		return true
+	}
+	if len(part) >= 24 && strings.Count(part, "-") >= 4 {
+		return true
+	}
+	for _, r := range part {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return part != ""
 }
 
 // RateLimit 限流中间件（线程安全）
@@ -218,4 +300,26 @@ func contains(slice []string, item string) bool {
 		}
 	}
 	return false
+}
+
+func hasAnyPermission(granted []string, required []string) bool {
+	for _, permission := range required {
+		if contains(granted, permission) {
+			return true
+		}
+	}
+	return false
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
 }

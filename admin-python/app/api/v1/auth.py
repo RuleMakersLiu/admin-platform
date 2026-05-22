@@ -1,5 +1,4 @@
 """认证路由"""
-import json
 from typing import List, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -10,6 +9,7 @@ from app.core.database import get_db
 from app.core.redis import get_gateway_redis
 from app.schemas.common import LoginRequest, LoginResponse, Response, UserInfo
 from app.services.auth import AuthService
+from app.services.permissions import filter_menu_nodes, parse_power
 from app.models.models import SysTenant, SysMenu, SysAdminGroup
 
 router = APIRouter(prefix="/auth", tags=["认证"])
@@ -96,16 +96,14 @@ async def _cache_user_permissions(db: AsyncSession, admin_id: int):
     if not admin:
         return
 
-    group_stmt = select(SysAdminGroup).where(SysAdminGroup.id == admin.admin_group_id)
+    group_stmt = select(SysAdminGroup).where(
+        SysAdminGroup.id == admin.admin_group_id,
+        SysAdminGroup.status == 1,
+    )
     group_result = await db.execute(group_stmt)
     group = group_result.scalar_one_or_none()
 
-    permissions = []
-    if group and group.power:
-        try:
-            permissions = json.loads(group.power) if isinstance(group.power, str) else group.power
-        except json.JSONDecodeError:
-            permissions = []
+    permissions = parse_power(group.power if group else None)
 
     # 超级管理员添加通配符权限
     if group and group.is_super == 1:
@@ -131,6 +129,7 @@ def build_menu_tree(menus: List[SysMenu]) -> List[dict]:
             "menuName": menu.name,
             "menuType": menu.menu_type,
             "path": menu.path,
+            "component": menu.component,
             "icon": menu.icon,
             "permission": menu.permission,
             "sort": menu.sort,
@@ -165,6 +164,17 @@ def build_menu_tree(menus: List[SysMenu]) -> List[dict]:
     return root_menus
 
 
+def prune_empty_directories(nodes: List[dict]) -> List[dict]:
+    """Remove directory nodes that have no visible children."""
+    pruned = []
+    for node in nodes:
+        node["children"] = prune_empty_directories(node.get("children", []))
+        if node.get("menuType") == 1 and not node["children"]:
+            continue
+        pruned.append(node)
+    return pruned
+
+
 @router.get("/menus", response_model=Response)
 async def get_menus(
     user: dict = Depends(get_current_user),
@@ -183,40 +193,31 @@ async def get_menus(
         raise HTTPException(status_code=404, detail="用户不存在")
 
     # 获取用户组
-    group_stmt = select(SysAdminGroup).where(SysAdminGroup.id == admin.admin_group_id)
+    group_stmt = select(SysAdminGroup).where(
+        SysAdminGroup.id == admin.admin_group_id,
+        SysAdminGroup.status == 1,
+    )
     group_result = await db.execute(group_stmt)
     group = group_result.scalar_one_or_none()
 
     # 查询所有启用的菜单
     menu_stmt = select(SysMenu).where(
         SysMenu.status == 1,
-        SysMenu.is_deleted == 0 if hasattr(SysMenu, 'is_deleted') else True
+        SysMenu.visible == 1,
+        SysMenu.is_deleted == 0,
     ).order_by(SysMenu.sort)
     menu_result = await db.execute(menu_stmt)
     all_menus = menu_result.scalars().all()
 
     # 如果是超级管理员，返回所有菜单
-    if group and group.is_super == 1:
+    is_super = bool(group and group.is_super == 1)
+    if is_super:
         menus = build_menu_tree(all_menus)
         return Response(data=menus)
 
     # 否则根据权限过滤菜单
-    permissions = []
-    if group and group.power:
-        try:
-            permissions = json.loads(group.power) if isinstance(group.power, str) else group.power
-        except json.JSONDecodeError:
-            permissions = []
+    permissions = parse_power(group.power if group else None)
+    filtered_menus = filter_menu_nodes(all_menus, permissions, is_super=False)
 
-    # 过滤菜单: 目录类型(1)总是显示，菜单类型(2)需要权限
-    filtered_menus = []
-    for menu in all_menus:
-        # 目录类型直接显示
-        if menu.menu_type == 1:
-            filtered_menus.append(menu)
-        # 菜单类型检查权限
-        elif menu.menu_type == 2 and menu.permission in permissions:
-            filtered_menus.append(menu)
-
-    menus = build_menu_tree(filtered_menus)
+    menus = prune_empty_directories(build_menu_tree(filtered_menus))
     return Response(data=menus)

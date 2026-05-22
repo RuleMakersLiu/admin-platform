@@ -24,6 +24,7 @@ CREATE TABLE `sys_admin` (
   `group_id` bigint(20) DEFAULT NULL COMMENT '用户组ID',
   `tenant_id` bigint(20) NOT NULL DEFAULT 0 COMMENT '租户ID',
   `status` tinyint(1) NOT NULL DEFAULT 1 COMMENT '状态: 0禁用 1启用',
+  `is_deleted` tinyint(1) NOT NULL DEFAULT 0 COMMENT '是否删除: 0否 1是',
   `last_login_time` bigint(20) DEFAULT NULL COMMENT '最后登录时间(时间戳毫秒)',
   `last_login_ip` varchar(50) DEFAULT NULL COMMENT '最后登录IP',
   `create_time` bigint(20) NOT NULL COMMENT '创建时间(时间戳毫秒)',
@@ -47,6 +48,7 @@ CREATE TABLE `sys_admin_group` (
   `tenant_id` bigint(20) NOT NULL DEFAULT 0 COMMENT '租户ID',
   `sort` int(11) NOT NULL DEFAULT 0 COMMENT '排序',
   `status` tinyint(1) NOT NULL DEFAULT 1 COMMENT '状态: 0禁用 1启用',
+  `is_deleted` tinyint(1) NOT NULL DEFAULT 0 COMMENT '是否删除: 0否 1是',
   `create_time` bigint(20) NOT NULL COMMENT '创建时间(时间戳毫秒)',
   `update_time` bigint(20) NOT NULL COMMENT '更新时间(时间戳毫秒)',
   PRIMARY KEY (`id`),
@@ -101,6 +103,7 @@ CREATE TABLE `sys_menu` (
   `type` tinyint(1) NOT NULL DEFAULT 1 COMMENT '类型: 1目录 2菜单 3按钮/权限',
   `visible` tinyint(1) NOT NULL DEFAULT 1 COMMENT '是否可见: 0隐藏 1显示',
   `status` tinyint(1) NOT NULL DEFAULT 1 COMMENT '状态: 0禁用 1启用',
+  `is_deleted` tinyint(1) NOT NULL DEFAULT 0 COMMENT '是否删除: 0否 1是',
   `sort` int(11) NOT NULL DEFAULT 0 COMMENT '排序',
   `tenant_id` bigint(20) NOT NULL DEFAULT 0 COMMENT '租户ID',
   `create_time` bigint(20) NOT NULL COMMENT '创建时间(时间戳毫秒)',
@@ -125,6 +128,7 @@ CREATE TABLE `sys_tenant` (
   `config` text COMMENT '租户配置(JSON)',
   `expire_time` bigint(20) DEFAULT NULL COMMENT '过期时间(时间戳毫秒)',
   `status` tinyint(1) NOT NULL DEFAULT 1 COMMENT '状态: 0禁用 1启用',
+  `is_deleted` tinyint(1) NOT NULL DEFAULT 0 COMMENT '是否删除: 0否 1是',
   `create_time` bigint(20) NOT NULL COMMENT '创建时间(时间戳毫秒)',
   `update_time` bigint(20) NOT NULL COMMENT '更新时间(时间戳毫秒)',
   PRIMARY KEY (`id`),
@@ -443,7 +447,7 @@ VALUES (1, '超级管理员', 0, '0', NULL, 1, 1, 1, UNIX_TIMESTAMP()*1000, UNIX
 
 -- 插入默认管理员 (密码: admin123, BCrypt加密)
 INSERT INTO `sys_admin` (`id`, `username`, `password`, `real_name`, `group_id`, `tenant_id`, `status`, `create_time`, `update_time`)
-VALUES (1, 'admin', '$2a$10$N.zmdr9k7uOCQb376NoUnuTJ8iAt6Z5EHsM8lE9lBOsl7iAt6Z5EH', '系统管理员', 1, 1, 1, UNIX_TIMESTAMP()*1000, UNIX_TIMESTAMP()*1000);
+VALUES (1, 'admin', '$2b$10$WQflWNRwCU9PC/y8TT/VIecJy8Xn9dUO17m42LADu06D8HKxviLq6', '系统管理员', 1, 1, 1, UNIX_TIMESTAMP()*1000, UNIX_TIMESTAMP()*1000);
 
 -- 插入默认菜单
 INSERT INTO `sys_menu` (`id`, `parent_id`, `name`, `path`, `component`, `permission`, `icon`, `type`, `visible`, `status`, `sort`, `tenant_id`, `create_time`, `update_time`) VALUES
@@ -459,6 +463,20 @@ INSERT INTO `sys_menu` (`id`, `parent_id`, `name`, `path`, `component`, `permiss
 (10, 0, '部署管理', '/deploy', 'Layout', NULL, 'cloud-server', 1, 1, 1, 3, 1, UNIX_TIMESTAMP()*1000, UNIX_TIMESTAMP()*1000),
 (11, 10, '项目配置', '/deploy/project', 'deploy/project/index', 'deploy_project_list', 'folder', 2, 1, 1, 1, 1, UNIX_TIMESTAMP()*1000, UNIX_TIMESTAMP()*1000),
 (12, 10, '任务列表', '/deploy/task', 'deploy/task/index', 'deploy_task_list', 'schedule', 2, 1, 1, 2, 1, UNIX_TIMESTAMP()*1000, UNIX_TIMESTAMP()*1000);
+
+INSERT INTO `sys_menu` (`parent_id`, `name`, `path`, `component`, `permission`, `icon`, `type`, `visible`, `status`, `sort`, `tenant_id`, `create_time`, `update_time`) VALUES
+(2, '用户新增', NULL, NULL, 'system:admin:create', NULL, 3, 0, 1, 1, 1, UNIX_TIMESTAMP()*1000, UNIX_TIMESTAMP()*1000),
+(2, '用户编辑', NULL, NULL, 'system:admin:edit', NULL, 3, 0, 1, 2, 1, UNIX_TIMESTAMP()*1000, UNIX_TIMESTAMP()*1000),
+(2, '用户删除', NULL, NULL, 'system:admin:delete', NULL, 3, 0, 1, 3, 1, UNIX_TIMESTAMP()*1000, UNIX_TIMESTAMP()*1000),
+(3, '角色新增', NULL, NULL, 'system:group:create', NULL, 3, 0, 1, 1, 1, UNIX_TIMESTAMP()*1000, UNIX_TIMESTAMP()*1000),
+(3, '角色编辑', NULL, NULL, 'system:group:edit', NULL, 3, 0, 1, 2, 1, UNIX_TIMESTAMP()*1000, UNIX_TIMESTAMP()*1000),
+(3, '角色删除', NULL, NULL, 'system:group:delete', NULL, 3, 0, 1, 3, 1, UNIX_TIMESTAMP()*1000, UNIX_TIMESTAMP()*1000),
+(4, '菜单新增', NULL, NULL, 'system:menu:create', NULL, 3, 0, 1, 1, 1, UNIX_TIMESTAMP()*1000, UNIX_TIMESTAMP()*1000),
+(4, '菜单编辑', NULL, NULL, 'system:menu:edit', NULL, 3, 0, 1, 2, 1, UNIX_TIMESTAMP()*1000, UNIX_TIMESTAMP()*1000),
+(4, '菜单删除', NULL, NULL, 'system:menu:delete', NULL, 3, 0, 1, 3, 1, UNIX_TIMESTAMP()*1000, UNIX_TIMESTAMP()*1000),
+(5, '租户新增', NULL, NULL, 'system:tenant:create', NULL, 3, 0, 1, 1, 1, UNIX_TIMESTAMP()*1000, UNIX_TIMESTAMP()*1000),
+(5, '租户编辑', NULL, NULL, 'system:tenant:edit', NULL, 3, 0, 1, 2, 1, UNIX_TIMESTAMP()*1000, UNIX_TIMESTAMP()*1000),
+(5, '租户删除', NULL, NULL, 'system:tenant:delete', NULL, 3, 0, 1, 3, 1, UNIX_TIMESTAMP()*1000, UNIX_TIMESTAMP()*1000);
 
 SET FOREIGN_KEY_CHECKS = 1;
 

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"strings"
+
 	"github.com/spf13/viper"
 )
 
@@ -20,9 +22,11 @@ func Load() error {
 	viper.SetDefault("redis.db", 0)
 
 	// 支持环境变量覆盖配置（优先级: 环境变量 > 配置文件）
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
 	viper.SetEnvPrefix("ADMIN")
 	viper.BindEnv("jwt.secret", "JWT_SECRET")
+	viper.BindEnv("redis.host", "REDIS_HOST")
 	viper.BindEnv("redis.password", "REDIS_PASSWORD")
 	viper.BindEnv("server.mode", "GIN_MODE")
 

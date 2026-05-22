@@ -8,8 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models.models import SysAdmin
+from app.models.models import SysAdmin, SysAdminGroup
 from app.schemas.common import LoginResponse, UserInfo
+from app.services.permissions import parse_power
 
 
 class AuthService:
@@ -104,6 +105,19 @@ class AuthService:
         if not admin:
             return None
 
+        group = None
+        if admin.admin_group_id:
+            group_result = await db.execute(
+                select(SysAdminGroup).where(
+                    SysAdminGroup.id == admin.admin_group_id,
+                    SysAdminGroup.status == 1,
+                )
+            )
+            group = group_result.scalar_one_or_none()
+
+        is_super = bool(group and group.is_super == 1)
+        permissions = ["*"] if is_super else parse_power(group.power if group else None)
+
         return UserInfo(
             admin_id=admin.id,
             username=admin.username,
@@ -112,5 +126,8 @@ class AuthService:
             email=admin.email,
             status=admin.status,
             admin_group_id=admin.admin_group_id,
+            group_name=group.name if group else None,
+            is_super=is_super,
+            permissions=permissions,
             tenant_id=admin.tenant_id,
         )

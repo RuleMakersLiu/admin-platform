@@ -30,6 +30,8 @@ export default function Login() {
         username: userInfo.username,
         realName: userInfo.realName || userInfo.username,
         tenantId: userInfo.tenantId,
+        groupName: userInfo.groupName,
+        isSuper: Boolean(userInfo.isSuper),
         permissions: userInfo.permissions || [],
       })
       message.success('登录成功')
