@@ -308,6 +308,12 @@ func TestBuildPermissionIdentifier(t *testing.T) {
 			method:     "PUT",
 			wantPrefix: "admin:tenant:edit",
 		},
+		{
+			name:       "flow pipeline match",
+			path:       "/api/flow/pipeline/match",
+			method:     "POST",
+			wantPrefix: "flow:pipeline:match",
+		},
 	}
 
 	for _, tt := range tests {

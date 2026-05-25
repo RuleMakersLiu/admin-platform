@@ -20,6 +20,7 @@ import { generatorApi } from '@/services/api'
 import api from '@/services/api'
 import { MarkdownRenderer } from '@/utils/markdown'
 import { extractHtmlBlocks, prepareUIPreviewHtml, repairTruncatedHtml } from '@/utils/sanitize'
+import { saveLastPortalPath, useAuthStore } from '@/stores/auth'
 
 const { TextArea } = Input
 const { Title, Text, Paragraph } = Typography
@@ -90,7 +91,7 @@ const PipelineHistoryList: React.FC<{
         const s = STATUS_COLORS[p.status] || STATUS_COLORS.pending
         const stageName = STAGE_NAMES[p.current_stage] || p.current_stage
         return (
-          <div key={p.pipeline_id} style={{
+          <div key={p.pipeline_id} className="pipeline-history-item workbench-card" style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             padding: '12px 16px', borderRadius: 10, cursor: 'pointer',
             background: '#ffffff',
@@ -98,14 +99,6 @@ const PipelineHistoryList: React.FC<{
             transition: 'all 0.2s',
           }}
             onClick={() => onSelect(p.pipeline_id)}
-            onMouseEnter={e => {
-              e.currentTarget.style.background = '#f5f8ff'
-              e.currentTarget.style.borderColor = '#dce6ff'
-            }}
-            onMouseLeave={e => {
-              e.currentTarget.style.background = '#ffffff'
-              e.currentTarget.style.borderColor = '#e5eaf3'
-            }}
           >
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
@@ -772,6 +765,7 @@ const styles: Styles = {
 
 const PipelinePage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams()
+  const { user } = useAuthStore()
   const initialId = searchParams.get('id') || localStorage.getItem('lastPipelineId') || ''
   const [pipelineId, setPipelineId] = useState<string>(initialId)
   const [pipeline, setPipeline] = useState<PipelineStatus | null>(null)
@@ -802,6 +796,10 @@ const PipelinePage: React.FC = () => {
   const [streamingStage, setStreamingStage] = useState('')
   const [streamOutputByStage, setStreamOutputByStage] = useState<Record<string, string>>({})
   const streamAbortRef = useRef<AbortController | null>(null)
+
+  useEffect(() => {
+    saveLastPortalPath(user, '/pipeline/development')
+  }, [user])
 
   useEffect(() => {
     return () => streamAbortRef.current?.abort()

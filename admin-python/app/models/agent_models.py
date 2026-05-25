@@ -296,6 +296,7 @@ class ProjectKnowledge(Base):
     repo_url: Mapped[Optional[str]] = mapped_column(String(512))
     language: Mapped[Optional[str]] = mapped_column(String(50))
     framework: Mapped[Optional[str]] = mapped_column(String(100))
+    project_brief: Mapped[Optional[str]] = mapped_column(Text)
 
     # LLM 分析结果
     tech_summary: Mapped[Optional[str]] = mapped_column(Text)
@@ -307,6 +308,12 @@ class ProjectKnowledge(Base):
     key_files: Mapped[Optional[str]] = mapped_column(Text)
 
     analysis_status: Mapped[str] = mapped_column(String(20), default="pending")
+    skill_content: Mapped[Optional[str]] = mapped_column(Text)
+    skill_status: Mapped[str] = mapped_column(String(20), default="draft")
+    skill_version: Mapped[int] = mapped_column(Integer, default=1)
+    confirmed_by: Mapped[Optional[int]] = mapped_column(BigInteger)
+    confirmed_at: Mapped[Optional[int]] = mapped_column(BigInteger)
+    analysis_error: Mapped[Optional[str]] = mapped_column(Text)
     raw_files: Mapped[Optional[str]] = mapped_column(Text)
 
     tenant_id: Mapped[int] = mapped_column(BigInteger, default=0)

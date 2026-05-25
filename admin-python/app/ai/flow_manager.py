@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.agents import AgentService
 from app.ai.pipeline_skills import ensure_workspace, get_workspace_path
 from app.ai.skills import skill_registry
-from app.models.agent_models import DevPipeline
+from app.models.agent_models import DevPipeline, ProjectKnowledge
 from app.services.memory_service import MemoryService, MemoryType
 from app.services.user_evolution_service import UserEvolutionService
 from app.core.database import async_session_maker
@@ -63,6 +63,18 @@ STAGE_DEFINITIONS = [
 
 STAGE_KEYS = [s["key"] for s in STAGE_DEFINITIONS]
 STAGE_NAMES = {s["key"]: s["name"] for s in STAGE_DEFINITIONS}
+PIPELINE_MODE_STAGES = {
+    "full": STAGE_KEYS,
+    "frontend_contract_review": [
+        "requirement",
+        "page_design",
+        "prototype",
+        "delivery",
+        "frontend_dev",
+        "code_review",
+        "report",
+    ],
+}
 
 
 def _get_stage_agent(stage_key: str) -> str:
@@ -79,7 +91,12 @@ def _stage_needs_confirm(stage_key: str) -> bool:
     return False
 
 
-def _init_stages() -> Dict[str, Any]:
+def _stage_keys_for_mode(pipeline_mode: str = "full") -> List[str]:
+    return PIPELINE_MODE_STAGES.get(pipeline_mode or "full", STAGE_KEYS)
+
+
+def _init_stages_for_mode(pipeline_mode: str = "full") -> Dict[str, Any]:
+    allowed = set(_stage_keys_for_mode(pipeline_mode))
     return {
         s["key"]: {
             "stage": s["key"],
@@ -94,11 +111,62 @@ def _init_stages() -> Dict[str, Any]:
             "completed_at": None,
         }
         for s in STAGE_DEFINITIONS
+        if s["key"] in allowed
+    }
+
+
+def _init_stages() -> Dict[str, Any]:
+    return _init_stages_for_mode("full")
+
+
+def _validate_project_skill_ready(project_skill: Dict[str, Any]) -> None:
+    status = str(project_skill.get("skill_status") or "").lower()
+    content = str(project_skill.get("skill_content") or "").strip()
+    if status != "confirmed" or not content:
+        raise ValueError("Project skill must be confirmed before creating this pipeline")
+
+
+def _build_pipeline_skill_snapshot(project_skill: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "project_id": str(project_skill.get("project_id") or ""),
+        "project_name": project_skill.get("project_name") or "",
+        "skill_content": project_skill.get("skill_content") or "",
+        "skill_version": project_skill.get("skill_version") or 1,
+        "confirmed_at": project_skill.get("confirmed_at"),
+    }
+
+
+def _build_pipeline_artifact(stages: Dict[str, Any]) -> Dict[str, Any]:
+    preview_stage = stages.get("prototype", {}) or stages.get("ui_preview", {})
+    delivery_stage = stages.get("delivery", {})
+    frontend_stage = stages.get("frontend_dev", {})
+    review_stage = stages.get("code_review", {})
+    review = review_stage.get("structured_output") or {}
+    if not review:
+        review = {"output": review_stage.get("output", "")}
+
+    return {
+        "preview_html": preview_stage.get("preview_html", ""),
+        "api_contract": delivery_stage.get("output", ""),
+        "frontend_files": frontend_stage.get("code_files", {}) or {},
+        "review": review,
+        "report": (stages.get("report", {}) or {}).get("output", ""),
     }
 
 
 # ==================== 默认 Prompt 模板 ====================
 # 可通过 API /flow/prompts/defaults 读取，支持项目级自定义覆盖
+
+def _knowledge_to_project_skill_dict(project_skill: ProjectKnowledge) -> Dict[str, Any]:
+    return {
+        "project_id": project_skill.project_id,
+        "project_name": project_skill.project_name,
+        "skill_content": project_skill.skill_content or "",
+        "skill_status": project_skill.skill_status or "",
+        "skill_version": project_skill.skill_version or 1,
+        "confirmed_at": project_skill.confirmed_at,
+    }
+
 
 DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
     "requirement": """请根据以下用户需求，生成一份完整的需求文档(PRD)。
@@ -563,6 +631,19 @@ def _build_pipeline_prompt(stage_key: str, context: Dict[str, Any],
         prompt += PM_REQUIREMENT_REVIEW_CONTRACT
     if stage_key == "page_design" and "design_quality" not in prompt:
         prompt += PM_PAGE_DESIGN_REVIEW_CONTRACT
+    if stage_key == "code_review" and context.get("pipeline_mode") == "frontend_contract_review":
+        prompt += """
+
+## First-Version Review Scope
+This pipeline only delivers preview HTML, frontend code, API contract, and review results.
+Do not require backend implementation, test execution, commit, or deployment in this mode.
+Focus the review on:
+1. Preview HTML usability: complete HTML, `data-preview-ready="true"`, and `#preview-root`.
+2. Frontend code consistency with the confirmed Project Skill.
+3. API contract completeness: endpoints, methods, params, response shape, error cases, and permissions.
+
+Return FAIL with actionable feedback when any of these three checks is incomplete.
+"""
     return memory_section + fix_section + prompt
 
 
@@ -1331,13 +1412,16 @@ class DevPipelineManager:
                               git_config_id: int = None, git_repo_url: str = "",
                               git_branch: str = "main", skill_config: dict = None,
                               backend_tech: str = "", frontend_tech: str = "",
-                              backend_project_id: str = "", frontend_project_id: str = "") -> str:
+                              backend_project_id: str = "", frontend_project_id: str = "",
+                              pipeline_mode: str = "full") -> str:
         pipeline_id = f"pipe_{uuid.uuid4().hex[:12]}"
         now = int(time.time() * 1000)
-        stages = _init_stages()
+        pipeline_mode = pipeline_mode or "full"
+        stages = _init_stages_for_mode(pipeline_mode)
 
-        # 把技术栈信息存到 skill_config 中，后续 prompt 构建时会用到
-        config = skill_config or {}
+        # Store runtime configuration as a stable snapshot for this pipeline.
+        config = dict(skill_config or {})
+        config["pipeline_mode"] = pipeline_mode
         if backend_tech:
             config["backend_tech"] = backend_tech
         if frontend_tech:
@@ -1347,25 +1431,41 @@ class DevPipelineManager:
         if frontend_project_id:
             config["frontend_project_id"] = frontend_project_id
 
-        db_obj = DevPipeline(
-            pipeline_id=pipeline_id,
-            project_id=project_id,
-            user_request=user_request,
-            status=PipelineStatus.PENDING.value,
-            current_stage="requirement",
-            stages_data=json.dumps(stages, ensure_ascii=False),
-            retry_count=0,
-            tenant_id=tenant_id,
-            creator_id=creator_id,
-            git_config_id=git_config_id,
-            git_repo_url=git_repo_url,
-            git_branch=git_branch,
-            skill_config=json.dumps(config, ensure_ascii=False),
-            create_time=now,
-            update_time=now,
-        )
+        skill_project_id = str(frontend_project_id or project_id or backend_project_id or "")
 
         async with async_session_maker() as session:
+            if pipeline_mode == "frontend_contract_review":
+                if not skill_project_id:
+                    raise ValueError("Project skill project_id is required for frontend_contract_review")
+                result = await session.execute(
+                    select(ProjectKnowledge).where(ProjectKnowledge.project_id == int(skill_project_id))
+                )
+                project_skill = result.scalar_one_or_none()
+                if not project_skill:
+                    raise ValueError("Project skill must be analyzed and confirmed before creating this pipeline")
+                project_skill_dict = _knowledge_to_project_skill_dict(project_skill)
+                _validate_project_skill_ready(project_skill_dict)
+                config["project_skill_snapshot"] = _build_pipeline_skill_snapshot(project_skill_dict)
+                config["output_scope"] = "preview_frontend_contract_review"
+                project_id = project_id or skill_project_id
+
+            db_obj = DevPipeline(
+                pipeline_id=pipeline_id,
+                project_id=project_id,
+                user_request=user_request,
+                status=PipelineStatus.PENDING.value,
+                current_stage=_stage_keys_for_mode(pipeline_mode)[0],
+                stages_data=json.dumps(stages, ensure_ascii=False),
+                retry_count=0,
+                tenant_id=tenant_id,
+                creator_id=creator_id,
+                git_config_id=git_config_id,
+                git_repo_url=git_repo_url,
+                git_branch=git_branch,
+                skill_config=json.dumps(config, ensure_ascii=False),
+                create_time=now,
+                update_time=now,
+            )
             session.add(db_obj)
             await session.commit()
 
@@ -1391,12 +1491,21 @@ class DevPipelineManager:
 
     def _to_status_dict(self, pipe: DevPipeline) -> Dict[str, Any]:
         stages = self._parse_stages(pipe)
+        pipe_config = json.loads(pipe.skill_config or "{}")
+        skill_snapshot = pipe_config.get("project_skill_snapshot") or {}
         return {
             "pipeline_id": pipe.pipeline_id,
             "project_id": pipe.project_id or "",
             "user_request": pipe.user_request or "",
             "status": pipe.status,
             "current_stage": pipe.current_stage,
+            "pipeline_mode": pipe_config.get("pipeline_mode", "full"),
+            "project_skill": {
+                "project_id": skill_snapshot.get("project_id", ""),
+                "project_name": skill_snapshot.get("project_name", ""),
+                "skill_version": skill_snapshot.get("skill_version"),
+                "confirmed_at": skill_snapshot.get("confirmed_at"),
+            } if skill_snapshot else None,
             "stages": stages,
             "retry_count": pipe.retry_count,
             "workspace_path": pipe.workspace_path or "",
@@ -1704,6 +1813,7 @@ class DevPipelineManager:
             "memories_text": memories_text,
             "backend_tech": pipe_config.get("backend_tech", ""),
             "frontend_tech": pipe_config.get("frontend_tech", ""),
+            "pipeline_mode": pipe_config.get("pipeline_mode", "full"),
         }
 
         # 加载关联项目的知识库上下文（上下文工程：语义检索 + 项目知识）
@@ -1711,6 +1821,14 @@ class DevPipelineManager:
         fe_proj_id = pipe_config.get("frontend_project_id", "")
         be_proj_id = pipe_config.get("backend_project_id", "")
         ctx_parts = []
+        project_skill_snapshot = pipe_config.get("project_skill_snapshot") or {}
+        if project_skill_snapshot.get("skill_content"):
+            ctx_parts.append(
+                "## Confirmed Project Skill Snapshot\n"
+                f"Project: {project_skill_snapshot.get('project_name', '')}\n"
+                f"Version: {project_skill_snapshot.get('skill_version', '')}\n\n"
+                f"{project_skill_snapshot.get('skill_content', '')}"
+            )
         if fe_proj_id and stage_key in ("frontend_dev", "prototype", "page_design"):
             from app.services.knowledge_service import get_relevant_context
             ctx = await get_relevant_context(
@@ -1813,6 +1931,8 @@ class DevPipelineManager:
         async with async_session_maker() as session:
             pipe = await self._load_pipeline(session, pipeline_id)
             stages = self._parse_stages(pipe)
+            pipe_config = json.loads(pipe.skill_config or "{}")
+            stage_keys = _stage_keys_for_mode(pipe_config.get("pipeline_mode", "full"))
             fix_feedback = ""
 
             while True:
@@ -2032,8 +2152,10 @@ class DevPipelineManager:
                             pipe.retry_count += 1
                             fix_feedback = parsed.get("fix_suggestions", raw_output[:500])
                             pipe.current_stage = "frontend_dev"
-                            idx = STAGE_KEYS.index("frontend_dev")
-                            for sk in STAGE_KEYS[idx:]:
+                            idx = stage_keys.index("frontend_dev")
+                            for sk in stage_keys[idx:]:
+                                if sk not in stages:
+                                    continue
                                 stages[sk]["status"] = "pending"
                                 stages[sk]["output"] = ""
                                 stages[sk]["error"] = ""
@@ -2071,8 +2193,10 @@ class DevPipelineManager:
                             pipe.retry_count += 1
                             fix_feedback = f"测试发现问题，请修复:\n{parsed.get('bug_details', raw_output[:500])}"
                             pipe.current_stage = "frontend_dev"
-                            idx = STAGE_KEYS.index("frontend_dev")
-                            for sk in STAGE_KEYS[idx:]:
+                            idx = stage_keys.index("frontend_dev")
+                            for sk in stage_keys[idx:]:
+                                if sk not in stages:
+                                    continue
                                 stages[sk]["status"] = "pending"
                                 stages[sk]["output"] = ""
                                 stages[sk]["error"] = ""
@@ -2126,11 +2250,11 @@ class DevPipelineManager:
 
                     # 正常推进到下一阶段
                     try:
-                        idx = STAGE_KEYS.index(current_stage)
+                        idx = stage_keys.index(current_stage)
                     except ValueError:
                         # 旧流水线阶段不在当前定义中，跳到末尾
-                        idx = len(STAGE_KEYS) - 1
-                    if idx + 1 >= len(STAGE_KEYS):
+                        idx = len(stage_keys) - 1
+                    if idx + 1 >= len(stage_keys):
                         pipe.status = PipelineStatus.COMPLETED.value
                         pipe.stages_data = json.dumps(stages, ensure_ascii=False)
                         pipe.update_time = int(time.time() * 1000)
@@ -2145,7 +2269,7 @@ class DevPipelineManager:
                             "message": "流水线全部完成",
                         }
 
-                    next_stage = STAGE_KEYS[idx + 1]
+                    next_stage = stage_keys[idx + 1]
                     pipe.current_stage = next_stage
                     pipe.stages_data = json.dumps(stages, ensure_ascii=False)
                     pipe.update_time = int(time.time() * 1000)
@@ -2276,11 +2400,13 @@ class DevPipelineManager:
                 }
 
             # 确认通过，推进到下一阶段
+            pipe_config = json.loads(pipe.skill_config or "{}")
+            stage_keys = _stage_keys_for_mode(pipe_config.get("pipeline_mode", "full"))
             try:
-                idx = STAGE_KEYS.index(current_stage)
+                idx = stage_keys.index(current_stage)
             except ValueError:
-                idx = len(STAGE_KEYS) - 1
-            if idx + 1 >= len(STAGE_KEYS):
+                idx = len(stage_keys) - 1
+            if idx + 1 >= len(stage_keys):
                 pipe.status = PipelineStatus.COMPLETED.value
                 pipe.stages_data = json.dumps(stages, ensure_ascii=False)
                 pipe.update_time = int(time.time() * 1000)
@@ -2288,7 +2414,7 @@ class DevPipelineManager:
                 await session.commit()
                 return {"pipeline_id": pipeline_id, "status": "completed"}
 
-            next_stage = STAGE_KEYS[idx + 1]
+            next_stage = stage_keys[idx + 1]
             pipe.current_stage = next_stage
             pipe.status = PipelineStatus.PENDING.value
             pipe.stages_data = json.dumps(stages, ensure_ascii=False)
@@ -2324,6 +2450,19 @@ class DevPipelineManager:
                 "preview_html": preview_stage.get("preview_html", ""),
                 "output": preview_stage.get("output", ""),
             }
+
+    async def get_pipeline_artifact(self, pipeline_id: str) -> Dict[str, Any]:
+        async with async_session_maker() as session:
+            pipe = await self._load_pipeline(session, pipeline_id)
+            stages = self._parse_stages(pipe)
+            artifact = _build_pipeline_artifact(stages)
+            pipe_config = json.loads(pipe.skill_config or "{}")
+            artifact.update({
+                "pipeline_id": pipeline_id,
+                "status": pipe.status,
+                "pipeline_mode": pipe_config.get("pipeline_mode", "full"),
+            })
+            return artifact
 
     async def get_stage_output(self, pipeline_id: str, stage: str = "") -> Dict[str, Any]:
         async with async_session_maker() as session:
@@ -2381,18 +2520,19 @@ class DevPipelineManager:
         async with async_session_maker() as session:
             pipe = await self._load_pipeline(session, pipeline_id)
             try:
-                idx = STAGE_KEYS.index(pipe.current_stage)
+                idx = _stage_keys_for_mode(json.loads(pipe.skill_config or "{}").get("pipeline_mode", "full")).index(pipe.current_stage)
             except ValueError:
                 return {"error": "无效阶段"}
 
             if idx == 0:
                 return {"error": "已经是第一阶段"}
 
-            prev_stage = STAGE_KEYS[idx - 1]
+            stage_keys = _stage_keys_for_mode(json.loads(pipe.skill_config or "{}").get("pipeline_mode", "full"))
+            prev_stage = stage_keys[idx - 1]
             stages = self._parse_stages(pipe)
 
             # 重置当前阶段（清空输出）
-            current_key = STAGE_KEYS[idx]
+            current_key = stage_keys[idx]
             stages[current_key]["status"] = "pending"
             stages[current_key]["output"] = ""
             stages[current_key]["structured_output"] = {}

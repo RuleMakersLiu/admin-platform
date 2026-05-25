@@ -1,25 +1,36 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { Layout as AntLayout, Menu, Dropdown, Avatar } from 'antd'
+import { Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { Avatar, Dropdown, Layout as AntLayout, Menu } from 'antd'
 import {
+  AppstoreOutlined,
+  BookOutlined,
+  BugOutlined,
+  CodeOutlined,
+  FolderOutlined,
+  GithubOutlined,
+  LogoutOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
-  SettingOutlined,
-  LogoutOutlined,
-  UserOutlined,
-  RocketOutlined,
-  RobotOutlined,
-  GithubOutlined,
-  BookOutlined,
-  ThunderboltOutlined,
-  CodeOutlined,
   PlusCircleOutlined,
-  FolderOutlined,
-  BugOutlined,
+  RobotOutlined,
+  RocketOutlined,
+  SettingOutlined,
+  SwapOutlined,
+  ThunderboltOutlined,
+  UserOutlined,
 } from '@ant-design/icons'
-import { useAuthStore } from '@/stores/auth'
-import { authApi } from '@/services/api'
 import type { MenuProps } from 'antd'
+import {
+  DEVELOPER_PORTAL_PERMISSIONS,
+  PIPELINE_WORKBENCH_PERMISSIONS,
+  PRODUCT_PORTAL_PERMISSIONS,
+  canUseDeveloperPortal,
+  canUsePipelineWorkbench,
+  canUseProductPortal,
+  saveLastPortalPath,
+  useAuthStore,
+} from '@/stores/auth'
+import { authApi } from '@/services/api'
 import ProfileModal from '@/components/ProfileModal'
 import './Layout.css'
 
@@ -29,7 +40,7 @@ interface MenuItem {
   key: string
   icon?: React.ReactNode
   label: string
-  permission?: string
+  permission?: string | string[]
   children?: MenuItem[]
 }
 
@@ -39,7 +50,8 @@ const menuItems: MenuItem[] = [
     icon: <CodeOutlined />,
     label: '项目管理',
     children: [
-      { key: '/project/create', label: '创建项目', icon: <PlusCircleOutlined /> },
+      { key: '/project/access', label: '项目接入', icon: <ImportIcon />, permission: DEVELOPER_PORTAL_PERMISSIONS },
+      { key: '/project/create', label: '项目创建', icon: <PlusCircleOutlined /> },
       { key: '/project/list', label: '项目列表', icon: <FolderOutlined />, permission: 'project:list:list' },
       { key: '/project/test', label: '测试中心', icon: <BugOutlined />, permission: 'project:test:list' },
     ],
@@ -48,7 +60,10 @@ const menuItems: MenuItem[] = [
     key: '/pipeline',
     icon: <RocketOutlined />,
     label: '开发流水线',
-    permission: 'flow:pipeline:list',
+    children: [
+      { key: '/pipeline/requirement', label: '需求开发', icon: <RocketOutlined />, permission: PRODUCT_PORTAL_PERMISSIONS },
+      { key: '/pipeline/development', label: '开发流水线', icon: <ThunderboltOutlined />, permission: PIPELINE_WORKBENCH_PERMISSIONS },
+    ],
   },
   {
     key: '/system',
@@ -72,6 +87,10 @@ const menuItems: MenuItem[] = [
   },
 ]
 
+function ImportIcon() {
+  return <AppstoreOutlined />
+}
+
 const iconMap: Record<string, React.ReactNode> = {
   setting: <SettingOutlined />,
   user: <UserOutlined />,
@@ -88,24 +107,33 @@ const iconMap: Record<string, React.ReactNode> = {
   RobotOutlined: <RobotOutlined />,
   GithubOutlined: <GithubOutlined />,
   BookOutlined: <BookOutlined />,
+  CodeOutlined: <CodeOutlined />,
+  AppstoreOutlined: <AppstoreOutlined />,
+  RocketOutlined: <RocketOutlined />,
+  ThunderboltOutlined: <ThunderboltOutlined />,
 }
 
-const filterStaticMenus = (items: MenuItem[], hasPermission: (permission: string) => boolean): MenuItem[] => (
+const hiddenServerMenuPaths = new Set(['/portal-select', '/developer', '/product'])
+
+const filterStaticMenus = (items: MenuItem[], hasAnyPermission: (permissions: string[]) => boolean): MenuItem[] => (
   items
     .map((item) => ({
       ...item,
-      children: item.children ? filterStaticMenus(item.children, hasPermission) : undefined,
+      children: item.children ? filterStaticMenus(item.children, hasAnyPermission) : undefined,
     }))
-    .filter((item) => item.children?.length || !item.permission || hasPermission(item.permission))
+    .filter((item) => {
+      const permissions = Array.isArray(item.permission) ? item.permission : item.permission ? [item.permission] : []
+      return item.children?.length || !permissions.length || hasAnyPermission(permissions)
+    })
 )
 
 const transformServerMenus = (items: any[]): MenuItem[] => (
   (items || [])
-    .filter((item) => item.path)
+    .filter((item) => item.path && !hiddenServerMenuPaths.has(item.path))
     .map((item) => ({
       key: item.path,
       icon: iconMap[item.icon] || <SettingOutlined />,
-      label: item.menuName,
+      label: item.menuName || item.name,
       permission: item.permission,
       children: transformServerMenus(item.children || []),
     }))
@@ -115,12 +143,18 @@ const transformServerMenus = (items: any[]): MenuItem[] => (
     }))
 )
 
+const getTopMenuLabel = (items: MenuItem[], pathname: string) => {
+  const firstKey = `/${pathname.split('/')[1] || ''}`
+  const top = items.find((item) => item.key === firstKey || item.children?.some((child) => child.key === pathname))
+  return top?.label || '仪表盘'
+}
+
 export default function LayoutComponent() {
   const [collapsed, setCollapsed] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
-  const { user, logout, hasPermission, setUser } = useAuthStore()
+  const { user, logout, hasAnyPermission, setUser } = useAuthStore()
   const [serverMenus, setServerMenus] = useState<MenuItem[]>([])
 
   useEffect(() => {
@@ -154,8 +188,8 @@ export default function LayoutComponent() {
 
   const visibleMenuItems = useMemo(() => {
     if (serverMenus.length) return serverMenus
-    return filterStaticMenus(menuItems, hasPermission)
-  }, [serverMenus, hasPermission])
+    return filterStaticMenus(menuItems, hasAnyPermission)
+  }, [serverMenus, hasAnyPermission])
 
   const handleMenuClick: MenuProps['onClick'] = ({ key }) => {
     navigate(key)
@@ -170,13 +204,30 @@ export default function LayoutComponent() {
     }
   }
 
+  const portalSwitchItems: MenuProps['items'] = [
+    canUseDeveloperPortal(user) && { key: 'portal:/project/access', icon: <CodeOutlined />, label: '项目接入' },
+    canUseProductPortal(user) && { key: 'portal:/pipeline/requirement', icon: <RocketOutlined />, label: '需求开发' },
+    canUsePipelineWorkbench(user) && { key: 'portal:/pipeline/development', icon: <ThunderboltOutlined />, label: '开发流水线' },
+  ].filter(Boolean) as MenuProps['items']
+
   const userMenuItems: MenuProps['items'] = [
+    portalSwitchItems && portalSwitchItems.length > 1
+      ? { key: 'portal-group', type: 'group', label: '工作门户', children: portalSwitchItems }
+      : null,
+    portalSwitchItems && portalSwitchItems.length > 1 ? { type: 'divider' } : null,
     { key: 'profile', icon: <UserOutlined />, label: '个人中心' },
     { type: 'divider' },
     { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', danger: true },
-  ]
+  ].filter(Boolean) as MenuProps['items']
 
   const handleUserMenuClick: MenuProps['onClick'] = ({ key }) => {
+    const value = String(key)
+    if (value.startsWith('portal:')) {
+      const path = value.replace('portal:', '')
+      saveLastPortalPath(user, path)
+      navigate(path)
+      return
+    }
     if (key === 'profile') {
       setProfileOpen(true)
     } else if (key === 'logout') {
@@ -184,13 +235,11 @@ export default function LayoutComponent() {
     }
   }
 
-  // 获取当前选中的菜单
   const selectedKeys = [location.pathname]
-  const openKeys = ['/' + location.pathname.split('/')[1]]
+  const openKeys = [`/${location.pathname.split('/')[1]}`]
 
   return (
     <AntLayout className="tech-layout">
-      {/* 侧边栏 */}
       <Sider
         trigger={null}
         collapsible
@@ -199,7 +248,6 @@ export default function LayoutComponent() {
         width={240}
         collapsedWidth={80}
       >
-        {/* Logo区域 */}
         <div className="tech-logo-area">
           <div className="tech-logo-icon-wrapper">
             <RocketOutlined className="tech-logo-icon" />
@@ -212,27 +260,23 @@ export default function LayoutComponent() {
           )}
         </div>
 
-        {/* 菜单 */}
         <Menu
           theme="light"
           mode="inline"
           selectedKeys={selectedKeys}
-          defaultOpenKeys={openKeys}
+          openKeys={collapsed ? [] : openKeys}
           items={visibleMenuItems as any}
           onClick={handleMenuClick}
           className="tech-menu"
         />
 
-        {/* 侧边栏底部装饰 */}
         <div className="tech-sider-footer">
           <div className="tech-status-dot"></div>
           {!collapsed && <span className="tech-status-text">系统运行中</span>}
         </div>
       </Sider>
 
-      {/* 主内容区 */}
       <AntLayout className="tech-main">
-        {/* 头部 */}
         <Header className="tech-header">
           <div className="tech-header-left">
             <span
@@ -245,7 +289,7 @@ export default function LayoutComponent() {
               <span className="tech-breadcrumb-item">首页</span>
               <span className="tech-breadcrumb-separator">/</span>
               <span className="tech-breadcrumb-item active">
-                {visibleMenuItems.find(item => item.key === '/' + location.pathname.split('/')[1])?.label || '仪表盘'}
+                {getTopMenuLabel(visibleMenuItems, location.pathname)}
               </span>
             </div>
           </div>
@@ -267,12 +311,12 @@ export default function LayoutComponent() {
                   <span className="tech-user-name">{user?.realName || user?.username}</span>
                   <span className="tech-user-role">{user?.groupName || '管理员'}</span>
                 </div>
+                {portalSwitchItems && portalSwitchItems.length > 1 && <SwapOutlined className="tech-portal-switch-icon" />}
               </div>
             </Dropdown>
           </div>
         </Header>
 
-        {/* 内容区 */}
         <Content className="tech-content">
           <div className="tech-content-inner">
             <Outlet />

@@ -9,9 +9,310 @@ from sqlalchemy import select, update, delete, func, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session_maker
-from app.models.agent_models import AgentKnowledge, KnowledgeEdge
+from app.models.agent_models import AgentKnowledge, KnowledgeEdge, ProjectKnowledge
 
 logger = logging.getLogger(__name__)
+
+
+PROJECT_SKILL_HEADER = "Project Skill"
+PROJECT_SKILL_MATCH_PROMPT = """你是需求入口的项目 Skill 路由器。请根据产品需求，从候选项目中选择最适合执行该需求的一个已确认 Project Skill。
+
+要求：
+1. 只能选择候选列表里的 project_id。
+2. 优先匹配业务领域、页面/模块、API/权限/组件模式，而不是只看技术栈。
+3. 如果多个候选都可用，选择业务语义最接近的项目。
+4. 只输出 JSON，不要输出 markdown。
+
+产品需求：
+{requirement}
+
+候选项目：
+{candidates}
+
+输出格式：
+{{"project_id": 123, "confidence": 0.82, "match_reason": "选择原因，简明说明匹配到的业务关键词和 Skill 能力"}}
+"""
+
+
+def _stringify_list(value: Any) -> List[str]:
+    """Normalize DB JSON/text fields into a short string list."""
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return [str(item) for item in parsed if str(item).strip()]
+        except json.JSONDecodeError:
+            pass
+        return [part.strip() for part in value.splitlines() if part.strip()]
+    return [str(value)]
+
+
+def _attr(obj: Any, name: str, default: Any = "") -> Any:
+    """Read object or dict values with one small helper for testability."""
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
+
+
+def _build_project_skill_content(project: Any) -> str:
+    """Build the human-editable project-level context skill."""
+    project_name = _attr(project, "project_name") or _attr(project, "name") or "Unnamed Project"
+    key_files = _stringify_list(_attr(project, "key_files"))
+    key_file_lines = "\n".join(f"- `{path}`" for path in key_files[:12]) or "- No key files detected"
+
+    return f"""# {PROJECT_SKILL_HEADER}: {project_name}
+
+## Project Brief
+{_attr(project, "project_brief") or _attr(project, "description") or "No project brief provided."}
+
+## Repository
+- URL: {_attr(project, "repo_url") or "N/A"}
+- Language: {_attr(project, "language") or "unknown"}
+- Framework: {_attr(project, "framework") or "unknown"}
+
+## Technical Summary
+{_attr(project, "tech_summary") or "No technical summary available."}
+
+## Architecture
+{_attr(project, "architecture") or "No architecture summary available."}
+
+## UI And Component Patterns
+{_attr(project, "component_patterns") or "No component patterns detected."}
+
+## API Contract Patterns
+{_attr(project, "api_patterns") or "No API patterns detected."}
+
+## Permission Model
+{_attr(project, "permission_model") or "No permission model detected."}
+
+## Coding Style
+{_attr(project, "coding_style") or "Follow the existing repository style."}
+
+## Key Files
+{key_file_lines}
+
+## Development Guardrails
+- Generate preview HTML, frontend code, and API contract first.
+- Do not generate backend implementation in the first-version pipeline.
+- Keep generated frontend code aligned with the existing routing, service, state, and permission patterns.
+- When uncertain, preserve the current repository conventions instead of inventing new abstractions.
+"""
+
+
+def _format_project_skill_context(project: Any) -> str:
+    """Return prompt context only for developer-confirmed project skills."""
+    if (_attr(project, "skill_status") or "").lower() != "confirmed":
+        return ""
+    content = (_attr(project, "skill_content") or "").strip()
+    if not content:
+        return ""
+    project_name = _attr(project, "project_name") or "Project"
+    version = _attr(project, "skill_version") or 1
+    return f"## Confirmed Project Skill: {project_name} (v{version})\n{content}"
+
+
+def _project_skill_to_dict(project: Any) -> Dict:
+    """Return a stable dict for either ORM rows or test dictionaries."""
+    if isinstance(project, dict):
+        data = dict(project)
+        data.setdefault("repo_url", "")
+        data.setdefault("language", "")
+        data.setdefault("framework", "")
+        data.setdefault("project_brief", "")
+        data.setdefault("tech_summary", "")
+        data.setdefault("architecture", "")
+        data.setdefault("component_patterns", "")
+        data.setdefault("api_patterns", "")
+        data.setdefault("permission_model", "")
+        data.setdefault("coding_style", "")
+        data.setdefault("key_files", [])
+        data.setdefault("analysis_status", "")
+        data.setdefault("skill_content", "")
+        data.setdefault("skill_status", "")
+        data.setdefault("skill_version", 1)
+        data.setdefault("confirmed_by", None)
+        data.setdefault("confirmed_at", None)
+        data.setdefault("analysis_error", "")
+        return data
+    return _knowledge_to_dict(project)
+
+
+def _extract_match_terms(text: str) -> List[str]:
+    """Extract simple Latin tokens and CJK n-grams for deterministic matching."""
+    import re
+
+    normalized = (text or "").lower()
+    terms = set(re.findall(r"[a-z0-9_]{2,}", normalized))
+    cjk_chunks = re.findall(r"[\u4e00-\u9fff]+", normalized)
+    for chunk in cjk_chunks:
+        if len(chunk) <= 4:
+            terms.add(chunk)
+            continue
+        for size in (2, 3, 4):
+            for index in range(0, len(chunk) - size + 1):
+                terms.add(chunk[index:index + size])
+    stop_terms = {
+        "新增", "增加", "页面", "功能", "需求", "包含", "需要", "支持", "进行",
+        "以及", "一个", "用户", "管理", "后台", "列表", "表格",
+    }
+    return sorted(term for term in terms if term not in stop_terms)
+
+
+def _project_skill_match_text(skill: Dict) -> str:
+    fields = [
+        "project_name",
+        "language",
+        "framework",
+        "project_brief",
+        "tech_summary",
+        "architecture",
+        "component_patterns",
+        "api_patterns",
+        "permission_model",
+        "coding_style",
+        "skill_content",
+    ]
+    parts = [str(skill.get(field) or "") for field in fields]
+    parts.extend(_stringify_list(skill.get("key_files")))
+    return "\n".join(parts).lower()
+
+
+def select_project_skill_match(requirement: str, candidates: List[Any]) -> Optional[Dict]:
+    """Select the most relevant confirmed Project Skill for a product requirement.
+
+    The LLM-backed service uses this same output shape as a deterministic fallback,
+    which keeps tests stable and makes the match reason explainable when LLM config
+    is unavailable.
+    """
+    requirement = (requirement or "").strip()
+    if not requirement:
+        return None
+
+    skills = [
+        _project_skill_to_dict(candidate)
+        for candidate in candidates
+        if (_attr(candidate, "skill_status") or "").lower() == "confirmed"
+        and (_attr(candidate, "skill_content") or "").strip()
+    ]
+    if not skills:
+        return None
+
+    terms = _extract_match_terms(requirement)
+    scored = []
+    for skill in skills:
+        text = _project_skill_match_text(skill)
+        matched_terms = [term for term in terms if term in text]
+        score = 0.0
+        for term in matched_terms:
+            if term in str(skill.get("project_name") or "").lower():
+                score += 2.5
+            elif term in str(skill.get("project_brief") or "").lower():
+                score += 2.0
+            elif term in str(skill.get("skill_content") or "").lower():
+                score += 1.5
+            else:
+                score += 1.0
+        if requirement.lower() in text:
+            score += 4.0
+        score += min(float(skill.get("skill_version") or 1) * 0.01, 0.08)
+        scored.append((score, len(matched_terms), skill, matched_terms))
+
+    scored.sort(key=lambda item: (item[0], item[1], int(item[2].get("skill_version") or 0)), reverse=True)
+    best_score, _, best_skill, matched_terms = scored[0]
+    confidence = (
+        0.12
+        if best_score <= 0
+        else min(0.95, round(0.25 + (best_score / (best_score + 12.0)) * 0.7, 2))
+    )
+    highlighted_terms = matched_terms[:8]
+    match_reason = (
+        f"规则兜底匹配到关键词：{', '.join(highlighted_terms)}"
+        if highlighted_terms
+        else "规则兜底未发现强业务关键词，选择最新的已确认 Project Skill"
+    )
+
+    return {
+        "skill": best_skill,
+        "confidence": confidence,
+        "match_reason": match_reason,
+        "match_source": "rule",
+        "candidates_considered": len(skills),
+    }
+
+
+def _build_match_candidate_prompt(skills: List[Dict]) -> str:
+    brief_candidates = []
+    for skill in skills[:20]:
+        brief_candidates.append({
+            "project_id": skill.get("project_id"),
+            "project_name": skill.get("project_name"),
+            "language": skill.get("language"),
+            "framework": skill.get("framework"),
+            "project_brief": (skill.get("project_brief") or "")[:300],
+            "tech_summary": (skill.get("tech_summary") or "")[:240],
+            "skill_excerpt": (skill.get("skill_content") or "")[:600],
+        })
+    return json.dumps(brief_candidates, ensure_ascii=False, indent=2)
+
+
+def _parse_match_json(raw: str) -> Optional[Dict]:
+    if not raw:
+        return None
+    text = str(raw).strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        text = "\n".join(lines[1:])
+        if text.endswith("```"):
+            text = text[:-3]
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    if start < 0 or end <= start:
+        return None
+    try:
+        return json.loads(text[start:end])
+    except json.JSONDecodeError:
+        return None
+
+
+async def _select_project_skill_match_with_llm(requirement: str, skills: List[Dict]) -> Optional[Dict]:
+    try:
+        from app.ai.agents import AgentFactory
+        async with async_session_maker() as cfg_session:
+            await AgentFactory.load_llm_from_db(cfg_session)
+        agent = AgentFactory.get_agent("PM")
+        if not agent:
+            return None
+        prompt = PROJECT_SKILL_MATCH_PROMPT.format(
+            requirement=requirement,
+            candidates=_build_match_candidate_prompt(skills),
+        )
+        raw_output = await agent.process(prompt, [])
+        parsed = _parse_match_json(raw_output)
+    except Exception as e:
+        logger.warning(f"LLM project Skill match failed, using deterministic fallback: {e}")
+        return None
+
+    if not parsed:
+        return None
+    selected_id = str(parsed.get("project_id") or "")
+    selected = next((skill for skill in skills if str(skill.get("project_id")) == selected_id), None)
+    if not selected:
+        return None
+    try:
+        confidence = float(parsed.get("confidence", 0.75))
+    except (TypeError, ValueError):
+        confidence = 0.75
+    return {
+        "skill": selected,
+        "confidence": max(0.0, min(0.99, round(confidence, 2))),
+        "match_reason": str(parsed.get("match_reason") or "LLM selected the closest confirmed Project Skill."),
+        "match_source": "llm",
+        "candidates_considered": len(skills),
+    }
 
 
 class KnowledgeService:
@@ -701,7 +1002,6 @@ ANALYSIS_PROMPT = """你是一个资深的技术架构分析师。请分析以�
 
 async def analyze_project(project_id: str) -> Optional[Dict]:
     """分析项目并存储到知识库。后台任务，不阻塞调用方。"""
-    from app.models.agent_models import ProjectKnowledge
     import httpx
 
     # 检查是否已分析过
@@ -710,9 +1010,15 @@ async def analyze_project(project_id: str) -> Optional[Dict]:
             select(ProjectKnowledge).where(ProjectKnowledge.project_id == int(project_id))
         )
         existing = result.scalar_one_or_none()
-        if existing and existing.analysis_status == "done":
+        if existing and existing.analysis_status == "done" and existing.skill_content:
             logger.info(f"Project {project_id} already analyzed")
             return _knowledge_to_dict(existing)
+        if existing:
+            existing.analysis_status = "analyzing"
+            existing.skill_status = "analyzing"
+            existing.analysis_error = None
+            existing.update_time = int(time.time() * 1000)
+            await session.commit()
 
     # 获取项目信息
     try:
@@ -728,19 +1034,32 @@ async def analyze_project(project_id: str) -> Optional[Dict]:
     project_name = proj.get("name", "")
     language = proj.get("language", "")
     framework = proj.get("framework", "")
+    project_brief = (
+        proj.get("project_brief")
+        or proj.get("brief")
+        or proj.get("description")
+        or ""
+    )
 
-    # 创建知识记录
+    # 创建或更新知识记录
     async with async_session_maker() as session:
-        knowledge = ProjectKnowledge(
-            project_id=int(project_id),
-            project_name=project_name,
-            repo_url=proj.get("repo_url", ""),
-            language=language,
-            framework=framework,
-            analysis_status="analyzing",
-            tenant_id=proj.get("tenant_id", 0),
+        result = await session.execute(
+            select(ProjectKnowledge).where(ProjectKnowledge.project_id == int(project_id))
         )
-        session.add(knowledge)
+        knowledge = result.scalar_one_or_none()
+        if not knowledge:
+            knowledge = ProjectKnowledge(project_id=int(project_id))
+            session.add(knowledge)
+        knowledge.project_name = project_name
+        knowledge.repo_url = proj.get("repo_url", "")
+        knowledge.language = language
+        knowledge.framework = framework
+        knowledge.project_brief = project_brief
+        knowledge.analysis_status = "analyzing"
+        knowledge.skill_status = "analyzing"
+        knowledge.analysis_error = None
+        knowledge.tenant_id = proj.get("tenant_id", 0)
+        knowledge.update_time = int(time.time() * 1000)
         await session.commit()
 
     # 拉取项目文件
@@ -758,10 +1077,13 @@ async def analyze_project(project_id: str) -> Optional[Dict]:
             )
             k = result.scalar_one_or_none()
             if k:
-                k.tech_summary = f"{language}/{framework} 项目，暂无源码"
-                k.analysis_status = "done"
+                k.tech_summary = f"{language}/{framework} project, no source files loaded"
+                k.analysis_status = "failed"
+                k.skill_status = "failed"
+                k.analysis_error = "No source files were loaded from the Git project"
                 k.update_time = int(time.time() * 1000)
                 await session.commit()
+                return _knowledge_to_dict(k)
         return None
 
     files_text = _select_key_files(files, language, framework)
@@ -799,8 +1121,17 @@ async def analyze_project(project_id: str) -> Optional[Dict]:
             k.key_files = json.dumps(analysis.get("key_files", []), ensure_ascii=False)
             k.raw_files = files_text[:8000]
             k.analysis_status = "done"
+            next_skill_version = (k.skill_version or 0) + 1 if k.skill_content else 1
+            k.skill_content = _build_project_skill_content(k)
+            k.skill_status = "draft"
+            k.skill_version = next_skill_version
+            k.confirmed_by = None
+            k.confirmed_at = None
+            k.analysis_error = None
             k.update_time = int(time.time() * 1000)
             await session.commit()
+            await session.refresh(k)
+            analysis = _knowledge_to_dict(k)
 
     # 同步到通用知识库（方便搜索）
     try:
@@ -839,6 +1170,9 @@ async def get_project_knowledge_text(project_id: str) -> Optional[str]:
         k = result.scalar_one_or_none()
         if not k or k.analysis_status != "done":
             return None
+        confirmed_skill = _format_project_skill_context(k)
+        if confirmed_skill:
+            return confirmed_skill
 
     sections = []
     if k.tech_summary:
@@ -921,10 +1255,132 @@ def _parse_analysis_json(raw: str) -> Dict:
 
 
 def _knowledge_to_dict(k) -> Dict:
-    return {"tech_summary": k.tech_summary or "", "architecture": k.architecture or "",
-            "component_patterns": k.component_patterns or "", "api_patterns": k.api_patterns or "",
-            "permission_model": k.permission_model or "", "coding_style": k.coding_style or "",
-            "key_files": json.loads(k.key_files or "[]")}
+    return {
+        "project_id": k.project_id,
+        "project_name": k.project_name,
+        "repo_url": k.repo_url or "",
+        "language": k.language or "",
+        "framework": k.framework or "",
+        "project_brief": k.project_brief or "",
+        "tech_summary": k.tech_summary or "",
+        "architecture": k.architecture or "",
+        "component_patterns": k.component_patterns or "",
+        "api_patterns": k.api_patterns or "",
+        "permission_model": k.permission_model or "",
+        "coding_style": k.coding_style or "",
+        "key_files": json.loads(k.key_files or "[]"),
+        "analysis_status": k.analysis_status or "",
+        "skill_content": k.skill_content or "",
+        "skill_status": k.skill_status or "",
+        "skill_version": k.skill_version or 1,
+        "confirmed_by": k.confirmed_by,
+        "confirmed_at": k.confirmed_at,
+        "analysis_error": k.analysis_error or "",
+    }
+
+
+async def get_project_skill(project_id: str) -> Optional[Dict]:
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(ProjectKnowledge).where(ProjectKnowledge.project_id == int(project_id))
+        )
+        k = result.scalar_one_or_none()
+        if not k:
+            return None
+        if k.analysis_status == "done" and not k.skill_content:
+            k.skill_content = _build_project_skill_content(k)
+            k.skill_status = "draft"
+            k.skill_version = k.skill_version or 1
+            k.update_time = int(time.time() * 1000)
+            await session.commit()
+            await session.refresh(k)
+        return _knowledge_to_dict(k)
+
+
+async def match_project_skill_for_requirement(requirement: str, tenant_id: int = 0) -> Optional[Dict]:
+    """Match a product requirement to one confirmed Project Skill."""
+    requirement = (requirement or "").strip()
+    if not requirement:
+        return None
+
+    async with async_session_maker() as session:
+        conditions = [
+            ProjectKnowledge.skill_status == "confirmed",
+            ProjectKnowledge.skill_content.isnot(None),
+        ]
+        if tenant_id > 0:
+            # Keep tenant isolation while still allowing old project_knowledge rows
+            # that were created before tenant_id was consistently populated.
+            conditions.append(ProjectKnowledge.tenant_id.in_([tenant_id, 0]))
+        result = await session.execute(
+            select(ProjectKnowledge)
+            .where(and_(*conditions))
+            .order_by(ProjectKnowledge.update_time.desc())
+            .limit(50)
+        )
+        rows = result.scalars().all()
+
+    skills = [_knowledge_to_dict(row) for row in rows if (row.skill_content or "").strip()]
+    if not skills:
+        return None
+
+    llm_match = await _select_project_skill_match_with_llm(requirement, skills)
+    if llm_match:
+        return llm_match
+    return select_project_skill_match(requirement, skills)
+
+
+async def update_project_skill(
+    project_id: str,
+    skill_content: Optional[str] = None,
+    project_brief: Optional[str] = None,
+) -> Optional[Dict]:
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(ProjectKnowledge).where(ProjectKnowledge.project_id == int(project_id))
+        )
+        k = result.scalar_one_or_none()
+        if not k:
+            return None
+        if project_brief is not None:
+            k.project_brief = project_brief
+        if skill_content is not None:
+            k.skill_content = skill_content
+            k.skill_status = "draft"
+            k.skill_version = (k.skill_version or 0) + 1
+            k.confirmed_by = None
+            k.confirmed_at = None
+        elif project_brief is not None:
+            k.skill_content = _build_project_skill_content(k)
+            k.skill_status = "draft"
+            k.skill_version = (k.skill_version or 0) + 1
+            k.confirmed_by = None
+            k.confirmed_at = None
+        k.update_time = int(time.time() * 1000)
+        await session.commit()
+        await session.refresh(k)
+        return _knowledge_to_dict(k)
+
+
+async def confirm_project_skill(project_id: str, confirmed_by: int = 0) -> Optional[Dict]:
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(ProjectKnowledge).where(ProjectKnowledge.project_id == int(project_id))
+        )
+        k = result.scalar_one_or_none()
+        if not k:
+            return None
+        if k.analysis_status == "failed":
+            raise ValueError(k.analysis_error or "Project analysis failed; re-run analysis before confirming the skill")
+        if not (k.skill_content or "").strip():
+            k.skill_content = _build_project_skill_content(k)
+        k.skill_status = "confirmed"
+        k.confirmed_by = confirmed_by or None
+        k.confirmed_at = int(time.time() * 1000)
+        k.update_time = k.confirmed_at
+        await session.commit()
+        await session.refresh(k)
+        return _knowledge_to_dict(k)
 
 
 # ==================== 上下文工程增强 ====================

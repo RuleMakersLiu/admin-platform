@@ -24,6 +24,10 @@ class CreatePipelineRequest(BaseModel):
     frontend_tech: Optional[str] = Field(default="", description="前端技术栈 如 javascript/vue")
 
 
+class MatchProjectSkillRequest(BaseModel):
+    user_request: str = Field(default="", description="产品需求描述")
+
+
 class ExecuteStageRequest(BaseModel):
     user_input: Optional[str] = Field(default="", description="用户补充输入")
 
@@ -31,6 +35,11 @@ class ExecuteStageRequest(BaseModel):
 class ConfirmStageRequest(BaseModel):
     confirmed: bool = Field(..., description="是否确认")
     feedback: Optional[str] = Field(default="", description="修订反馈")
+
+
+class UpdateProjectSkillRequest(BaseModel):
+    project_brief: Optional[str] = Field(default=None, description="Project brief")
+    skill_content: Optional[str] = Field(default=None, description="Project Skill Markdown")
 
 
 def _get_tenant_id(request: Request) -> int:
@@ -65,6 +74,11 @@ async def create_pipeline(request: CreatePipelineRequest, http_request: Request)
 
         tenant_id = _get_tenant_id(http_request)
         admin_id = _get_admin_id(http_request)
+        raw_body = {}
+        try:
+            raw_body = await http_request.json()
+        except Exception:
+            raw_body = {}
         pipeline_id = await pipeline_manager.create_pipeline(
             project_id=request.project_id,
             user_request=request.user_request.strip(),
@@ -78,6 +92,7 @@ async def create_pipeline(request: CreatePipelineRequest, http_request: Request)
             frontend_tech=request.frontend_tech or "",
             backend_project_id=request.backend_project_id or "",
             frontend_project_id=request.frontend_project_id or "",
+            pipeline_mode=raw_body.get("pipeline_mode") or "full",
         )
         return {
             "code": 200,
@@ -86,8 +101,27 @@ async def create_pipeline(request: CreatePipelineRequest, http_request: Request)
         }
     except HTTPException:
         raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/pipeline/match")
+async def match_project_skill(request: MatchProjectSkillRequest, http_request: Request):
+    """Match a product requirement to a confirmed project Skill."""
+    if not request.user_request or not request.user_request.strip():
+        raise HTTPException(status_code=400, detail="需求描述不能为空")
+
+    from app.services.knowledge_service import match_project_skill_for_requirement
+
+    match = await match_project_skill_for_requirement(
+        request.user_request.strip(),
+        tenant_id=_get_tenant_id(http_request),
+    )
+    if not match:
+        raise HTTPException(status_code=404, detail="未找到可用的已确认项目 Skill，请先由开发角色完成项目接入和 Skill 确认")
+    return {"code": 200, "message": "匹配成功", "data": match}
 
 
 @router.post("/pipeline/{pipeline_id}/execute")
@@ -161,6 +195,46 @@ async def get_preview(pipeline_id: str):
         return {"code": 200, "message": "查询成功", "data": preview}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/pipeline/{pipeline_id}/artifact")
+async def get_pipeline_artifact(pipeline_id: str):
+    """Get the first-version deliverables: preview, frontend files, API contract, and review."""
+    try:
+        artifact = await pipeline_manager.get_pipeline_artifact(pipeline_id)
+        return {"code": 200, "message": "查询成功", "data": artifact}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/pipeline/{pipeline_id}/frontend-download")
+async def download_frontend_files(pipeline_id: str):
+    """Download generated frontend files as a zip archive."""
+    import io
+    import zipfile
+
+    try:
+        artifact = await pipeline_manager.get_pipeline_artifact(pipeline_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    files = artifact.get("frontend_files") or {}
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        if not files:
+            archive.writestr("README.md", "No generated frontend files are available yet.\n")
+        for raw_path, content in files.items():
+            safe_path = str(raw_path).replace("\\", "/").lstrip("/")
+            safe_path = "/".join(part for part in safe_path.split("/") if part not in ("", ".", ".."))
+            if not safe_path:
+                continue
+            archive.writestr(safe_path, content if isinstance(content, str) else json.dumps(content, ensure_ascii=False, indent=2))
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{pipeline_id}-frontend.zip"'},
+    )
 
 
 @router.get("/pipeline/{pipeline_id}/output")
@@ -454,5 +528,52 @@ async def get_project_knowledge_api(project_id: str):
             "coding_style": k.coding_style,
             "key_files": json.loads(k.key_files) if k.key_files else [],
             "analysis_status": k.analysis_status,
+            "project_brief": k.project_brief,
+            "skill_content": k.skill_content,
+            "skill_status": k.skill_status,
+            "skill_version": k.skill_version,
+            "confirmed_by": k.confirmed_by,
+            "confirmed_at": k.confirmed_at,
+            "analysis_error": k.analysis_error,
         }
     }
+
+
+@router.get("/projects/{project_id}/skill")
+async def get_project_skill_api(project_id: str):
+    """Get the project-level Skill draft/confirmed state."""
+    from app.services.knowledge_service import get_project_skill
+
+    skill = await get_project_skill(project_id)
+    if not skill:
+        return {"code": 200, "message": "未分析", "data": None}
+    return {"code": 200, "message": "查询成功", "data": skill}
+
+
+@router.put("/projects/{project_id}/skill")
+async def update_project_skill_api(project_id: str, request: UpdateProjectSkillRequest):
+    """Save developer-edited project Skill content and return it to draft state."""
+    from app.services.knowledge_service import update_project_skill
+
+    skill = await update_project_skill(
+        project_id,
+        skill_content=request.skill_content,
+        project_brief=request.project_brief,
+    )
+    if not skill:
+        raise HTTPException(status_code=404, detail="项目知识不存在，请先触发项目分析")
+    return {"code": 200, "message": "保存成功", "data": skill}
+
+
+@router.post("/projects/{project_id}/skill/confirm")
+async def confirm_project_skill_api(project_id: str, http_request: Request):
+    """Confirm a project Skill so product pipelines can use it."""
+    from app.services.knowledge_service import confirm_project_skill
+
+    try:
+        skill = await confirm_project_skill(project_id, confirmed_by=_get_admin_id(http_request))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not skill:
+        raise HTTPException(status_code=404, detail="项目知识不存在，请先触发项目分析")
+    return {"code": 200, "message": "确认成功", "data": skill}

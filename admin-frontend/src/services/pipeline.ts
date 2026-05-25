@@ -32,6 +32,41 @@ export interface PipelineStatus {
   updated_at: string
 }
 
+export interface ProjectSkill {
+  project_id: number
+  project_name: string
+  repo_url: string
+  language: string
+  framework: string
+  project_brief: string
+  skill_content: string
+  skill_status: 'analyzing' | 'draft' | 'confirmed' | 'failed' | string
+  skill_version: number
+  confirmed_by?: number | null
+  confirmed_at?: number | null
+  analysis_status: string
+  analysis_error?: string
+}
+
+export interface ProjectSkillMatch {
+  skill: ProjectSkill
+  confidence: number
+  match_reason: string
+  match_source: 'llm' | 'rule' | string
+  candidates_considered: number
+}
+
+export interface PipelineArtifact {
+  pipeline_id: string
+  status: string
+  pipeline_mode: string
+  preview_html: string
+  api_contract: string
+  frontend_files: Record<string, string>
+  review: Record<string, any>
+  report: string
+}
+
 export interface PipelineListItem {
   pipeline_id: string
   project_id: string
@@ -78,9 +113,13 @@ export const pipelineApi = {
     frontend_project_id?: string
     backend_tech?: string
     frontend_tech?: string
+    pipeline_mode?: string
     skill_config?: Record<string, unknown>
   }) =>
     api.post(`${BASE}/create`, data) as any as Promise<{ pipeline_id: string; status: string }>,
+
+  matchProjectSkill: (data: { user_request: string }) =>
+    api.post(`${BASE}/match`, data) as any as Promise<ProjectSkillMatch>,
 
   execute: (id: string, user_input?: string) =>
     api.post(`${BASE}/${id}/execute`, { user_input: user_input || '' }, { timeout: 300000 }) as any,
@@ -152,6 +191,13 @@ export const pipelineApi = {
   getPreview: (id: string) =>
     api.get(`${BASE}/${id}/preview`) as any as Promise<{ preview_html: string; output: string }>,
 
+  getArtifact: (id: string) =>
+    api.get(`${BASE}/${id}/artifact`) as any as Promise<PipelineArtifact>,
+
+  downloadFrontend: (id: string) => {
+    window.open(`/api${BASE}/${id}/frontend-download`, '_blank')
+  },
+
   getOutput: (id: string, stage?: string) =>
     api.get(`${BASE}/${id}/output`, { params: { stage: stage || '' } }) as any,
 
@@ -173,4 +219,19 @@ export const pipelineApi = {
 
   updateProjectPrompts: (projectCode: string, prompts: Record<string, string>) =>
     api.put(`/flow/projects/${projectCode}/prompts`, { prompts }) as any,
+
+  analyzeProject: (projectId: string | number) =>
+    api.post(`/flow/projects/${projectId}/analyze`) as any,
+
+  getProjectSkill: (projectId: string | number) =>
+    api.get(`/flow/projects/${projectId}/skill`) as any as Promise<ProjectSkill | null>,
+
+  updateProjectSkill: (
+    projectId: string | number,
+    data: { project_brief?: string; skill_content?: string },
+  ) =>
+    api.put(`/flow/projects/${projectId}/skill`, data) as any as Promise<ProjectSkill>,
+
+  confirmProjectSkill: (projectId: string | number) =>
+    api.post(`/flow/projects/${projectId}/skill/confirm`) as any as Promise<ProjectSkill>,
 }

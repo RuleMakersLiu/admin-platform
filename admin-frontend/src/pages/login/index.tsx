@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Form, Input, Button, message } from 'antd'
 import { UserOutlined, LockOutlined, RocketOutlined } from '@ant-design/icons'
-import { useAuthStore } from '@/stores/auth'
+import { resolveLandingPath, useAuthStore } from '@/stores/auth'
 import { authApi } from '@/services/api'
 import './login.css'
 
@@ -25,7 +25,7 @@ export default function Login() {
       setToken(data.token)
       // 获取用户信息
       const userInfo: any = await authApi.getInfo()
-      setUser({
+      const user = {
         adminId: userInfo.adminId,
         username: userInfo.username,
         realName: userInfo.realName || userInfo.username,
@@ -33,10 +33,11 @@ export default function Login() {
         groupName: userInfo.groupName,
         isSuper: Boolean(userInfo.isSuper),
         permissions: userInfo.permissions || [],
-      })
+      }
+      setUser(user)
       message.success('登录成功')
       // 使用硬导航确保页面刷新后能正确读取 persist 存储的 token
-      window.location.href = '/'
+      window.location.href = resolveLandingPath(user)
     } catch (error) {
       // 错误已在拦截器处理
     } finally {
