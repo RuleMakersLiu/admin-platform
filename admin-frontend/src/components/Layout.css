@@ -1,13 +1,14 @@
-/* 科技风主布局 */
 .tech-layout {
   min-height: 100vh;
-  background: #0f172a;
+  background:
+    radial-gradient(circle at 14% 8%, rgba(49, 92, 246, 0.08), transparent 28%),
+    linear-gradient(180deg, #fbfdff 0%, #f6f8fc 100%);
 }
 
-/* 侧边栏 */
 .tech-sider {
-  background: #0b1120 !important;
-  border-right: 1px solid rgba(148, 163, 184, 0.16) !important;
+  background: rgba(255, 255, 255, 0.96) !important;
+  border-right: 1px solid #e8eef7 !important;
+  box-shadow: 8px 0 30px rgba(15, 23, 42, 0.04);
   position: relative;
   overflow: hidden;
 }
@@ -19,10 +20,9 @@
   right: 0;
   width: 1px;
   height: 100%;
-  background: linear-gradient(180deg, transparent, rgba(96, 165, 250, 0.28), transparent);
+  background: linear-gradient(180deg, transparent, rgba(49, 92, 246, 0.22), transparent);
 }
 
-/* Logo区域 */
 .tech-logo-area {
   height: 80px;
   display: flex;
@@ -30,7 +30,7 @@
   justify-content: center;
   gap: 12px;
   padding: 0 20px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  border-bottom: 1px solid #edf1f7;
   position: relative;
   overflow: hidden;
 }
@@ -39,10 +39,10 @@
   content: '';
   position: absolute;
   bottom: 0;
-  left: 0;
-  width: 100%;
+  left: 18px;
+  right: 18px;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(96, 165, 250, 0.22), transparent);
+  background: linear-gradient(90deg, transparent, rgba(49, 92, 246, 0.28), transparent);
 }
 
 .tech-logo-icon-wrapper {
@@ -51,14 +51,15 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(37, 99, 235, 0.16);
+  background: linear-gradient(135deg, #eef4ff, #ffffff);
+  border: 1px solid #dce6ff;
   border-radius: 10px;
-  border: 1px solid rgba(96, 165, 250, 0.24);
+  box-shadow: 0 10px 24px rgba(49, 92, 246, 0.12);
 }
 
-.tech-logo-icon {
+.tech-sider .tech-logo-icon {
   font-size: 22px;
-  color: #93c5fd;
+  color: #315cf6;
 }
 
 .tech-logo-text {
@@ -70,18 +71,17 @@
 .tech-logo-title {
   font-size: 18px;
   font-weight: 700;
-  color: #f8fafc;
+  color: #101828;
   letter-spacing: 0;
 }
 
 .tech-logo-subtitle {
   font-size: 10px;
-  color: #94a3b8;
+  color: #7b8496;
   letter-spacing: 0;
   text-transform: uppercase;
 }
 
-/* 菜单样式 */
 .tech-menu {
   border: none !important;
   background: transparent !important;
@@ -94,26 +94,27 @@
   border-radius: 8px !important;
   height: 44px !important;
   line-height: 44px !important;
-  color: #94a3b8 !important;
-  transition: all 0.3s ease !important;
+  color: #445066 !important;
+  transition: all 0.2s ease !important;
 }
 
 .tech-menu .ant-menu-item:hover,
 .tech-menu .ant-menu-submenu-title:hover {
-  color: #dbeafe !important;
-  background: rgba(59, 130, 246, 0.12) !important;
+  color: #315cf6 !important;
+  background: #f3f6ff !important;
 }
 
 .tech-menu .ant-menu-item-selected {
-  background: rgba(37, 99, 235, 0.18) !important;
-  color: #bfdbfe !important;
-  border-left: 3px solid #60a5fa;
+  background: #edf3ff !important;
+  color: #315cf6 !important;
+  border-left: 3px solid #315cf6;
   margin-left: 12px !important;
   padding-left: 13px !important;
+  box-shadow: inset 0 0 0 1px rgba(49, 92, 246, 0.05);
 }
 
 .tech-menu .ant-menu-sub {
-  background: rgba(15, 23, 42, 0.62) !important;
+  background: #f8fafd !important;
   border-radius: 8px !important;
   margin: 4px 12px !important;
 }
@@ -125,7 +126,6 @@
   font-size: 13px;
 }
 
-/* 侧边栏底部状态 */
 .tech-sider-footer {
   position: absolute;
   bottom: 0;
@@ -136,14 +136,14 @@
   align-items: center;
   justify-content: center;
   gap: 10px;
-  border-top: 1px solid rgba(148, 163, 184, 0.14);
-  background: rgba(15, 23, 42, 0.78);
+  border-top: 1px solid #edf1f7;
+  background: rgba(255, 255, 255, 0.9);
 }
 
 .tech-status-dot {
   width: 8px;
   height: 8px;
-  background: #22c55e;
+  background: #16a34a;
   border-radius: 50%;
   animation: statusPulse 2s ease-in-out infinite;
 }
@@ -154,20 +154,19 @@
     transform: scale(1);
   }
   50% {
-    opacity: 0.5;
-    transform: scale(0.8);
+    opacity: 0.55;
+    transform: scale(0.86);
   }
 }
 
 .tech-status-text {
   font-size: 12px;
-  color: #94a3b8;
+  color: #667085;
   letter-spacing: 0;
 }
 
-/* 主内容区 */
 .tech-main {
-  background: #0f172a;
+  background: transparent;
   position: relative;
 }
 
@@ -175,12 +174,14 @@
   display: none;
 }
 
-/* 头部 */
 .tech-header {
   height: 70px !important;
   padding: 0 24px !important;
-  background: rgba(15, 23, 42, 0.95) !important;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.16) !important;
+  background: rgba(255, 255, 255, 0.92) !important;
+  border-bottom: 1px solid #e8eef7 !important;
+  box-shadow: 0 8px 26px rgba(15, 23, 42, 0.04);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   display: flex !important;
   align-items: center !important;
   justify-content: space-between !important;
@@ -200,16 +201,16 @@
 
 .tech-collapse-btn {
   font-size: 20px;
-  color: #94a3b8;
+  color: #667085;
   cursor: pointer;
   padding: 8px;
   border-radius: 8px;
-  transition: all 0.3s ease;
+  transition: all 0.2s ease;
 }
 
 .tech-collapse-btn:hover {
-  color: #bfdbfe;
-  background: rgba(59, 130, 246, 0.12);
+  color: #315cf6;
+  background: #f3f6ff;
 }
 
 .tech-breadcrumb {
@@ -220,15 +221,16 @@
 }
 
 .tech-breadcrumb-item {
-  color: #94a3b8;
+  color: #7b8496;
 }
 
 .tech-breadcrumb-item.active {
-  color: #bfdbfe;
+  color: #111827;
+  font-weight: 600;
 }
 
 .tech-breadcrumb-separator {
-  color: #475569;
+  color: #c4ccd8;
 }
 
 .tech-header-right {
@@ -237,7 +239,6 @@
   gap: 20px;
 }
 
-/* 用户下拉 */
 .tech-user-dropdown {
   display: flex;
   align-items: center;
@@ -245,13 +246,13 @@
   padding: 6px 12px;
   border-radius: 10px;
   cursor: pointer;
-  transition: all 0.3s ease;
+  transition: all 0.2s ease;
   border: 1px solid transparent;
 }
 
 .tech-user-dropdown:hover {
-  background: rgba(59, 130, 246, 0.1);
-  border-color: rgba(96, 165, 250, 0.22);
+  background: #f3f6ff;
+  border-color: #dce6ff;
 }
 
 .tech-avatar-wrapper {
@@ -259,8 +260,8 @@
 }
 
 .tech-avatar {
-  background: linear-gradient(135deg, #2563eb, #14b8a6) !important;
-  border: 2px solid rgba(96, 165, 250, 0.28);
+  background: linear-gradient(135deg, #315cf6, #1d9bf0) !important;
+  border: 2px solid #dce6ff;
 }
 
 .tech-avatar-status {
@@ -269,9 +270,9 @@
   right: 0;
   width: 10px;
   height: 10px;
-  background: #22c55e;
+  background: #16a34a;
   border-radius: 50%;
-  border: 2px solid #0f172a;
+  border: 2px solid #ffffff;
 }
 
 .tech-user-info {
@@ -282,16 +283,15 @@
 
 .tech-user-name {
   font-size: 14px;
-  font-weight: 500;
-  color: #f8fafc;
+  font-weight: 600;
+  color: #111827;
 }
 
 .tech-user-role {
   font-size: 11px;
-  color: #94a3b8;
+  color: #7b8496;
 }
 
-/* 内容区 */
 .tech-content {
   margin: 0 !important;
   padding: 20px !important;
@@ -302,13 +302,14 @@
 }
 
 .tech-content-inner {
-  background: rgba(15, 23, 42, 0.76);
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid #e8eef7;
+  border-radius: 12px;
   padding: 24px;
   min-height: calc(100vh - 110px);
   position: relative;
   overflow: hidden;
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.05);
 }
 
 .tech-content-inner::before {
@@ -318,10 +319,9 @@
   left: 0;
   right: 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(96, 165, 250, 0.22), transparent);
+  background: linear-gradient(90deg, transparent, rgba(49, 92, 246, 0.22), transparent);
 }
 
-/* 响应式 */
 @media (max-width: 768px) {
   .tech-layout {
     min-width: 0;
@@ -389,7 +389,6 @@
   }
 }
 
-/* 折叠状态调整 */
 .ant-layout-sider-collapsed .tech-logo-area {
   padding: 0;
 }

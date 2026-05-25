@@ -200,7 +200,7 @@ const ProjectCreatePage: React.FC = () => {
       {/* Step 0: 选择方式 */}
       {current === 0 && (
         <div>
-          <Title level={4} style={{ textAlign: 'center', marginBottom: 24, color: '#e0e0e0' }}>
+          <Title level={4} style={{ textAlign: 'center', marginBottom: 24, color: '#111827' }}>
             选择项目创建方式
           </Title>
 
@@ -210,18 +210,18 @@ const ProjectCreatePage: React.FC = () => {
               hoverable
               onClick={() => { setImportMode(false); setCurrent(1) }}
               style={{
-                background: 'rgba(15, 15, 25, 0.85)',
-                border: '1px solid rgba(0, 212, 255, 0.15)',
+                background: '#ffffff',
+                border: '1px solid #e5eaf3',
                 borderRadius: 12,
                 textAlign: 'center',
                 padding: '24px 0',
               }}
             >
-              <AppstoreOutlined style={{ fontSize: 48, color: '#00d4ff', marginBottom: 16 }} />
-              <div style={{ fontWeight: 600, fontSize: 18, color: '#e0e0e0', marginBottom: 8 }}>
+              <AppstoreOutlined style={{ fontSize: 48, color: '#315cf6', marginBottom: 16 }} />
+              <div style={{ fontWeight: 600, fontSize: 18, color: '#111827', marginBottom: 8 }}>
                 从模板创建
               </div>
-              <Text style={{ color: '#888' }}>
+              <Text style={{ color: '#667085' }}>
                 选择项目模板，配置参数，自动生成项目代码
               </Text>
             </Card>
@@ -231,7 +231,7 @@ const ProjectCreatePage: React.FC = () => {
               hoverable
               onClick={() => { setImportMode(true); setCurrent(1) }}
               style={{
-                background: 'rgba(15, 15, 25, 0.85)',
+                background: '#ffffff',
                 border: '1px solid rgba(82, 196, 26, 0.15)',
                 borderRadius: 12,
                 textAlign: 'center',
@@ -239,10 +239,10 @@ const ProjectCreatePage: React.FC = () => {
               }}
             >
               <ImportOutlined style={{ fontSize: 48, color: '#52c41a', marginBottom: 16 }} />
-              <div style={{ fontWeight: 600, fontSize: 18, color: '#e0e0e0', marginBottom: 8 }}>
+              <div style={{ fontWeight: 600, fontSize: 18, color: '#111827', marginBottom: 8 }}>
                 从 Git 导入
               </div>
-              <Text style={{ color: '#888' }}>
+              <Text style={{ color: '#667085' }}>
                 输入 Git 仓库地址，自动识别语言框架，导入已有项目
               </Text>
             </Card>
@@ -255,7 +255,7 @@ const ProjectCreatePage: React.FC = () => {
         <div>
           <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
             <Button onClick={() => setCurrent(0)}>返回</Button>
-            <Title level={4} style={{ margin: '0 0 0 16', color: '#e0e0e0' }}>选择项目模板</Title>
+            <Title level={4} style={{ margin: '0 0 0 16', color: '#111827' }}>选择项目模板</Title>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16 }}>
             {templates.map(t => (
@@ -264,8 +264,8 @@ const ProjectCreatePage: React.FC = () => {
                 hoverable
                 onClick={() => handleSelectTemplate(t)}
                 style={{
-                  background: 'rgba(15, 15, 25, 0.85)',
-                  border: '1px solid rgba(0, 212, 255, 0.15)',
+                  background: '#ffffff',
+                  border: '1px solid #e5eaf3',
                   borderRadius: 12,
                   cursor: 'pointer',
                 }}
@@ -273,21 +273,21 @@ const ProjectCreatePage: React.FC = () => {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
                   <div style={{
                     width: 40, height: 40, borderRadius: 8,
-                    background: `${LANGUAGE_COLORS[t.language] || '#00d4ff'}20`,
+                    background: `${LANGUAGE_COLORS[t.language] || '#315cf6'}20`,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 20, color: LANGUAGE_COLORS[t.language] || '#00d4ff',
+                    fontSize: 20, color: LANGUAGE_COLORS[t.language] || '#315cf6',
                   }}>
                     {LANGUAGE_ICONS[t.language] || <CodeOutlined />}
                   </div>
                   <div>
-                    <div style={{ fontWeight: 600, color: '#e0e0e0' }}>{t.name}</div>
+                    <div style={{ fontWeight: 600, color: '#111827' }}>{t.name}</div>
                     <Space size={4}>
                       <Tag color={LANGUAGE_COLORS[t.language]} style={{ margin: 0 }}>{t.language}</Tag>
                       <Tag style={{ margin: 0 }}>{t.framework}</Tag>
                     </Space>
                   </div>
                 </div>
-                <Paragraph style={{ color: '#888', fontSize: 13, marginBottom: 0 }} ellipsis={{ rows: 2 }}>
+                <Paragraph style={{ color: '#667085', fontSize: 13, marginBottom: 0 }} ellipsis={{ rows: 2 }}>
                   {t.description}
                 </Paragraph>
               </Card>
@@ -304,13 +304,13 @@ const ProjectCreatePage: React.FC = () => {
       {/* Step 1b: 模板配置（模板模式） */}
       {current === 1 && !importMode && selectedTemplate && (
         <div style={{ maxWidth: 640, margin: '0 auto' }}>
-          <Card style={{ background: 'rgba(15, 15, 25, 0.85)', border: '1px solid rgba(0, 212, 255, 0.15)', borderRadius: 12 }}>
-            <Title level={4} style={{ color: '#e0e0e0', marginBottom: 24 }}>
+          <Card style={{ background: '#ffffff', border: '1px solid #e5eaf3', borderRadius: 12 }}>
+            <Title level={4} style={{ color: '#111827', marginBottom: 24 }}>
               配置项目 - {selectedTemplate.name}
             </Title>
 
             <Form layout="vertical">
-              <Form.Item label={<Text style={{ color: '#aaa' }}>项目名称</Text>} required>
+              <Form.Item label={<Text style={{ color: '#445066' }}>项目名称</Text>} required>
                 <Input
                   size="large"
                   placeholder="输入项目名称"
@@ -322,7 +322,7 @@ const ProjectCreatePage: React.FC = () => {
                 />
               </Form.Item>
 
-              <Form.Item label={<Text style={{ color: '#aaa' }}>项目编码</Text>}>
+              <Form.Item label={<Text style={{ color: '#445066' }}>项目编码</Text>}>
                 <Input
                   value={projectCode}
                   onChange={e => setProjectCode(e.target.value)}
@@ -330,7 +330,7 @@ const ProjectCreatePage: React.FC = () => {
                 />
               </Form.Item>
 
-              <Form.Item label={<Text style={{ color: '#aaa' }}>项目描述</Text>}>
+              <Form.Item label={<Text style={{ color: '#445066' }}>项目描述</Text>}>
                 <TextArea
                   rows={2}
                   value={projectDesc}
@@ -342,7 +342,7 @@ const ProjectCreatePage: React.FC = () => {
               {templateVars.map(v => (
                 <Form.Item
                   key={v.name}
-                  label={<Text style={{ color: '#aaa' }}>{v.label}</Text>}
+                  label={<Text style={{ color: '#445066' }}>{v.label}</Text>}
                   required={v.required}
                 >
                   <Input
@@ -367,8 +367,8 @@ const ProjectCreatePage: React.FC = () => {
       {/* Step 1c: Git 导入配置 */}
       {current === 1 && importMode && (
         <div style={{ maxWidth: 640, margin: '0 auto' }}>
-          <Card style={{ background: 'rgba(15, 15, 25, 0.85)', border: '1px solid rgba(82, 196, 26, 0.15)', borderRadius: 12 }}>
-            <Title level={4} style={{ color: '#e0e0e0', marginBottom: 16 }}>
+          <Card style={{ background: '#ffffff', border: '1px solid #dff3e6', borderRadius: 12 }}>
+            <Title level={4} style={{ color: '#111827', marginBottom: 16 }}>
               从 Git 导入项目
             </Title>
 
@@ -377,14 +377,14 @@ const ProjectCreatePage: React.FC = () => {
               background: 'rgba(82, 196, 26, 0.06)',
               border: '1px solid rgba(82, 196, 26, 0.15)',
             }}>
-              <Text style={{ color: '#888', fontSize: 13 }}>
+              <Text style={{ color: '#667085', fontSize: 13 }}>
                 输入 Git 仓库地址，系统将自动克隆代码并识别项目语言和框架。
                 请确保已在「系统管理 → Git 配置」中配置了对应平台的 Access Token。
               </Text>
             </div>
 
             <Form layout="vertical">
-              <Form.Item label={<Text style={{ color: '#aaa' }}>项目名称</Text>} required>
+              <Form.Item label={<Text style={{ color: '#445066' }}>项目名称</Text>} required>
                 <Input
                   size="large"
                   placeholder="输入项目名称"
@@ -396,7 +396,7 @@ const ProjectCreatePage: React.FC = () => {
                 />
               </Form.Item>
 
-              <Form.Item label={<Text style={{ color: '#aaa' }}>项目编码</Text>}>
+              <Form.Item label={<Text style={{ color: '#445066' }}>项目编码</Text>}>
                 <Input
                   value={projectCode}
                   onChange={e => setProjectCode(e.target.value)}
@@ -404,7 +404,7 @@ const ProjectCreatePage: React.FC = () => {
                 />
               </Form.Item>
 
-              <Form.Item label={<Text style={{ color: '#aaa' }}>项目描述</Text>}>
+              <Form.Item label={<Text style={{ color: '#445066' }}>项目描述</Text>}>
                 <TextArea
                   rows={2}
                   value={projectDesc}
@@ -413,17 +413,17 @@ const ProjectCreatePage: React.FC = () => {
                 />
               </Form.Item>
 
-              <Form.Item label={<Text style={{ color: '#aaa' }}>Git 仓库地址</Text>} required>
+              <Form.Item label={<Text style={{ color: '#445066' }}>Git 仓库地址</Text>} required>
                 <Input
                   size="large"
                   placeholder="https://gitlab.company.com/group/project.git"
                   value={importUrl}
                   onChange={e => setImportUrl(e.target.value)}
-                  prefix={<BranchesOutlined style={{ color: '#666' }} />}
+                  prefix={<BranchesOutlined style={{ color: '#667085' }} />}
                 />
               </Form.Item>
 
-              <Form.Item label={<Text style={{ color: '#aaa' }}>分支</Text>}>
+              <Form.Item label={<Text style={{ color: '#445066' }}>分支</Text>}>
                 <Input
                   placeholder="main"
                   value={importBranch}
@@ -431,7 +431,7 @@ const ProjectCreatePage: React.FC = () => {
                 />
               </Form.Item>
 
-              <Form.Item label={<Text style={{ color: '#aaa' }}>Git 凭证配置</Text>}>
+              <Form.Item label={<Text style={{ color: '#445066' }}>Git 凭证配置</Text>}>
                 <Select
                   placeholder="选择 Git 凭证（用于克隆私有仓库）"
                   value={selectedGitConfig}
@@ -467,7 +467,7 @@ const ProjectCreatePage: React.FC = () => {
       {current === 2 && !importMode && (
         <div>
           <Card style={{
-            background: 'linear-gradient(135deg, rgba(82, 196, 26, 0.08), rgba(0, 212, 255, 0.06))',
+            background: 'linear-gradient(135deg, rgba(22, 163, 74, 0.08), rgba(49, 92, 246, 0.06))',
             border: '1px solid rgba(82, 196, 26, 0.25)',
             borderRadius: 12, marginBottom: 24,
           }}>
@@ -477,7 +477,7 @@ const ProjectCreatePage: React.FC = () => {
                 <Title level={4} style={{ color: '#52c41a', margin: 0 }}>
                   项目生成成功
                 </Title>
-                <Text style={{ color: '#888' }}>
+                <Text style={{ color: '#667085' }}>
                   {projectName} — 已生成 {Object.keys(generatedFiles).length} 个文件
                 </Text>
               </div>
@@ -503,14 +503,14 @@ const ProjectCreatePage: React.FC = () => {
                 hoverable
                 onClick={() => handlePreviewFile(name, content)}
                 style={{
-                  background: 'rgba(15, 15, 25, 0.85)',
-                  border: '1px solid rgba(0, 212, 255, 0.1)',
+                  background: '#ffffff',
+                  border: '1px solid #e5eaf3',
                   borderRadius: 8,
                   cursor: 'pointer',
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <CodeOutlined style={{ color: '#00d4ff' }} />
+                  <CodeOutlined style={{ color: '#315cf6' }} />
                   <Text code style={{ fontSize: 12 }}>{name}</Text>
                   <Text type="secondary" style={{ fontSize: 11, marginLeft: 'auto' }}>
                     {content.length} chars
@@ -530,7 +530,7 @@ const ProjectCreatePage: React.FC = () => {
               body: { background: '#111', padding: 16, maxHeight: '70vh', overflow: 'auto' },
             }}
           >
-            <pre style={{ color: '#e0e0e0', fontSize: 13, whiteSpace: 'pre-wrap', margin: 0 }}>
+            <pre style={{ color: '#243044', fontSize: 13, whiteSpace: 'pre-wrap', margin: 0 }}>
               {previewFile?.content}
             </pre>
           </Modal>
@@ -541,7 +541,7 @@ const ProjectCreatePage: React.FC = () => {
       {current === 2 && importMode && importedProject && (
         <div>
           <Card style={{
-            background: 'linear-gradient(135deg, rgba(82, 196, 26, 0.08), rgba(0, 212, 255, 0.06))',
+            background: 'linear-gradient(135deg, rgba(22, 163, 74, 0.08), rgba(49, 92, 246, 0.06))',
             border: '1px solid rgba(82, 196, 26, 0.25)',
             borderRadius: 12, marginBottom: 24,
           }}>
@@ -551,7 +551,7 @@ const ProjectCreatePage: React.FC = () => {
                 <Title level={4} style={{ color: '#52c41a', margin: 0 }}>
                   项目导入成功
                 </Title>
-                <Text style={{ color: '#888' }}>
+                <Text style={{ color: '#667085' }}>
                   {importedProject.name} — 已从 Git 仓库导入
                 </Text>
               </div>
@@ -559,18 +559,18 @@ const ProjectCreatePage: React.FC = () => {
           </Card>
 
           <Card style={{
-            background: 'rgba(15, 15, 25, 0.85)',
-            border: '1px solid rgba(0, 212, 255, 0.15)',
+            background: '#ffffff',
+            border: '1px solid #e5eaf3',
             borderRadius: 12, marginBottom: 24,
           }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
               <div>
                 <Text type="secondary">项目名称</Text>
-                <div style={{ color: '#e0e0e0', fontWeight: 600 }}>{importedProject.name}</div>
+                <div style={{ color: '#111827', fontWeight: 600 }}>{importedProject.name}</div>
               </div>
               <div>
                 <Text type="secondary">项目编码</Text>
-                <div style={{ color: '#e0e0e0' }}>{importedProject.code}</div>
+                <div style={{ color: '#111827' }}>{importedProject.code}</div>
               </div>
               <div>
                 <Text type="secondary">语言</Text>
@@ -584,7 +584,7 @@ const ProjectCreatePage: React.FC = () => {
               </div>
               <div>
                 <Text type="secondary">Git 仓库</Text>
-                <div style={{ color: '#e0e0e0', fontSize: 13, wordBreak: 'break-all' }}>
+                <div style={{ color: '#111827', fontSize: 13, wordBreak: 'break-all' }}>
                   <BranchesOutlined style={{ color: '#52c41a', marginRight: 4 }} />
                   {importedProject.repo_url}
                 </div>

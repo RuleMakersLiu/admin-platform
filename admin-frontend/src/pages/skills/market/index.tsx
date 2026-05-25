@@ -526,20 +526,20 @@ const SkillMarketPage: React.FC = () => {
         width={640}
         styles={{
           body: {
-            background: 'rgba(15, 15, 25, 0.95)',
+            background: '#ffffff',
             padding: 20,
-            color: '#e0e0e0',
+            color: '#111827',
           },
         }}
       >
         <Form form={manageForm} layout="vertical">
-          <Form.Item name="name" label={<span style={{ color: '#aaa' }}>技能名称</span>}
+          <Form.Item name="name" label={<span style={{ color: '#445066' }}>技能名称</span>}
             rules={[{ required: true, message: '请输入技能名称' }]}>
             <Input placeholder="例如：code_review" disabled={manageAction === 'edit'} />
           </Form.Item>
           {manageAction !== 'delete' && (
             <>
-              <Form.Item name="category" label={<span style={{ color: '#aaa' }}>分类</span>}>
+              <Form.Item name="category" label={<span style={{ color: '#445066' }}>分类</span>}>
                 <Select placeholder="选择分类" allowClear>
                   <Select.Option value="knowledge">knowledge</Select.Option>
                   <Select.Option value="analysis">analysis</Select.Option>
@@ -549,7 +549,7 @@ const SkillMarketPage: React.FC = () => {
                   <Select.Option value="通用">通用</Select.Option>
                 </Select>
               </Form.Item>
-              <Form.Item name="content" label={<span style={{ color: '#aaa' }}>技能内容（Markdown/指令）</span>}
+              <Form.Item name="content" label={<span style={{ color: '#445066' }}>技能内容（Markdown/指令）</span>}
                 rules={[{ required: true, message: '请输入技能内容' }]}>
                 <Input.TextArea rows={12} placeholder="输入技能的完整指令内容..." />
               </Form.Item>
@@ -565,7 +565,7 @@ const SkillMarketPage: React.FC = () => {
         .skill-market-page {
           padding: 24px;
           min-height: 100vh;
-          background: #0a0a0f;
+          background: linear-gradient(180deg, #fbfdff 0%, #f6f8fc 100%);
         }
         .page-header {
           margin-bottom: 24px;
@@ -574,11 +574,11 @@ const SkillMarketPage: React.FC = () => {
           margin: 0 0 8px 0;
           font-size: 24px;
           font-weight: 600;
-          color: #e0e0e0;
+          color: #111827;
         }
         .page-header p {
           margin: 0;
-          color: #888;
+          color: #667085;
           font-size: 14px;
         }
         .page-content {
@@ -601,8 +601,8 @@ const SkillMarketPage: React.FC = () => {
           gap: 16px;
           margin-bottom: 24px;
           padding: 16px;
-          background: rgba(15, 15, 25, 0.8);
-          border: 1px solid rgba(0, 212, 255, 0.15);
+          background: #ffffff;
+          border: 1px solid #e5eaf3;
           border-radius: 12px;
         }
         .mobile-filter-btn {
@@ -610,8 +610,8 @@ const SkillMarketPage: React.FC = () => {
           margin-bottom: 16px;
         }
         .category-sidebar {
-          background: rgba(15, 15, 25, 0.8);
-          border: 1px solid rgba(0, 212, 255, 0.15);
+          background: #ffffff;
+          border: 1px solid #e5eaf3;
           border-radius: 12px;
           padding: 16px;
         }
@@ -619,7 +619,7 @@ const SkillMarketPage: React.FC = () => {
           margin: 0 0 16px 0;
           font-size: 16px;
           font-weight: 600;
-          color: #e0e0e0;
+          color: #111827;
         }
         .category-list {
           display: flex;
@@ -634,15 +634,15 @@ const SkillMarketPage: React.FC = () => {
           border-radius: 6px;
           cursor: pointer;
           transition: all 0.2s;
-          color: #aaa;
+          color: #445066;
         }
         .category-item:hover {
-          background: rgba(0, 212, 255, 0.05);
+          background: #f3f6ff;
         }
         .category-item.active {
-          background: rgba(0, 212, 255, 0.1);
-          color: #00d4ff;
-          border-left: 3px solid #00d4ff;
+          background: #edf3ff;
+          color: #315cf6;
+          border-left: 3px solid #315cf6;
         }
         .category-item.active .category-name {
           font-weight: 500;
@@ -652,18 +652,18 @@ const SkillMarketPage: React.FC = () => {
         }
         .category-count {
           font-size: 12px;
-          color: #666;
+          color: #667085;
         }
         .category-item.active .category-count {
-          color: #00d4ff;
+          color: #315cf6;
         }
         .pagination-wrapper {
           display: flex;
           justify-content: center;
           margin-top: 24px;
           padding: 16px;
-          background: rgba(15, 15, 25, 0.8);
-          border: 1px solid rgba(0, 212, 255, 0.15);
+          background: #ffffff;
+          border: 1px solid #e5eaf3;
           border-radius: 12px;
         }
         .empty-state,
@@ -672,15 +672,15 @@ const SkillMarketPage: React.FC = () => {
           justify-content: center;
           align-items: center;
           min-height: 400px;
-          background: rgba(15, 15, 25, 0.8);
-          border: 1px solid rgba(0, 212, 255, 0.15);
+          background: #ffffff;
+          border: 1px solid #e5eaf3;
           border-radius: 12px;
         }
 
         /* 骨架屏样式 */
         .skill-card-skeleton {
-          background: rgba(15, 15, 25, 0.8);
-          border: 1px solid rgba(0, 212, 255, 0.1);
+          background: #ffffff;
+          border: 1px solid #e5eaf3;
           border-radius: 12px;
           padding: 16px;
           animation: skeleton-loading 1.4s ease infinite;
@@ -693,26 +693,26 @@ const SkillMarketPage: React.FC = () => {
         .skeleton-icon {
           width: 48px;
           height: 48px;
-          background: rgba(255, 255, 255, 0.05);
+          background: #edf1f7;
           border-radius: 8px;
         }
         .skeleton-tag {
           width: 60px;
           height: 22px;
-          background: rgba(255, 255, 255, 0.05);
+          background: #edf1f7;
           border-radius: 4px;
         }
         .skeleton-title {
           width: 70%;
           height: 20px;
-          background: rgba(255, 255, 255, 0.05);
+          background: #edf1f7;
           border-radius: 4px;
           margin-bottom: 8px;
         }
         .skeleton-desc {
           width: 100%;
           height: 14px;
-          background: rgba(255, 255, 255, 0.05);
+          background: #edf1f7;
           border-radius: 4px;
           margin-bottom: 6px;
         }
@@ -727,24 +727,24 @@ const SkillMarketPage: React.FC = () => {
         .skeleton-tag-item {
           width: 50px;
           height: 20px;
-          background: rgba(255, 255, 255, 0.05);
+          background: #edf1f7;
           border-radius: 4px;
         }
         .skeleton-stats {
           height: 40px;
-          background: rgba(255, 255, 255, 0.05);
+          background: #edf1f7;
           border-radius: 4px;
           margin-bottom: 12px;
         }
         .skeleton-footer {
           height: 20px;
-          background: rgba(255, 255, 255, 0.05);
+          background: #edf1f7;
           border-radius: 4px;
           margin-bottom: 12px;
         }
         .skeleton-btn {
           height: 32px;
-          background: rgba(255, 255, 255, 0.05);
+          background: #edf1f7;
           border-radius: 6px;
         }
         @keyframes skeleton-loading {

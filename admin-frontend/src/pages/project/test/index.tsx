@@ -202,7 +202,7 @@ const ProjectTestPage: React.FC = () => {
   return (
     <div style={{ padding: 24 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <Title level={4} style={{ margin: 0, color: '#e0e0e0' }}>
+        <Title level={4} style={{ margin: 0, color: '#111827' }}>
           <BugOutlined style={{ marginRight: 8 }} />
           测试中心
         </Title>
@@ -236,8 +236,8 @@ const ProjectTestPage: React.FC = () => {
       </div>
 
       <Card style={{
-        background: 'rgba(15, 15, 25, 0.7)',
-        border: '1px solid rgba(0, 212, 255, 0.15)',
+        background: '#ffffff',
+        border: '1px solid #e5eaf3',
         borderRadius: 12,
       }}>
         <Table
@@ -262,11 +262,11 @@ const ProjectTestPage: React.FC = () => {
         width={800}
         footer={null}
         styles={{
-          body: { background: '#0a0a12', padding: 16, maxHeight: '70vh', overflow: 'auto' },
+          body: { background: '#f8fafd', padding: 16, maxHeight: '70vh', overflow: 'auto' },
         }}
       >
         <pre style={{
-          color: '#e0e0e0', fontSize: 12, whiteSpace: 'pre-wrap',
+          color: '#243044', fontSize: 12, whiteSpace: 'pre-wrap',
           fontFamily: 'monospace', lineHeight: 1.6, margin: 0,
         }}>
           {logContent}

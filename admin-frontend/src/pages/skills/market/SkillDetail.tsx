@@ -304,7 +304,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
             margin-bottom: 12px;
           }
           .header-meta .version {
-            color: #888;
+            color: #667085;
             font-size: 14px;
           }
           .header-stats {
@@ -314,14 +314,14 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            color: #888;
+            color: #667085;
           }
           .stat-item .stat-value {
             font-weight: 600;
-            color: #e0e0e0;
+            color: #111827;
           }
           .stat-item .stat-label {
-            color: #666;
+            color: #667085;
             font-size: 13px;
           }
           .detail-actions {
@@ -333,13 +333,13 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
             padding: 8px 0;
           }
           .section-content {
-            background: rgba(255, 255, 255, 0.04);
+            background: #f8fafd;
             padding: 16px;
             border-radius: 8px;
           }
           .instructions-content {
-            background: rgba(255, 255, 255, 0.03);
-            border: 1px solid rgba(0, 212, 255, 0.1);
+            background: #f8fafd;
+            border: 1px solid #e5eaf3;
             border-radius: 8px;
             padding: 16px;
             max-height: 400px;
@@ -351,7 +351,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
             word-break: break-word;
             font-size: 13px;
             line-height: 1.7;
-            color: #c9d1d9;
+            color: #243044;
             font-family: 'SF Mono', 'Fira Code', monospace;
           }
           .tags-section {
@@ -359,7 +359,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
           }
           .tags-section h4 {
             margin-bottom: 12px;
-            color: #888;
+            color: #667085;
             font-weight: 500;
           }
           .tags-list {

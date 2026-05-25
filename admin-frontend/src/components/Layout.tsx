@@ -214,7 +214,7 @@ export default function LayoutComponent() {
 
         {/* 菜单 */}
         <Menu
-          theme="dark"
+          theme="light"
           mode="inline"
           selectedKeys={selectedKeys}
           defaultOpenKeys={openKeys}

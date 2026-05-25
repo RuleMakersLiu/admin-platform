@@ -151,12 +151,12 @@ const SkillCard: React.FC<SkillCardProps> = ({ skill, onDownload, onClick, onEdi
           flex-direction: column;
           border-radius: 12px;
           transition: all 0.3s ease;
-          background: rgba(15, 15, 25, 0.8) !important;
-          border: 1px solid rgba(0, 212, 255, 0.15) !important;
+          background: #ffffff !important;
+          border: 1px solid #e5eaf3 !important;
         }
         .skill-card:hover {
-          box-shadow: 0 4px 20px rgba(0, 212, 255, 0.15);
-          border-color: rgba(0, 212, 255, 0.3) !important;
+          box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+          border-color: #dce6ff !important;
           transform: translateY(-2px);
         }
         .skill-card-header {
@@ -170,7 +170,7 @@ const SkillCard: React.FC<SkillCardProps> = ({ skill, onDownload, onClick, onEdi
           height: 48px;
           border-radius: 8px;
           overflow: hidden;
-          background: linear-gradient(135deg, #00d4ff 0%, #7b2fff 100%);
+          background: linear-gradient(135deg, #315cf6 0%, #1d9bf0 100%);
         }
         .skill-icon img {
           width: 100%;
@@ -191,7 +191,7 @@ const SkillCard: React.FC<SkillCardProps> = ({ skill, onDownload, onClick, onEdi
           margin: 0 0 8px 0;
           font-size: 16px;
           font-weight: 600;
-          color: #e0e0e0;
+          color: #111827;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
@@ -199,7 +199,7 @@ const SkillCard: React.FC<SkillCardProps> = ({ skill, onDownload, onClick, onEdi
         .skill-card-description {
           margin: 0 0 12px 0;
           font-size: 13px;
-          color: #888;
+          color: #667085;
           line-height: 1.5;
           height: 40px;
           overflow: hidden;
@@ -219,25 +219,25 @@ const SkillCard: React.FC<SkillCardProps> = ({ skill, onDownload, onClick, onEdi
           padding: 0 6px;
           height: 20px;
           line-height: 20px;
-          background: rgba(0, 212, 255, 0.08) !important;
-          border: 1px solid rgba(0, 212, 255, 0.2) !important;
-          color: #00d4ff !important;
+          background: #edf3ff !important;
+          border: 1px solid #dce6ff !important;
+          color: #315cf6 !important;
         }
         .skill-card-stats {
           display: flex;
           justify-content: space-between;
           align-items: center;
           padding: 8px 0;
-          border-top: 1px solid rgba(255, 255, 255, 0.06);
-          border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+          border-top: 1px solid #edf1f7;
+          border-bottom: 1px solid #edf1f7;
           margin-bottom: 12px;
         }
         .stat-value {
           font-weight: 500;
-          color: #e0e0e0;
+          color: #111827;
         }
         .stat-label {
-          color: #666;
+          color: #667085;
           font-size: 12px;
         }
         .skill-card-footer {
@@ -245,7 +245,7 @@ const SkillCard: React.FC<SkillCardProps> = ({ skill, onDownload, onClick, onEdi
           justify-content: space-between;
           align-items: center;
           font-size: 12px;
-          color: #666;
+          color: #667085;
           margin-bottom: 12px;
         }
         .author-name {

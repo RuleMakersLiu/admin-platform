@@ -5,100 +5,92 @@ import zhCN from 'antd/locale/zh_CN'
 import App from './App'
 import './index.css'
 
-// 科技风暗色主题配置
-const techTheme = {
-  algorithm: theme.darkAlgorithm,
+const brightTheme = {
+  algorithm: theme.defaultAlgorithm,
   token: {
-    // 主色调
-    colorPrimary: '#00d4ff',
-    colorInfo: '#00d4ff',
-    colorSuccess: '#00ff88',
-    colorWarning: '#ffaa00',
-    colorError: '#ff2a6d',
+    colorPrimary: '#315cf6',
+    colorInfo: '#315cf6',
+    colorSuccess: '#16a34a',
+    colorWarning: '#f59e0b',
+    colorError: '#dc2626',
 
-    // 背景色
-    colorBgContainer: 'rgba(15, 15, 25, 0.9)',
-    colorBgElevated: 'rgba(20, 20, 30, 0.95)',
-    colorBgLayout: '#0a0a0f',
-    colorBgSpotlight: 'rgba(0, 212, 255, 0.1)',
+    colorBgContainer: '#ffffff',
+    colorBgElevated: '#ffffff',
+    colorBgLayout: '#f6f8fc',
+    colorBgSpotlight: 'rgba(49, 92, 246, 0.08)',
 
-    // 边框
-    colorBorder: 'rgba(0, 212, 255, 0.15)',
-    colorBorderSecondary: 'rgba(255, 255, 255, 0.06)',
+    colorBorder: '#e5eaf3',
+    colorBorderSecondary: '#eef2f8',
 
-    // 文字颜色
-    colorText: '#e0e0e0',
-    colorTextSecondary: '#888',
-    colorTextTertiary: '#555',
-    colorTextQuaternary: '#333',
+    colorText: '#111827',
+    colorTextSecondary: '#5b6475',
+    colorTextTertiary: '#7b8496',
+    colorTextQuaternary: '#a6afbf',
 
-    // 圆角
     borderRadius: 8,
     borderRadiusLG: 12,
     borderRadiusSM: 6,
 
-    // 阴影
-    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)',
-    boxShadowSecondary: '0 4px 12px rgba(0, 0, 0, 0.3)',
+    boxShadow: '0 14px 36px rgba(15, 23, 42, 0.08)',
+    boxShadowSecondary: '0 8px 24px rgba(15, 23, 42, 0.06)',
 
-    // 字体
-    fontFamily: "'Orbitron', 'Rajdhani', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+    fontFamily: "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
   },
   components: {
     Menu: {
-      darkItemBg: 'transparent',
-      darkItemHoverBg: 'rgba(0, 212, 255, 0.08)',
-      darkItemSelectedBg: 'rgba(0, 212, 255, 0.15)',
-      darkItemColor: '#888',
-      darkItemHoverColor: '#00d4ff',
-      darkItemSelectedColor: '#00d4ff',
+      itemBg: 'transparent',
+      itemHoverBg: '#f3f6ff',
+      itemSelectedBg: '#edf3ff',
+      itemColor: '#445066',
+      itemHoverColor: '#315cf6',
+      itemSelectedColor: '#315cf6',
     },
     Table: {
-      headerBg: 'rgba(0, 212, 255, 0.08)',
-      headerColor: '#00d4ff',
-      rowHoverBg: 'rgba(0, 212, 255, 0.05)',
-      borderColor: 'rgba(0, 212, 255, 0.1)',
+      headerBg: '#f8fafd',
+      headerColor: '#334155',
+      rowHoverBg: '#f5f8ff',
+      borderColor: '#edf1f7',
     },
     Card: {
-      colorBgContainer: 'rgba(15, 15, 25, 0.9)',
-      colorBorderSecondary: 'rgba(0, 212, 255, 0.15)',
+      colorBgContainer: '#ffffff',
+      colorBorderSecondary: '#edf1f7',
     },
     Input: {
-      colorBgContainer: 'rgba(20, 20, 30, 0.8)',
-      colorBorder: 'rgba(0, 212, 255, 0.2)',
-      hoverBorderColor: 'rgba(0, 212, 255, 0.4)',
-      activeBorderColor: '#00d4ff',
-      colorText: '#e0e0e0',
-      colorTextPlaceholder: '#555',
+      colorBgContainer: '#ffffff',
+      colorBorder: '#dbe3ef',
+      hoverBorderColor: '#8aa4ff',
+      activeBorderColor: '#315cf6',
+      colorText: '#111827',
+      colorTextPlaceholder: '#9aa4b5',
     },
     Button: {
-      primaryShadow: '0 4px 15px rgba(0, 212, 255, 0.4)',
+      primaryShadow: '0 8px 18px rgba(49, 92, 246, 0.22)',
     },
     Modal: {
-      contentBg: 'rgba(15, 15, 25, 0.95)',
-      headerBg: 'transparent',
-      titleColor: '#00d4ff',
+      contentBg: '#ffffff',
+      headerBg: '#ffffff',
+      titleColor: '#111827',
     },
     Dropdown: {
-      colorBgElevated: 'rgba(15, 15, 25, 0.95)',
+      colorBgElevated: '#ffffff',
     },
     Select: {
-      colorBgContainer: 'rgba(20, 20, 30, 0.8)',
-      colorBorder: 'rgba(0, 212, 255, 0.2)',
-      optionSelectedBg: 'rgba(0, 212, 255, 0.15)',
+      colorBgContainer: '#ffffff',
+      colorBorder: '#dbe3ef',
+      optionSelectedBg: '#edf3ff',
     },
     Message: {
-      contentBg: 'rgba(15, 15, 25, 0.95)',
+      contentBg: '#ffffff',
     },
     Notification: {
-      colorBgElevated: 'rgba(15, 15, 25, 0.95)',
+      colorBgElevated: '#ffffff',
     },
   },
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <ConfigProvider locale={zhCN} theme={techTheme}>
+    <ConfigProvider locale={zhCN} theme={brightTheme}>
       <App />
     </ConfigProvider>
   </React.StrictMode>,

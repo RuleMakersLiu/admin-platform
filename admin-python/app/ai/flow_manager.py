@@ -25,6 +25,7 @@ from app.ai.pipeline_skills import ensure_workspace, get_workspace_path
 from app.ai.skills import skill_registry
 from app.models.agent_models import DevPipeline
 from app.services.memory_service import MemoryService, MemoryType
+from app.services.user_evolution_service import UserEvolutionService
 from app.core.database import async_session_maker
 
 logger = logging.getLogger(__name__)
@@ -1454,8 +1455,9 @@ class DevPipelineManager:
             logger.warning(f"Failed to save memory: {e}")
 
     async def _retrieve_memories(self, pipeline_id: str, stage_key: str,
-                                  tenant_id: int, session=None) -> str:
-        """检索与当前流水线相关的记忆"""
+                                  tenant_id: int, session=None,
+                                  creator_id: int = 0) -> str:
+        """检索与当前流水线和当前用户相关的记忆"""
         try:
             if session:
                 memories = await MemoryService.get_memories(
@@ -1465,6 +1467,11 @@ class DevPipelineManager:
                     memory_types=[MemoryType.LONG_TERM, MemoryType.SEMANTIC],
                     min_importance=60,
                 )
+                user_context = await UserEvolutionService.get_user_memory_context(
+                    db=session,
+                    tenant_id=tenant_id,
+                    user_id=creator_id,
+                ) if creator_id else ""
                 await session.flush()
             else:
                 async with async_session_maker() as mem_session:
@@ -1475,18 +1482,43 @@ class DevPipelineManager:
                         memory_types=[MemoryType.LONG_TERM, MemoryType.SEMANTIC],
                         min_importance=60,
                     )
+                    user_context = await UserEvolutionService.get_user_memory_context(
+                        db=mem_session,
+                        tenant_id=tenant_id,
+                        user_id=creator_id,
+                    ) if creator_id else ""
                     await mem_session.commit()
 
-            if not memories:
-                return ""
+            memory_sections = []
+            if memories:
+                memory_sections.append("\n".join([
+                    f"- [{m.agent_type}] {m.content}"
+                    for m in memories
+                ]))
+            if user_context:
+                memory_sections.append(user_context)
 
-            return "\n".join([
-                f"- [{m.agent_type}] {m.content}"
-                for m in memories
-            ])
+            return "\n\n".join(memory_sections)
         except Exception as e:
             logger.warning(f"Failed to retrieve memories: {e}")
             return ""
+
+    async def _record_user_evolution(self, session: AsyncSession, pipe: DevPipeline,
+                                     stages: Dict[str, Any]) -> None:
+        """Persist user-level learning after a pipeline is completed."""
+        try:
+            await UserEvolutionService.summarize_completed_requirement(
+                db=session,
+                pipeline=pipe,
+                stages=stages,
+            )
+            logger.info(
+                "User evolution memory refreshed for pipeline %s creator %s",
+                pipe.pipeline_id,
+                pipe.creator_id,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to record user evolution memory: {e}")
 
     # ==================== Skill 执行 ====================
 
@@ -1643,7 +1675,11 @@ class DevPipelineManager:
 
         # 检索记忆
         memories_text = await self._retrieve_memories(
-            pipeline_id, stage_key, pipe.tenant_id, session
+            pipeline_id,
+            stage_key,
+            pipe.tenant_id,
+            session=session,
+            creator_id=pipe.creator_id or 0,
         )
 
         # 加载技术栈配置
@@ -2098,6 +2134,7 @@ class DevPipelineManager:
                         pipe.status = PipelineStatus.COMPLETED.value
                         pipe.stages_data = json.dumps(stages, ensure_ascii=False)
                         pipe.update_time = int(time.time() * 1000)
+                        await self._record_user_evolution(session, pipe, stages)
                         await session.commit()
                         logger.info(f"Pipeline {pipeline_id}: All stages completed")
                         await emit({"type": "completed", "stage": current_stage})
@@ -2245,7 +2282,9 @@ class DevPipelineManager:
                 idx = len(STAGE_KEYS) - 1
             if idx + 1 >= len(STAGE_KEYS):
                 pipe.status = PipelineStatus.COMPLETED.value
+                pipe.stages_data = json.dumps(stages, ensure_ascii=False)
                 pipe.update_time = int(time.time() * 1000)
+                await self._record_user_evolution(session, pipe, stages)
                 await session.commit()
                 return {"pipeline_id": pipeline_id, "status": "completed"}
 

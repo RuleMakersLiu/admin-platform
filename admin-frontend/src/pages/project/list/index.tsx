@@ -149,7 +149,7 @@ const ProjectListPage: React.FC = () => {
       key: 'name',
       render: (name: string, record: any) => (
         <div>
-          <div style={{ fontWeight: 600, color: '#e0e0e0' }}>{name}</div>
+          <div style={{ fontWeight: 600, color: '#111827' }}>{name}</div>
           <Text type="secondary" style={{ fontSize: 12 }}>{record.code}</Text>
         </div>
       ),
@@ -282,7 +282,7 @@ const ProjectListPage: React.FC = () => {
   return (
     <div style={{ padding: 24 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Typography.Title level={4} style={{ margin: 0, color: '#e0e0e0' }}>项目列表</Typography.Title>
+        <Typography.Title level={4} style={{ margin: 0, color: '#111827' }}>项目列表</Typography.Title>
         <Space>
           <Button icon={<PlusOutlined />} type="primary" onClick={() => navigate('/project/create')}>
             创建项目
@@ -294,8 +294,8 @@ const ProjectListPage: React.FC = () => {
       </div>
 
       <Card style={{
-        background: 'rgba(15, 15, 25, 0.7)',
-        border: '1px solid rgba(0, 212, 255, 0.15)',
+        background: '#ffffff',
+        border: '1px solid #e5eaf3',
         borderRadius: 12,
       }}>
         <Table
@@ -321,17 +321,18 @@ const ProjectListPage: React.FC = () => {
         width={720}
         footer={null}
         styles={{
-          body: { background: '#111', padding: 16, maxHeight: '70vh', overflow: 'auto' },
+          body: { background: '#f8fafd', padding: 16, maxHeight: '70vh', overflow: 'auto' },
         }}
       >
         {previewFiles.map((f: any) => (
           <div key={f.name} style={{ marginBottom: 16 }}>
-            <div style={{ color: '#00d4ff', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
+            <div style={{ color: '#315cf6', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
               {f.name}
             </div>
             <pre style={{
-              color: '#e0e0e0', fontSize: 12, whiteSpace: 'pre-wrap',
-              background: '#0a0a12', padding: 12, borderRadius: 8, margin: 0,
+              color: '#243044', fontSize: 12, whiteSpace: 'pre-wrap',
+              background: '#ffffff', padding: 12, borderRadius: 8, margin: 0,
+              border: '1px solid #e5eaf3',
             }}>
               {f.content}
             </pre>
@@ -348,8 +349,8 @@ const ProjectListPage: React.FC = () => {
         okText="保存"
         width={560}
       >
-        <div style={{ marginBottom: 16, padding: 12, background: 'rgba(0, 212, 255, 0.06)', borderRadius: 8, border: '1px solid rgba(0, 212, 255, 0.1)' }}>
-          <Text style={{ color: '#888', fontSize: 13 }}>
+        <div style={{ marginBottom: 16, padding: 12, background: '#f1f6ff', borderRadius: 8, border: '1px solid #dce6ff' }}>
+          <Text style={{ color: '#445066', fontSize: 13 }}>
             关联仓库后，平台可以从 GitLab 拉取代码并在独立沙箱中运行自动化测试。
             请确保已在「系统管理 → Git 配置」中配置了对应平台的 Access Token。
           </Text>
@@ -378,7 +379,7 @@ const ProjectListPage: React.FC = () => {
         width={440}
       >
         <div style={{ marginTop: 12 }}>
-          <div style={{ marginBottom: 8, color: '#ccc' }}>语言</div>
+          <div style={{ marginBottom: 8, color: '#445066' }}>语言</div>
           <Select
             value={editLang || undefined}
             style={{ width: '100%', marginBottom: 16 }}
@@ -393,7 +394,7 @@ const ProjectListPage: React.FC = () => {
             ]}
             onChange={setEditLang}
           />
-          <div style={{ marginBottom: 8, color: '#ccc' }}>框架</div>
+          <div style={{ marginBottom: 8, color: '#445066' }}>框架</div>
           <Select
             value={editFw || undefined}
             style={{ width: '100%' }}

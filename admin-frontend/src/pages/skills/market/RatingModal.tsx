@@ -243,7 +243,7 @@ const RatingModal: React.FC<RatingModalProps> = ({ visible, skill, onClose, onSu
           border: none;
           background: none;
           font-size: 14px;
-          color: #666;
+          color: #667085;
           cursor: pointer;
           position: relative;
           transition: color 0.3s;
@@ -300,7 +300,7 @@ const RatingModal: React.FC<RatingModalProps> = ({ visible, skill, onClose, onSu
         }
         .rating-comment {
           margin: 0;
-          color: #666;
+          color: #667085;
           line-height: 1.6;
           font-size: 13px;
         }

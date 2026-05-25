@@ -63,11 +63,11 @@ const STAGE_NAMES: Record<string, string> = {
 const STAGE_KEYS = ['requirement', 'page_design', 'prototype', 'delivery', 'frontend_dev', 'backend_dev', 'code_review', 'testing', 'commit', 'deploy', 'report']
 
 const STATUS_COLORS: Record<string, { bg: string; color: string; text: string }> = {
-  running:           { bg: 'rgba(59,130,246,0.14)', color: '#93c5fd', text: '执行中' },
+  running:           { bg: 'rgba(49,92,246,0.12)', color: '#315cf6', text: '执行中' },
   completed:         { bg: 'rgba(34,197,94,0.12)', color: '#86efac', text: '已完成' },
   failed:            { bg: 'rgba(239,68,68,0.12)',  color: '#fca5a5', text: '失败' },
   waiting_confirm:   { bg: 'rgba(245,158,11,0.13)', color: '#fcd34d', text: '待确认' },
-  pending:           { bg: 'rgba(148,163,184,0.08)',color: '#94a3b8', text: '待执行' },
+  pending:           { bg: '#f4f7fb', color: '#667085', text: '待执行' },
 }
 
 const PipelineHistoryList: React.FC<{
@@ -93,23 +93,23 @@ const PipelineHistoryList: React.FC<{
           <div key={p.pipeline_id} style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             padding: '12px 16px', borderRadius: 10, cursor: 'pointer',
-            background: 'rgba(255,255,255,0.03)',
-            border: '1px solid rgba(0,212,255,0.08)',
+            background: '#ffffff',
+            border: '1px solid #e5eaf3',
             transition: 'all 0.2s',
           }}
             onClick={() => onSelect(p.pipeline_id)}
             onMouseEnter={e => {
-              e.currentTarget.style.background = 'rgba(0,212,255,0.06)'
-              e.currentTarget.style.borderColor = 'rgba(0,212,255,0.2)'
+              e.currentTarget.style.background = '#f5f8ff'
+              e.currentTarget.style.borderColor = '#dce6ff'
             }}
             onMouseLeave={e => {
-              e.currentTarget.style.background = 'rgba(255,255,255,0.03)'
-              e.currentTarget.style.borderColor = 'rgba(0,212,255,0.08)'
+              e.currentTarget.style.background = '#ffffff'
+              e.currentTarget.style.borderColor = '#e5eaf3'
             }}
           >
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                <Text style={{ color: '#e5e7eb', fontSize: 13, fontWeight: 500 }} ellipsis>
+                <Text style={{ color: '#111827', fontSize: 13, fontWeight: 500 }} ellipsis>
                   {p.user_request?.slice(0, 50) || p.pipeline_id}
                 </Text>
                 <span style={{
@@ -260,7 +260,7 @@ const PMQualityPanel: React.FC<{
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
         <CheckCircleOutlined style={{ color: ready ? '#86efac' : '#fcd34d' }} />
-        <Text strong style={{ color: '#f8fafc', fontSize: 14 }}>{title}</Text>
+        <Text strong style={{ color: '#111827', fontSize: 14 }}>{title}</Text>
         <Tag color={ready ? 'success' : 'warning'} style={{ marginLeft: 'auto', borderRadius: 6 }}>
           {ready ? '可评审' : '需补充'}
         </Tag>
@@ -281,7 +281,7 @@ const PMQualityPanel: React.FC<{
           style={{
             marginTop: 12,
             borderRadius: 8,
-            background: 'rgba(120, 53, 15, 0.2)',
+            background: '#fffbeb',
             border: '1px solid rgba(245, 158, 11, 0.2)',
           }}
         />
@@ -324,7 +324,7 @@ const PreviewQualityPanel: React.FC<{
         ) : (
           <ExclamationCircleOutlined style={{ color: '#fcd34d' }} />
         )}
-        <Text strong style={{ color: '#f8fafc', fontSize: 14 }}>预览质量检查</Text>
+        <Text strong style={{ color: '#111827', fontSize: 14 }}>预览质量检查</Text>
         <Tag color={ready ? 'success' : 'warning'} style={{ marginLeft: 'auto', borderRadius: 6 }}>
           {ready ? '可预览' : '需优化'}
         </Tag>
@@ -418,15 +418,15 @@ const styles: Styles = {
     gap: 20,
     alignItems: 'flex-start',
     flexWrap: 'wrap' as const,
-    background: 'linear-gradient(180deg, #0f172a 0%, #111827 100%)',
+    background: 'linear-gradient(180deg, #fbfdff 0%, #f6f8fc 100%)',
   },
   createCard: {
     maxWidth: 560,
     width: '100%',
-    border: '1px solid rgba(148, 163, 184, 0.18)',
+    border: '1px solid #e5eaf3',
     borderRadius: 12,
-    background: '#111827',
-    boxShadow: '0 18px 45px rgba(2, 6, 23, 0.28)',
+    background: '#ffffff',
+    boxShadow: '0 18px 45px rgba(15, 23, 42, 0.08)',
     overflow: 'hidden',
   },
   createHeader: {
@@ -435,7 +435,7 @@ const styles: Styles = {
   },
   createIcon: {
     fontSize: 42,
-    color: '#60a5fa',
+    color: '#315cf6',
     marginBottom: 16,
   },
   createBody: {
@@ -446,7 +446,7 @@ const styles: Styles = {
   mainRoot: {
     padding: 24,
     minHeight: 'calc(100vh - 120px)',
-    background: 'linear-gradient(180deg, #0f172a 0%, #111827 100%)',
+    background: 'linear-gradient(180deg, #fbfdff 0%, #f6f8fc 100%)',
   },
 
   /* -- Header bar -- */
@@ -456,10 +456,10 @@ const styles: Styles = {
     justifyContent: 'space-between',
     padding: '14px 18px',
     marginBottom: 16,
-    background: '#111827',
-    border: '1px solid rgba(148, 163, 184, 0.18)',
+    background: '#ffffff',
+    border: '1px solid #e5eaf3',
     borderRadius: 10,
-    boxShadow: '0 12px 32px rgba(2, 6, 23, 0.2)',
+    boxShadow: '0 12px 32px rgba(15, 23, 42, 0.06)',
   },
   headerLeft: {
     display: 'flex',
@@ -470,7 +470,7 @@ const styles: Styles = {
   pipelineIdText: {
     fontFamily: "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace",
     fontSize: 13,
-    color: '#93c5fd',
+    color: '#315cf6',
   },
 
   /* -- Vertical stage tracker -- */
@@ -483,8 +483,8 @@ const styles: Styles = {
   stageTrackSidebar: {
     width: 232,
     flexShrink: 0,
-    background: '#0f172a',
-    border: '1px solid rgba(148, 163, 184, 0.16)',
+    background: '#ffffff',
+    border: '1px solid #e5eaf3',
     borderRadius: 10,
     padding: '12px 0',
     overflowY: 'auto' as const,
@@ -497,9 +497,9 @@ const styles: Styles = {
     cursor: status === 'completed' || isActive ? 'pointer' : 'default',
     position: 'relative' as const,
     background: isActive
-      ? 'linear-gradient(90deg, rgba(59, 130, 246, 0.16), rgba(59, 130, 246, 0.03))'
+      ? 'linear-gradient(90deg, rgba(49, 92, 246, 0.12), rgba(49, 92, 246, 0.03))'
       : 'transparent',
-    borderLeft: isActive ? '3px solid #60a5fa' : '3px solid transparent',
+    borderLeft: isActive ? '3px solid #315cf6' : '3px solid transparent',
     transition: 'all 0.25s ease',
   }),
   stageItemIcon: (status: string) => ({
@@ -513,14 +513,14 @@ const styles: Styles = {
     flexShrink: 0,
     background:
       status === 'completed' ? 'rgba(82, 196, 26, 0.15)' :
-      status === 'running' ? 'rgba(59, 130, 246, 0.16)' :
+      status === 'running' ? 'rgba(49, 92, 246, 0.12)' :
       status === 'failed' ? 'rgba(239, 68, 68, 0.14)' :
-      'rgba(148, 163, 184, 0.08)',
+      '#f4f7fb',
     color:
-      status === 'completed' ? '#86efac' :
-      status === 'running' ? '#93c5fd' :
-      status === 'failed' ? '#fca5a5' :
-      '#64748b',
+      status === 'completed' ? '#16a34a' :
+      status === 'running' ? '#315cf6' :
+      status === 'failed' ? '#dc2626' :
+      '#667085',
     border: `1px solid ${
       status === 'completed' ? 'rgba(34, 197, 94, 0.32)' :
       status === 'running' ? 'rgba(59, 130, 246, 0.32)' :
@@ -530,7 +530,7 @@ const styles: Styles = {
   }),
   stageItemName: (isActive: boolean, status: string) => ({
     fontSize: 13,
-    color: isActive ? '#f8fafc' : status === 'completed' ? '#cbd5e1' : '#64748b',
+    color: isActive ? '#111827' : status === 'completed' ? '#334155' : '#667085',
     fontWeight: isActive ? 600 : 400,
     whiteSpace: 'nowrap' as const,
     overflow: 'hidden',
@@ -548,19 +548,19 @@ const styles: Styles = {
 
   /* -- Stage detail card -- */
   stageDetailCard: {
-    background: '#111827',
-    border: '1px solid rgba(148, 163, 184, 0.16)',
+    background: '#ffffff',
+    border: '1px solid #e5eaf3',
     borderRadius: 10,
     overflow: 'hidden',
-    boxShadow: '0 18px 45px rgba(2, 6, 23, 0.22)',
+    boxShadow: '0 18px 45px rgba(15, 23, 42, 0.06)',
   },
   stageDetailHeader: {
     display: 'flex',
     alignItems: 'center',
     gap: 12,
     padding: '16px 20px',
-    borderBottom: '1px solid rgba(148, 163, 184, 0.14)',
-    background: '#0f172a',
+    borderBottom: '1px solid #edf1f7',
+    background: '#fbfdff',
   },
   stageDetailBody: {
     padding: 20,
@@ -573,9 +573,9 @@ const styles: Styles = {
     padding: '28px 24px 24px',
     marginBottom: 16,
     borderRadius: 8,
-    border: '1px solid rgba(148, 163, 184, 0.16)',
-    background: '#0b1120',
-    color: '#e5e7eb',
+    border: '1px solid #e5eaf3',
+    background: '#f8fafd',
+    color: '#243044',
     position: 'relative' as const,
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
   },
@@ -584,7 +584,7 @@ const styles: Styles = {
     top: 8,
     right: 12,
     fontSize: 11,
-    color: '#64748b',
+    color: '#667085',
     textTransform: 'uppercase' as const,
     letterSpacing: 0,
   },
@@ -593,7 +593,7 @@ const styles: Styles = {
   confirmPanel: {
     marginTop: 16,
     padding: 20,
-    background: 'rgba(120, 53, 15, 0.16)',
+    background: '#fffbeb',
     border: '1px solid rgba(245, 158, 11, 0.26)',
     borderRadius: 10,
     boxShadow: 'none',
@@ -609,15 +609,15 @@ const styles: Styles = {
   failPanel: {
     marginTop: 16,
     padding: 20,
-    background: 'rgba(127, 29, 29, 0.16)',
+    background: '#fef2f2',
     border: '1px solid rgba(239, 68, 68, 0.24)',
     borderRadius: 10,
   },
 
   /* -- Timeline / history card -- */
   historyCard: {
-    background: '#111827',
-    border: '1px solid rgba(148, 163, 184, 0.14)',
+    background: '#ffffff',
+    border: '1px solid #e5eaf3',
     borderRadius: 10,
   },
   timelineRow: (_isLast: boolean) => ({
@@ -634,8 +634,8 @@ const styles: Styles = {
     marginTop: 4,
     background:
       status === 'completed' ? '#22c55e' :
-      status === 'running' ? '#60a5fa' :
-      status === 'failed' ? '#ef4444' : '#475569',
+      status === 'running' ? '#315cf6' :
+      status === 'failed' ? '#dc2626' : '#c4ccd8',
     boxShadow:
       status === 'completed' ? '0 0 0 3px rgba(34, 197, 94, 0.12)' :
       status === 'running' ? '0 0 0 3px rgba(59, 130, 246, 0.14)' :
@@ -647,7 +647,7 @@ const styles: Styles = {
     top: 24,
     bottom: -10,
     width: 1,
-    background: 'rgba(148, 163, 184, 0.14)',
+    background: '#e5eaf3',
   },
   timelineContent: {
     flex: 1,
@@ -664,8 +664,8 @@ const styles: Styles = {
     gap: 8,
     padding: '8px 12px',
     borderRadius: 8,
-    background: 'rgba(15, 23, 42, 0.9)',
-    border: '1px solid rgba(148, 163, 184, 0.14)',
+    background: '#f8fafd',
+    border: '1px solid #e5eaf3',
     marginBottom: 6,
     transition: 'all 0.2s ease',
   },
@@ -673,7 +673,7 @@ const styles: Styles = {
   /* -- Completed banner -- */
   completedBanner: {
     padding: '16px 20px',
-    background: 'rgba(20, 83, 45, 0.16)',
+    background: '#f0fdf4',
     border: '1px solid rgba(34, 197, 94, 0.25)',
     borderRadius: 10,
     display: 'flex',
@@ -697,11 +697,11 @@ const styles: Styles = {
       status === 'waiting_confirm' ? 'rgba(245, 158, 11, 0.13)' :
       'rgba(148, 163, 184, 0.08)',
     color:
-      status === 'running' ? '#93c5fd' :
-      status === 'completed' ? '#86efac' :
-      status === 'failed' ? '#fca5a5' :
-      status === 'waiting_confirm' ? '#fcd34d' :
-      '#94a3b8',
+      status === 'running' ? '#315cf6' :
+      status === 'completed' ? '#16a34a' :
+      status === 'failed' ? '#dc2626' :
+      status === 'waiting_confirm' ? '#b45309' :
+      '#667085',
     border: `1px solid ${
       status === 'running' ? 'rgba(59, 130, 246, 0.28)' :
       status === 'completed' ? 'rgba(34, 197, 94, 0.26)' :
@@ -726,7 +726,7 @@ const styles: Styles = {
     display: 'flex',
     alignItems: 'center',
     gap: 8,
-    color: '#93c5fd',
+    color: '#315cf6',
     fontSize: 14,
     fontWeight: 600,
   },
@@ -739,9 +739,9 @@ const styles: Styles = {
   promptResetBtn: {
     marginLeft: 'auto',
     fontSize: 11,
-    color: '#94a3b8',
+    color: '#667085',
     borderRadius: 6,
-    borderColor: 'rgba(148,163,184,0.18)',
+    borderColor: '#dbe3ef',
   },
   promptDrawerStage: {
     marginBottom: 24,
@@ -752,14 +752,14 @@ const styles: Styles = {
     gap: 10,
     marginBottom: 10,
     paddingBottom: 8,
-    borderBottom: '1px solid rgba(148, 163, 184, 0.14)',
+    borderBottom: '1px solid #e5eaf3',
   },
   promptDrawerBody: {
     padding: '8px 12px',
     borderRadius: 8,
-    background: '#0b1120',
-    border: '1px solid rgba(148, 163, 184, 0.14)',
-    color: '#cbd5e1',
+    background: '#f8fafd',
+    border: '1px solid #e5eaf3',
+    color: '#243044',
     fontSize: 13,
     lineHeight: 1.7,
     whiteSpace: 'pre-wrap' as const,
@@ -864,8 +864,8 @@ const PipelinePage: React.FC = () => {
 
   const handleDeletePipeline = async (id: string) => {
     Modal.confirm({
-        title: <span style={{ color: '#e5e7eb' }}>确认删除</span>,
-      content: <span style={{ color: '#aaa' }}>删除后无法恢复，确定要删除这条流水线吗？</span>,
+        title: <span style={{ color: '#111827' }}>确认删除</span>,
+      content: <span style={{ color: '#667085' }}>删除后无法恢复，确定要删除这条流水线吗？</span>,
       okType: 'danger',
       okText: '删除',
       cancelText: '取消',
@@ -1211,10 +1211,10 @@ const PipelinePage: React.FC = () => {
             <div style={styles.createIcon}>
               <ThunderboltOutlined />
             </div>
-            <Title level={4} style={{ color: '#f8fafc', marginBottom: 4 }}>
+            <Title level={4} style={{ color: '#111827', marginBottom: 4 }}>
               创建开发流水线
             </Title>
-            <Paragraph style={{ color: '#94a3b8', marginBottom: 0, fontSize: 14 }}>
+            <Paragraph style={{ color: '#667085', marginBottom: 0, fontSize: 14 }}>
               描述你的需求，AI Agent 团队将自动完成从需求分析到部署的完整开发流程
             </Paragraph>
           </div>
@@ -1322,8 +1322,8 @@ const PipelinePage: React.FC = () => {
                         return (
                           <div key={key}>
                             <div style={styles.promptStageHeader}>
-                              <span style={{ fontSize: 14, color: '#e5e7eb' }}>{STAGE_ICONS[key]}</span>
-                              <Text style={{ color: '#e5e7eb', fontSize: 13, fontWeight: 600 }}>
+                              <span style={{ fontSize: 14, color: '#315cf6' }}>{STAGE_ICONS[key]}</span>
+                              <Text style={{ color: '#111827', fontSize: 13, fontWeight: 600 }}>
                                 {STAGE_NAMES[key]}
                               </Text>
                               <Tag color={agentColor} style={{ margin: 0, borderRadius: 6, fontSize: 11 }}>
@@ -1407,14 +1407,14 @@ const PipelinePage: React.FC = () => {
         {/* 历史流水线列表 */}
         <div style={{
           flex: 1, minWidth: 320, padding: 20,
-          background: '#111827',
-          border: '1px solid rgba(148, 163, 184, 0.16)',
+          background: '#ffffff',
+          border: '1px solid #e5eaf3',
           borderRadius: 10, alignSelf: 'stretch',
-          boxShadow: '0 18px 45px rgba(2, 6, 23, 0.18)',
+          boxShadow: '0 18px 45px rgba(15, 23, 42, 0.06)',
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <Text style={{ color: '#f8fafc', fontSize: 15, fontWeight: 600 }}>
-              <HistoryOutlined style={{ color: '#60a5fa', marginRight: 8 }} />
+            <Text style={{ color: '#111827', fontSize: 15, fontWeight: 600 }}>
+              <HistoryOutlined style={{ color: '#315cf6', marginRight: 8 }} />
               历史流水线
             </Text>
             <Button size="small" icon={<ReloadOutlined />} onClick={fetchPipelineHistory}>
@@ -1460,7 +1460,7 @@ const PipelinePage: React.FC = () => {
               setSearchParams({})
               fetchPipelineHistory()
             }}
-            style={{ color: '#94a3b8', marginRight: 8 }}
+            style={{ color: '#667085', marginRight: 8 }}
           />
           <BranchesOutlined style={{ color: '#60a5fa', fontSize: 16 }} />
           <Text style={styles.pipelineIdText}>
@@ -1596,7 +1596,7 @@ const PipelinePage: React.FC = () => {
                   size="small"
                   icon={<ArrowLeftOutlined />}
                   onClick={() => setSelectedStage('')}
-                  style={{ color: '#60a5fa', marginRight: 8, padding: '0 4px' }}
+                  style={{ color: '#315cf6', marginRight: 8, padding: '0 4px' }}
                 >
                   返回当前
                 </Button>
@@ -1613,7 +1613,7 @@ const PipelinePage: React.FC = () => {
                   STAGE_ICONS[activeStageKey]
                 )}
               </div>
-              <Text strong style={{ color: '#f8fafc', fontSize: 15 }}>
+              <Text strong style={{ color: '#111827', fontSize: 15 }}>
                 {STAGE_NAMES[activeStageKey] || activeStageKey}
                 {!isViewingCurrent && <Text style={{ color: '#64748b', fontSize: 12, marginLeft: 8 }}>(历史查看)</Text>}
               </Text>
@@ -1650,7 +1650,7 @@ const PipelinePage: React.FC = () => {
                   padding: 16, marginBottom: 16,
                   background: 'rgba(245, 34, 45, 0.08)',
                   border: '1px solid rgba(245, 34, 45, 0.3)',
-                  borderRadius: 8, color: '#fca5a5',
+                borderRadius: 8, color: '#dc2626',
                 }}>
                   <strong>错误信息：</strong>{currentStage.error}
                 </div>
@@ -1665,13 +1665,13 @@ const PipelinePage: React.FC = () => {
                   borderRadius: 10,
                 }}>
                   <Space size={8} style={{ marginBottom: liveStageOutput ? 8 : 0 }}>
-                    <LoadingOutlined style={{ color: '#60a5fa' }} />
-                    <Text style={{ color: '#bfdbfe', fontSize: 13 }}>
+                    <LoadingOutlined style={{ color: '#315cf6' }} />
+                    <Text style={{ color: '#315cf6', fontSize: 13 }}>
                       Agent 正在实时输出{streamingStage ? `：${STAGE_NAMES[streamingStage] || streamingStage}` : ''}
                     </Text>
                   </Space>
                   {liveStageOutput && (
-                    <Text style={{ color: 'rgba(255,255,255,0.55)', fontSize: 12 }}>
+                    <Text style={{ color: '#667085', fontSize: 12 }}>
                       可以先看方向是否对；当前阶段结束后可直接确认、退回或补充修改意见。
                     </Text>
                   )}
@@ -1733,7 +1733,7 @@ const PipelinePage: React.FC = () => {
               {currentStage?.code_files && Object.keys(currentStage.code_files).length > 0 && (
                 <div style={{ marginBottom: 16 }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                    <Text style={{ color: '#94a3b8', fontSize: 12, textTransform: 'uppercase', letterSpacing: 0 }}>
+                    <Text style={{ color: '#667085', fontSize: 12, textTransform: 'uppercase', letterSpacing: 0 }}>
                       生成的代码文件
                     </Text>
                     <Button
@@ -1912,18 +1912,18 @@ const PipelinePage: React.FC = () => {
           <div style={styles.historyCard}>
             <div style={{
               padding: '14px 20px',
-              borderBottom: '1px solid rgba(148, 163, 184, 0.14)',
+              borderBottom: '1px solid #e5eaf3',
               display: 'flex',
               alignItems: 'center',
               gap: 8,
             }}>
-              <HistoryOutlined style={{ color: '#60a5fa' }} />
-              <Text style={{ color: '#aaa', fontSize: 13, fontWeight: 600 }}>
+              <HistoryOutlined style={{ color: '#315cf6' }} />
+              <Text style={{ color: '#111827', fontSize: 13, fontWeight: 600 }}>
                 执行历史
               </Text>
               <Badge
                 count={completedStages.length}
-                style={{ background: 'rgba(59, 130, 246, 0.16)', color: '#93c5fd', boxShadow: 'none' }}
+                style={{ background: '#edf3ff', color: '#315cf6', boxShadow: 'none' }}
                 overflowCount={99}
               />
             </div>
@@ -1945,7 +1945,7 @@ const PipelinePage: React.FC = () => {
                         {!isLast && <div style={styles.timelineLine} />}
                       </div>
                       <div style={styles.timelineContent}>
-                        <Text style={{ color: '#ccc', fontSize: 13, fontWeight: 500 }}>
+                        <Text style={{ color: '#334155', fontSize: 13, fontWeight: 500 }}>
                           {STAGE_NAMES[key]}
                         </Text>
                         <Tag
@@ -1973,7 +1973,7 @@ const PipelinePage: React.FC = () => {
       <Drawer
         title={
           <Space>
-            <EyeOutlined style={{ color: '#60a5fa' }} />
+            <EyeOutlined style={{ color: '#315cf6' }} />
             <span>UI 预览</span>
           </Space>
         }
@@ -1982,11 +1982,11 @@ const PipelinePage: React.FC = () => {
         onClose={() => setPreviewVisible(false)}
         styles={{
           header: {
-            background: '#111827',
-            borderBottom: '1px solid rgba(148, 163, 184, 0.16)',
+            background: '#ffffff',
+            borderBottom: '1px solid #e5eaf3',
           },
           body: {
-            background: '#0f172a',
+            background: '#f6f8fc',
             padding: 16,
           },
         }}
@@ -2012,7 +2012,7 @@ const PipelinePage: React.FC = () => {
       <Drawer
         title={
           <Space>
-            <SettingOutlined style={{ color: '#60a5fa' }} />
+            <SettingOutlined style={{ color: '#315cf6' }} />
             <span>阶段 Prompt 配置</span>
             <Text style={{ fontSize: 12, color: '#64748b' }}>
               (最终合并结果)
@@ -2024,11 +2024,11 @@ const PipelinePage: React.FC = () => {
         onClose={() => setPromptsDrawerVisible(false)}
         styles={{
           header: {
-            background: '#111827',
-            borderBottom: '1px solid rgba(148, 163, 184, 0.16)',
+            background: '#ffffff',
+            borderBottom: '1px solid #e5eaf3',
           },
           body: {
-            background: '#0f172a',
+            background: '#f6f8fc',
             padding: 20,
           },
         }}
@@ -2046,7 +2046,7 @@ const PipelinePage: React.FC = () => {
               <div key={key} style={styles.promptDrawerStage}>
                 <div style={styles.promptDrawerStageHeader}>
                   <span style={{ color: agentColor, fontSize: 14 }}>{STAGE_ICONS[key]}</span>
-                  <Text style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 600 }}>
+                  <Text style={{ color: '#111827', fontSize: 14, fontWeight: 600 }}>
                     {STAGE_NAMES[key]}
                   </Text>
                   <Tag color={agentColor} style={{ margin: 0, borderRadius: 6, fontSize: 11 }}>
