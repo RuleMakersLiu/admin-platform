@@ -204,7 +204,7 @@ const ProjectCreatePage: React.FC = () => {
             选择项目创建方式
           </Title>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, maxWidth: 800, margin: '0 auto' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 24, maxWidth: 800, margin: '0 auto' }}>
             {/* 从模板创建 */}
             <Card
               hoverable
@@ -563,7 +563,7 @@ const ProjectCreatePage: React.FC = () => {
             border: '1px solid #e5eaf3',
             borderRadius: 12, marginBottom: 24,
           }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16 }}>
               <div>
                 <Text type="secondary">项目名称</Text>
                 <div style={{ color: '#111827', fontWeight: 600 }}>{importedProject.name}</div>
