@@ -20,7 +20,7 @@ import { generatorApi } from '@/services/api'
 import api from '@/services/api'
 import { MarkdownRenderer } from '@/utils/markdown'
 import { extractHtmlBlocks, prepareUIPreviewHtml, repairTruncatedHtml } from '@/utils/sanitize'
-import { saveLastPortalPath, useAuthStore } from '@/stores/auth'
+import { canUsePipelineWorkbench, canUseProductPortal, saveLastPortalPath, useAuthStore } from '@/stores/auth'
 
 const { TextArea } = Input
 const { Title, Text, Paragraph } = Typography
@@ -796,6 +796,7 @@ const PipelinePage: React.FC = () => {
   const [streamingStage, setStreamingStage] = useState('')
   const [streamOutputByStage, setStreamOutputByStage] = useState<Record<string, string>>({})
   const streamAbortRef = useRef<AbortController | null>(null)
+  const isProductOnlyFlow = canUseProductPortal(user) && !canUsePipelineWorkbench(user)
 
   useEffect(() => {
     saveLastPortalPath(user, '/pipeline/development')
@@ -1035,6 +1036,16 @@ const PipelinePage: React.FC = () => {
     }
     setLoading(true)
     try {
+      let matchedSkill = null as Awaited<ReturnType<typeof pipelineApi.matchProjectSkill>> | null
+      if (isProductOnlyFlow) {
+        message.loading({ content: '正在匹配项目 Skill...', key: 'pipeline-create' })
+        matchedSkill = await pipelineApi.matchProjectSkill({ user_request: userRequest.trim() })
+        message.success({
+          content: `已匹配项目：${matchedSkill.skill.project_name || matchedSkill.skill.project_id}`,
+          key: 'pipeline-create',
+        })
+      }
+
       const backendProj = projects.find(p => String(p.id) === backendProjectId)
       const frontendProj = projects.find(p => String(p.id) === frontendProjectId)
       const customPrompts = Object.fromEntries(
@@ -1045,15 +1056,34 @@ const PipelinePage: React.FC = () => {
       const skillConfig = Object.keys(customPrompts).length
         ? { custom_prompts: customPrompts }
         : undefined
+      const matchedProjectId = matchedSkill ? String(matchedSkill.skill.project_id) : ''
       const data = await pipelineApi.create({
         user_request: userRequest.trim(),
-        project_id: '',
+        project_id: matchedProjectId,
         project_name: '',
-        backend_project_id: backendProjectId || '',
-        frontend_project_id: frontendProjectId || '',
-        backend_tech: backendProj ? `${backendProj.language}/${backendProj.framework}` : '',
-        frontend_tech: frontendProj ? `${frontendProj.language}/${frontendProj.framework}` : '',
-        skill_config: skillConfig,
+        backend_project_id: isProductOnlyFlow ? '' : backendProjectId || '',
+        frontend_project_id: isProductOnlyFlow ? matchedProjectId : frontendProjectId || '',
+        backend_tech: isProductOnlyFlow ? '' : backendProj ? `${backendProj.language}/${backendProj.framework}` : '',
+        frontend_tech: isProductOnlyFlow && matchedSkill
+          ? [matchedSkill.skill.language, matchedSkill.skill.framework].filter(Boolean).join('/')
+          : frontendProj ? `${frontendProj.language}/${frontendProj.framework}` : '',
+        pipeline_mode: isProductOnlyFlow ? 'frontend_contract_review' : undefined,
+        skill_config: matchedSkill
+          ? {
+              ...(skillConfig || {}),
+              entry: 'product_pipeline',
+              auto_matched: true,
+              match_source: matchedSkill.match_source,
+              match_reason: matchedSkill.match_reason,
+              match_confidence: matchedSkill.confidence,
+              project_skill: {
+                project_id: matchedSkill.skill.project_id,
+                project_name: matchedSkill.skill.project_name,
+                skill_version: matchedSkill.skill.skill_version,
+                confirmed_at: matchedSkill.skill.confirmed_at,
+              },
+            }
+          : skillConfig,
       })
       const id = data.pipeline_id
       setPipelineId(id)
@@ -1213,7 +1243,9 @@ const PipelinePage: React.FC = () => {
               创建开发流水线
             </Title>
             <Paragraph style={{ color: '#667085', marginBottom: 0, fontSize: 14 }}>
-              描述你的需求，AI Agent 团队将自动完成从需求分析到部署的完整开发流程
+              {isProductOnlyFlow
+                ? '描述产品需求，系统会自动匹配项目 Skill，并生成需求文档、前端预览、代码和审查结果'
+                : '描述你的需求，AI Agent 团队将自动完成从需求分析到部署的完整开发流程'}
             </Paragraph>
           </div>
 
@@ -1241,33 +1273,43 @@ const PipelinePage: React.FC = () => {
               ))}
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
-              <Select
-                placeholder="后端项目（决定后端技术栈）"
-                value={backendProjectId}
-                onChange={setBackendProjectId}
-                allowClear
-                showSearch
-                optionFilterProp="label"
-                options={projects.map((p: any) => ({
-                  label: `${p.name} (${p.language}/${p.framework})`,
-                  value: String(p.id),
-                }))}
+            {isProductOnlyFlow ? (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 12, borderRadius: 8 }}
+                message="产品模式"
+                description="提交需求后自动匹配最相关的项目 Skill，用于生成需求文档、前端预览、代码和自动审查。"
               />
-              <Select
-                placeholder="前端项目（决定前端技术栈，如 PHP 转发层也选这里）"
-                value={frontendProjectId}
-                onChange={setFrontendProjectId}
-                allowClear
-                showSearch
-                optionFilterProp="label"
-                options={projects.map((p: any) => ({
-                  label: `${p.name} (${p.language}/${p.framework})`,
-                  value: String(p.id),
-                }))}
-              />
-            </div>
-            {((backendProjectId && projects.find(p => String(p.id) === backendProjectId)) ||
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+                <Select
+                  placeholder="后端项目（决定后端技术栈）"
+                  value={backendProjectId}
+                  onChange={setBackendProjectId}
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  options={projects.map((p: any) => ({
+                    label: `${p.name} (${p.language}/${p.framework})`,
+                    value: String(p.id),
+                  }))}
+                />
+                <Select
+                  placeholder="前端项目（决定前端技术栈，如 PHP 转发层也选这里）"
+                  value={frontendProjectId}
+                  onChange={setFrontendProjectId}
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  options={projects.map((p: any) => ({
+                    label: `${p.name} (${p.language}/${p.framework})`,
+                    value: String(p.id),
+                  }))}
+                />
+              </div>
+            )}
+            {!isProductOnlyFlow && ((backendProjectId && projects.find(p => String(p.id) === backendProjectId)) ||
               (frontendProjectId && projects.find(p => String(p.id) === frontendProjectId))) && (
               <div style={{
                 marginBottom: 12, padding: '8px 12px', borderRadius: 8,

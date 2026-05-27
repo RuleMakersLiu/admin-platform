@@ -9,7 +9,7 @@ jwt:
   expiration: 86400
 
 redis:
-  host: 127.0.0.1
+  host: redis
   port: 6379
   password: ""
   db: 0
@@ -18,23 +18,23 @@ redis:
 # 后端服务配置
 services:
   python:
-    host: 127.0.0.1
+    host: admin-python
     port: 8081
     prefix: /api
   generator:
-    host: 127.0.0.1
+    host: admin-generator
     port: 8082
     prefix: /generator
   deploy:
-    host: 127.0.0.1
+    host: admin-deploy
     port: 8083
     prefix: /deploy
   config:
-    host: 127.0.0.1
+    host: admin-config
     port: 8085
     prefix: /config
   ws:
-    host: 127.0.0.1
+    host: admin-ws
     port: 8086
     prefix: ""
 
@@ -47,8 +47,8 @@ rate_limit:
 # Kafka配置
 kafka:
   brokers:
-    - ${KAFKA_BROKER:localhost:9092}
-  topic: ${KAFKA_TRACKING_TOPIC:tracking-events}
+    - localhost:9092
+  topic: tracking-events
   queue_size: 10000
   batch_size: 100
   flush_period_ms: 100

@@ -50,8 +50,8 @@ const userWith = (permissions, overrides = {}) => ({
 
 storage.clear()
 assert.equal(resolveLandingPath(userWith(['portal:developer'])), '/project/access')
-assert.equal(resolveLandingPath(userWith(['portal:product'])), '/pipeline/requirement')
-assert.equal(resolveLandingPath(userWith(['flow:pipeline:match'])), '/pipeline/requirement')
+assert.equal(resolveLandingPath(userWith(['portal:product'])), '/pipeline/development')
+assert.equal(resolveLandingPath(userWith(['flow:pipeline:match'])), '/pipeline/development')
 assert.equal(resolveLandingPath(userWith(['project:create'])), '/project/access')
 assert.equal(resolveLandingPath(userWith(['flow:pipeline:list'])), '/pipeline/development')
 
@@ -67,7 +67,8 @@ saveLastPortalPath(multiRoleUser, '/developer')
 assert.equal(getLastPortalPath(multiRoleUser), '/project/access')
 
 saveLastPortalPath(multiRoleUser, '/pipeline/requirement')
-assert.equal(resolveLandingPath(multiRoleUser), '/pipeline/requirement')
+assert.equal(getLastPortalPath(multiRoleUser), '/pipeline/development')
+assert.equal(resolveLandingPath(multiRoleUser), '/pipeline/development')
 
 saveLastPortalPath(multiRoleUser, '/pipeline/development')
 assert.equal(resolveLandingPath(multiRoleUser), '/pipeline/development')

@@ -9,6 +9,7 @@ from typing import Optional, Dict
 from app.ai.flow_manager import pipeline_manager, STAGE_DEFINITIONS, DEFAULT_STAGE_PROMPTS
 
 router = APIRouter(prefix="/flow", tags=["智能体流程"])
+logger = logging.getLogger(__name__)
 
 
 class CreatePipelineRequest(BaseModel):
@@ -79,6 +80,42 @@ async def create_pipeline(request: CreatePipelineRequest, http_request: Request)
             raw_body = await http_request.json()
         except Exception:
             raw_body = {}
+        pipeline_mode = raw_body.get("pipeline_mode") or "full"
+        skill_config = dict(request.skill_config or {})
+        backend_project_id = request.backend_project_id or ""
+        frontend_project_id = request.frontend_project_id or ""
+        backend_tech = request.backend_tech or ""
+        frontend_tech = request.frontend_tech or ""
+
+        if pipeline_mode == "frontend_contract_review" and not backend_project_id:
+            from app.services.knowledge_service import match_backend_project_skill_for_requirement
+
+            backend_match = await match_backend_project_skill_for_requirement(
+                request.user_request.strip(),
+                tenant_id=tenant_id,
+                exclude_project_id=frontend_project_id or request.project_id or "",
+            )
+            if backend_match:
+                backend_skill = backend_match.get("skill") or {}
+                backend_project_id = str(backend_skill.get("project_id") or "")
+                backend_tech = backend_tech or "/".join(
+                    part for part in [backend_skill.get("language"), backend_skill.get("framework")] if part
+                )
+                skill_config["backend_project_skill"] = {
+                    "project_id": backend_skill.get("project_id"),
+                    "project_name": backend_skill.get("project_name"),
+                    "skill_version": backend_skill.get("skill_version"),
+                    "confirmed_at": backend_skill.get("confirmed_at"),
+                    "match_source": backend_match.get("match_source"),
+                    "match_reason": backend_match.get("match_reason"),
+                    "match_confidence": backend_match.get("confidence"),
+                }
+                logger.info(
+                    "Auto matched backend Project Skill for product pipeline: project_id=%s reason=%s",
+                    backend_project_id,
+                    backend_match.get("match_reason"),
+                )
+
         pipeline_id = await pipeline_manager.create_pipeline(
             project_id=request.project_id,
             user_request=request.user_request.strip(),
@@ -87,12 +124,12 @@ async def create_pipeline(request: CreatePipelineRequest, http_request: Request)
             git_config_id=request.git_config_id,
             git_repo_url=request.git_repo_url,
             git_branch=request.git_branch,
-            skill_config=request.skill_config,
-            backend_tech=request.backend_tech or "",
-            frontend_tech=request.frontend_tech or "",
-            backend_project_id=request.backend_project_id or "",
-            frontend_project_id=request.frontend_project_id or "",
-            pipeline_mode=raw_body.get("pipeline_mode") or "full",
+            skill_config=skill_config,
+            backend_tech=backend_tech,
+            frontend_tech=frontend_tech,
+            backend_project_id=backend_project_id,
+            frontend_project_id=frontend_project_id,
+            pipeline_mode=pipeline_mode,
         )
         return {
             "code": 200,
@@ -113,14 +150,31 @@ async def match_project_skill(request: MatchProjectSkillRequest, http_request: R
     if not request.user_request or not request.user_request.strip():
         raise HTTPException(status_code=400, detail="需求描述不能为空")
 
-    from app.services.knowledge_service import match_project_skill_for_requirement
+    from app.services.knowledge_service import (
+        match_backend_project_skill_for_requirement,
+        match_frontend_project_skill_for_requirement,
+        match_project_skill_for_requirement,
+    )
 
-    match = await match_project_skill_for_requirement(
+    match = await match_frontend_project_skill_for_requirement(
         request.user_request.strip(),
         tenant_id=_get_tenant_id(http_request),
     )
     if not match:
+        match = await match_project_skill_for_requirement(
+            request.user_request.strip(),
+            tenant_id=_get_tenant_id(http_request),
+        )
+    if not match:
         raise HTTPException(status_code=404, detail="未找到可用的已确认项目 Skill，请先由开发角色完成项目接入和 Skill 确认")
+
+    backend_match = await match_backend_project_skill_for_requirement(
+        request.user_request.strip(),
+        tenant_id=_get_tenant_id(http_request),
+        exclude_project_id=str((match.get("skill") or {}).get("project_id") or ""),
+    )
+    if backend_match:
+        match["backend_match"] = backend_match
     return {"code": 200, "message": "匹配成功", "data": match}
 
 
@@ -491,10 +545,9 @@ async def _do_analyze(project_id: str):
     """后台执行项目分析"""
     try:
         from app.services.knowledge_service import analyze_project
-        result = await analyze_project(project_id)
+        result = await analyze_project(project_id, force=True)
         logger.info(f"Project {project_id} analysis done: {bool(result)}")
     except Exception as e:
-        import logging
         logging.getLogger(__name__).error(f"Project analysis failed: {e}")
 
 

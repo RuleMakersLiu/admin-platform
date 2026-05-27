@@ -4,12 +4,12 @@ import (
 	cfg "admin-generator/internal/config"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
-
 )
 
 // ProjectTemplate 项目模板
@@ -377,18 +377,22 @@ func (s *ProjectService) ListProjects(tenantID, adminID int64, page, pageSize in
 func (s *ProjectService) GetProjectByID(id int64, tenantID int64) (*GenProject, error) {
 	db := cfg.GetDB()
 	var project GenProject
-	err := db.Table("gen_project").
-		Where("id = ? AND tenant_id = ?", id, tenantID).
-		First(&project).Error
+	query := db.Table("gen_project").Where("id = ?", id)
+	if tenantID > 0 {
+		query = query.Where("tenant_id = ? OR tenant_id = 0", tenantID)
+	}
+	err := query.First(&project).Error
 	return &project, err
 }
 
 // DeleteProject 删除项目
 func (s *ProjectService) DeleteProject(id int64, tenantID int64) error {
 	db := cfg.GetDB()
-	return db.Table("gen_project").
-		Where("id = ? AND tenant_id = ?", id, tenantID).
-		Update("status", 0).Error
+	query := db.Table("gen_project").Where("id = ?", id)
+	if tenantID > 0 {
+		query = query.Where("tenant_id = ? OR tenant_id = 0", tenantID)
+	}
+	return query.Update("status", 0).Error
 }
 
 // RegenerateProject 重新生成项目代码
@@ -474,8 +478,7 @@ func (s *ProjectService) getImportedProjectFiles(project *GenProject) (map[strin
 		branch = "main"
 	}
 
-	cmd := exec.Command("git", "clone", "--depth", "1", "-b", branch, cloneURL, tmpDir)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := cloneRepository(cloneURL, branch, tmpDir); err != nil {
 		return nil, fmt.Errorf("git clone 失败: %s", string(out))
 	}
 
@@ -541,9 +544,11 @@ func isTextContent(data []byte) bool {
 func (s *ProjectService) UpdateProject(id int64, tenantID int64, updates map[string]interface{}) error {
 	db := cfg.GetDB()
 	updates["update_time"] = time.Now().UnixMilli()
-	return db.Table("gen_project").
-		Where("id = ? AND tenant_id = ?", id, tenantID).
-		Updates(updates).Error
+	query := db.Table("gen_project").Where("id = ?", id)
+	if tenantID > 0 {
+		query = query.Where("tenant_id = ? OR tenant_id = 0", tenantID)
+	}
+	return query.Updates(updates).Error
 }
 
 // ImportProjectRequest 从 Git 导入项目请求
@@ -573,8 +578,7 @@ func (s *ProjectService) ImportProject(req *ImportProjectRequest, adminID, tenan
 	}
 
 	// git clone
-	cmd := exec.Command("git", "clone", "--depth", "1", "-b", req.Branch, cloneURL, tmpDir)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := cloneRepository(cloneURL, req.Branch, tmpDir); err != nil {
 		return nil, fmt.Errorf("git clone 失败: %s", string(out))
 	}
 
@@ -603,6 +607,25 @@ func (s *ProjectService) ImportProject(req *ImportProjectRequest, adminID, tenan
 	}
 
 	return project, nil
+}
+
+func cloneRepository(cloneURL, branch, tmpDir string) ([]byte, error) {
+	args := []string{"clone", "--depth", "1"}
+	if branch != "" {
+		args = append(args, "-b", branch)
+	}
+	args = append(args, cloneURL, tmpDir)
+	out, err := exec.Command("git", args...).CombinedOutput()
+	if err == nil || branch == "" {
+		return out, err
+	}
+
+	log.Printf("git clone branch %s failed, retry default branch: %s", branch, string(out))
+	os.RemoveAll(tmpDir)
+	if mkdirErr := os.MkdirAll(tmpDir, 0755); mkdirErr != nil {
+		return out, mkdirErr
+	}
+	return exec.Command("git", "clone", "--depth", "1", cloneURL, tmpDir).CombinedOutput()
 }
 
 // injectGitCredentials 根据 repoURL 匹配 sys_git_config，注入认证信息

@@ -22,8 +22,7 @@ import {
 import type { MenuProps } from 'antd'
 import {
   DEVELOPER_PORTAL_PERMISSIONS,
-  PIPELINE_WORKBENCH_PERMISSIONS,
-  PRODUCT_PORTAL_PERMISSIONS,
+  PIPELINE_PAGE_PERMISSIONS,
   canUseDeveloperPortal,
   canUsePipelineWorkbench,
   canUseProductPortal,
@@ -61,8 +60,7 @@ const menuItems: MenuItem[] = [
     icon: <RocketOutlined />,
     label: '开发流水线',
     children: [
-      { key: '/pipeline/requirement', label: '需求开发', icon: <RocketOutlined />, permission: PRODUCT_PORTAL_PERMISSIONS },
-      { key: '/pipeline/development', label: '开发流水线', icon: <ThunderboltOutlined />, permission: PIPELINE_WORKBENCH_PERMISSIONS },
+      { key: '/pipeline/development', label: '开发流水线', icon: <ThunderboltOutlined />, permission: PIPELINE_PAGE_PERMISSIONS },
     ],
   },
   {
@@ -152,6 +150,7 @@ const getTopMenuLabel = (items: MenuItem[], pathname: string) => {
 export default function LayoutComponent() {
   const [collapsed, setCollapsed] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
+  const [openMenuKeys, setOpenMenuKeys] = useState<string[]>([])
   const navigate = useNavigate()
   const location = useLocation()
   const { user, logout, hasAnyPermission, setUser } = useAuthStore()
@@ -206,8 +205,11 @@ export default function LayoutComponent() {
 
   const portalSwitchItems: MenuProps['items'] = [
     canUseDeveloperPortal(user) && { key: 'portal:/project/access', icon: <CodeOutlined />, label: '项目接入' },
-    canUseProductPortal(user) && { key: 'portal:/pipeline/requirement', icon: <RocketOutlined />, label: '需求开发' },
-    canUsePipelineWorkbench(user) && { key: 'portal:/pipeline/development', icon: <ThunderboltOutlined />, label: '开发流水线' },
+    (canUseProductPortal(user) || canUsePipelineWorkbench(user)) && {
+      key: 'portal:/pipeline/development',
+      icon: <ThunderboltOutlined />,
+      label: '开发流水线',
+    },
   ].filter(Boolean) as MenuProps['items']
 
   const userMenuItems: MenuProps['items'] = [
@@ -236,7 +238,13 @@ export default function LayoutComponent() {
   }
 
   const selectedKeys = [location.pathname]
-  const openKeys = [`/${location.pathname.split('/')[1]}`]
+  const activeRootKey = `/${location.pathname.split('/')[1] || ''}`
+
+  useEffect(() => {
+    if (!collapsed && activeRootKey !== '/') {
+      setOpenMenuKeys((keys) => keys.includes(activeRootKey) ? keys : [...keys, activeRootKey])
+    }
+  }, [activeRootKey, collapsed])
 
   return (
     <AntLayout className="tech-layout">
@@ -264,7 +272,8 @@ export default function LayoutComponent() {
           theme="light"
           mode="inline"
           selectedKeys={selectedKeys}
-          openKeys={collapsed ? [] : openKeys}
+          openKeys={collapsed ? [] : openMenuKeys}
+          onOpenChange={(keys) => setOpenMenuKeys(keys)}
           items={visibleMenuItems as any}
           onClick={handleMenuClick}
           className="tech-menu"

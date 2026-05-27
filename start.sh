@@ -11,7 +11,12 @@ case "$1" in
     backend)
         echo "启动Python后端..."
         cd admin-python
-        source .venv/bin/activate 2>/dev/null || pip install -e . && python -m app.main
+        if [ -f .venv/bin/activate ]; then
+            source .venv/bin/activate
+        else
+            pip install -e .
+        fi
+        python -m app.main
         ;;
     gateway)
         echo "启动Go网关..."
@@ -49,8 +54,7 @@ case "$1" in
         docker compose -f docker-compose.infra.yml up -d
         echo "等待数据库启动..."
         sleep 5
-        echo "初始化数据库..."
-        docker exec -i admin-postgres psql -U postgres -d admin_platform < ../database/schema_agent.sql 2>/dev/null || echo "数据库可能已初始化"
+        echo "基础设施已启动；不会在启动时重置数据库。"
         ;;
     all)
         echo "启动所有服务..."
@@ -60,10 +64,6 @@ case "$1" in
         docker compose -f docker-compose.infra.yml up -d
         cd ..
         sleep 5
-
-        # 初始化数据库
-        echo "初始化数据库..."
-        docker exec -i admin-postgres psql -U postgres -d admin_platform < database/schema_agent.sql 2>/dev/null || echo "数据库可能已初始化"
 
         # 启动Go网关
         cd admin-gateway

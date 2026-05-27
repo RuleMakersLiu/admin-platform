@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS sys_menu (
   component VARCHAR(255),
   permission VARCHAR(100),
   icon VARCHAR(50),
-  type SMALLINT NOT NULL DEFAULT 1,
+  menu_type SMALLINT NOT NULL DEFAULT 1,
   visible SMALLINT NOT NULL DEFAULT 1,
   sort INTEGER NOT NULL DEFAULT 0,
   status SMALLINT NOT NULL DEFAULT 1,
@@ -132,7 +132,7 @@ INSERT INTO sys_admin (id, username, password, real_name, group_id, tenant_id, s
 ON CONFLICT DO NOTHING;
 
 -- 菜单数据
-INSERT INTO sys_menu (id, parent_id, name, path, component, permission, icon, type, sort, status, tenant_id, create_time) VALUES
+INSERT INTO sys_menu (id, parent_id, name, path, component, permission, icon, menu_type, sort, status, tenant_id, create_time) VALUES
 (1, 0, '系统管理', '/system', 'Layout', NULL, 'setting', 1, 99, 1, 1, EXTRACT(EPOCH FROM NOW()) * 1000),
 (2, 1, '用户管理', '/system/admin', 'system/admin/index', 'system_admin_list', 'user', 2, 1, 1, 1, EXTRACT(EPOCH FROM NOW()) * 1000),
 (3, 1, '角色管理', '/system/group', 'system/group/index', 'system_group_list', 'team', 2, 2, 1, 1, EXTRACT(EPOCH FROM NOW()) * 1000),
@@ -140,7 +140,7 @@ INSERT INTO sys_menu (id, parent_id, name, path, component, permission, icon, ty
 (5, 1, '租户管理', '/system/tenant', 'system/tenant/index', 'system_tenant_list', 'bank', 2, 4, 1, 1, EXTRACT(EPOCH FROM NOW()) * 1000)
 ON CONFLICT DO NOTHING;
 
-INSERT INTO sys_menu (parent_id, name, path, component, permission, icon, type, sort, status, tenant_id, create_time) VALUES
+INSERT INTO sys_menu (parent_id, name, path, component, permission, icon, menu_type, sort, status, tenant_id, create_time) VALUES
 (2, '用户新增', NULL, NULL, 'system:admin:create', NULL, 3, 1, 1, 1, EXTRACT(EPOCH FROM NOW()) * 1000),
 (2, '用户编辑', NULL, NULL, 'system:admin:edit', NULL, 3, 2, 1, 1, EXTRACT(EPOCH FROM NOW()) * 1000),
 (2, '用户删除', NULL, NULL, 'system:admin:delete', NULL, 3, 3, 1, 1, EXTRACT(EPOCH FROM NOW()) * 1000),

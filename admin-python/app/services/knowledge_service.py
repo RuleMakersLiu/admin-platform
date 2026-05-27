@@ -61,18 +61,26 @@ def _attr(obj: Any, name: str, default: Any = "") -> Any:
 def _build_project_skill_content(project: Any) -> str:
     """Build the human-editable project-level context skill."""
     project_name = _attr(project, "project_name") or _attr(project, "name") or "Unnamed Project"
+    repo_url = _attr(project, "repo_url") or ""
+    language = _attr(project, "language") or "unknown"
+    framework = _attr(project, "framework") or "unknown"
+    project_brief = (
+        _attr(project, "project_brief")
+        or _attr(project, "description")
+        or f"{project_name} project from {repo_url or 'an unconfigured repository'} ({language}/{framework})."
+    )
     key_files = _stringify_list(_attr(project, "key_files"))
     key_file_lines = "\n".join(f"- `{path}`" for path in key_files[:12]) or "- No key files detected"
 
     return f"""# {PROJECT_SKILL_HEADER}: {project_name}
 
 ## Project Brief
-{_attr(project, "project_brief") or _attr(project, "description") or "No project brief provided."}
+{project_brief}
 
 ## Repository
-- URL: {_attr(project, "repo_url") or "N/A"}
-- Language: {_attr(project, "language") or "unknown"}
-- Framework: {_attr(project, "framework") or "unknown"}
+- URL: {repo_url or "N/A"}
+- Language: {language}
+- Framework: {framework}
 
 ## Technical Summary
 {_attr(project, "tech_summary") or "No technical summary available."}
@@ -337,6 +345,7 @@ class KnowledgeService:
         tags: Optional[List[str]] = None,
         source: Optional[str] = None,
         project_id: Optional[int] = None,
+        status: int = 1,
     ) -> AgentKnowledge:
         """创建知识条目
 
@@ -364,6 +373,7 @@ class KnowledgeService:
                 tenant_id=tenant_id,
                 version=1,
                 embedding_status="pending",
+                status=status,
             )
             session.add(knowledge)
             await session.commit()
@@ -404,6 +414,7 @@ class KnowledgeService:
         category: Optional[str] = None,
         tags: Optional[List[str]] = None,
         source: Optional[str] = None,
+        status: Optional[int] = None,
     ) -> Optional[AgentKnowledge]:
         """更新知识条目
 
@@ -443,6 +454,8 @@ class KnowledgeService:
                 knowledge.tags = json.dumps(tags, ensure_ascii=False)
             if source is not None:
                 knowledge.source = source
+            if status is not None:
+                knowledge.status = status
             knowledge.update_time = int(time.time() * 1000)
             await session.commit()
             await session.refresh(knowledge)
@@ -540,6 +553,7 @@ class KnowledgeService:
                     "category": r.category,
                     "tags": json.loads(r.tags) if r.tags else [],
                     "source": r.source,
+                    "status": r.status,
                     "version": r.version,
                     "view_count": r.view_count,
                     "create_time": r.create_time,
@@ -1000,7 +1014,7 @@ ANALYSIS_PROMPT = """你是一个资深的技术架构分析师。请分析以�
 }}"""
 
 
-async def analyze_project(project_id: str) -> Optional[Dict]:
+async def analyze_project(project_id: str, force: bool = False) -> Optional[Dict]:
     """分析项目并存储到知识库。后台任务，不阻塞调用方。"""
     import httpx
 
@@ -1010,7 +1024,7 @@ async def analyze_project(project_id: str) -> Optional[Dict]:
             select(ProjectKnowledge).where(ProjectKnowledge.project_id == int(project_id))
         )
         existing = result.scalar_one_or_none()
-        if existing and existing.analysis_status == "done" and existing.skill_content:
+        if existing and existing.analysis_status == "done" and existing.skill_content and not force:
             logger.info(f"Project {project_id} already analyzed")
             return _knowledge_to_dict(existing)
         if existing:
@@ -1023,7 +1037,7 @@ async def analyze_project(project_id: str) -> Optional[Dict]:
     # 获取项目信息
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"http://localhost:8082/generator/projects/{project_id}")
+            resp = await client.get(f"http://admin-generator:8082/generator/projects/{project_id}")
             if resp.status_code != 200:
                 return None
             proj = resp.json().get("data", {})
@@ -1038,7 +1052,7 @@ async def analyze_project(project_id: str) -> Optional[Dict]:
         proj.get("project_brief")
         or proj.get("brief")
         or proj.get("description")
-        or ""
+        or f"{project_name} project from {proj.get('repo_url') or 'an unconfigured repository'} ({language or 'unknown'}/{framework or 'unknown'})."
     )
 
     # 创建或更新知识记录
@@ -1104,6 +1118,7 @@ async def analyze_project(project_id: str) -> Optional[Dict]:
         analysis = {"tech_summary": f"分析失败: {e}", "architecture": "",
                      "component_patterns": "", "api_patterns": "",
                      "permission_model": "", "coding_style": "", "key_files": []}
+    analysis = _enrich_api_patterns_from_source(analysis, files)
 
     # 存储
     async with async_session_maker() as session:
@@ -1198,6 +1213,9 @@ def _select_key_files(files: Dict, language: str, framework: str) -> str:
     """筛选关键文件"""
     import os as _os
     priority = [
+        "resultmodel/ApiResult.java", "ApiResult.java", "Result.java", "Response.java",
+        "GlobalException", "ExceptionHandler", "ErrorCode",
+        "AccessAuthVerifyInterceptor.java", "AccessTokenVerifyInterceptor.java",
         "package.json", "pom.xml", "go.mod", "requirements.txt", "composer.json",
         "src/main.js", "src/main.ts", "src/App.vue", "src/App.tsx",
         "src/router/", "src/routes/", "src/views/", "src/api/",
@@ -1234,6 +1252,33 @@ def _select_key_files(files: Dict, language: str, framework: str) -> str:
                 total += len(chunk)
 
     return "\n".join(selected.values())
+
+
+def _enrich_api_patterns_from_source(analysis: Dict, files: Dict) -> Dict:
+    """Patch high-signal API conventions that are easy to miss in LLM summaries."""
+    api_patterns = analysis.get("api_patterns", "") or ""
+    key_files = list(analysis.get("key_files") or [])
+
+    for path, content in files.items():
+        normalized = path.replace("\\", "/")
+        if "ApiResult.java" not in normalized:
+            continue
+        if all(token in content for token in ("traceId", "message", "data")):
+            response_rule = (
+                "统一响应模型使用 ApiResult<T>，JSON 顶层结构必须为 "
+                '{"message":{"message":"ok","code":0},"traceId":"${traceId}","data":...}。'
+                "message 是对象，内部包含 int code 和 string message；成功默认 code=0、message=ok；"
+                "错误响应也必须使用同一结构，不允许生成 {code,message,data} 这种扁平格式。"
+            )
+            if "ApiResult<T>" not in api_patterns and "traceId" not in api_patterns:
+                api_patterns = f"{api_patterns}\n{response_rule}".strip()
+            if normalized not in key_files:
+                key_files.insert(0, normalized)
+            break
+
+    analysis["api_patterns"] = api_patterns
+    analysis["key_files"] = key_files[:20]
+    return analysis
 
 
 def _parse_analysis_json(raw: str) -> Dict:
@@ -1327,6 +1372,128 @@ async def match_project_skill_for_requirement(requirement: str, tenant_id: int =
     llm_match = await _select_project_skill_match_with_llm(requirement, skills)
     if llm_match:
         return llm_match
+    return select_project_skill_match(requirement, skills)
+
+
+def _is_backend_project_skill(skill: Dict) -> bool:
+    language = str(skill.get("language") or "").lower()
+    framework = str(skill.get("framework") or "").lower()
+    text = _project_skill_match_text(skill)
+
+    backend_signals = (
+        "spring", "spring-boot", "java", "go", "golang", "python", "django",
+        "fastapi", "flask", "php", "laravel", "nest", "nestjs", "express",
+        "backend", "后端", "api", "接口", "controller", "service", "mapper",
+    )
+    frontend_only_signals = (
+        "vue", "react", "vite", "webpack", "element-plus", "antd", "ant design",
+        "frontend", "前端", "页面", "组件", "router", "pinia", "redux",
+    )
+    if any(signal in language or signal in framework for signal in backend_signals):
+        return True
+    if any(signal in language or signal in framework for signal in frontend_only_signals):
+        return False
+    return any(signal in text for signal in backend_signals)
+
+
+def _is_frontend_project_skill(skill: Dict) -> bool:
+    language = str(skill.get("language") or "").lower()
+    framework = str(skill.get("framework") or "").lower()
+    text = _project_skill_match_text(skill)
+
+    frontend_signals = (
+        "javascript", "typescript", "vue", "react", "vite", "webpack",
+        "element-plus", "element ui", "antd", "ant design", "frontend",
+        "前端", "页面", "组件", "router", "pinia", "vuex", "redux",
+    )
+    backend_signals = (
+        "spring", "spring-boot", "java", "go", "golang", "python", "django",
+        "fastapi", "flask", "php", "laravel", "dubbo", "mybatis", "rocketmq",
+        "service层", "service layer", "后端", "controller", "mapper",
+    )
+    if any(signal in language or signal in framework for signal in frontend_signals):
+        return True
+    if any(signal in language or signal in framework for signal in backend_signals):
+        return False
+    return any(signal in text for signal in frontend_signals) and not any(
+        signal in text for signal in backend_signals
+    )
+
+
+async def match_frontend_project_skill_for_requirement(requirement: str, tenant_id: int = 0) -> Optional[Dict]:
+    """Match a product requirement to a confirmed frontend Project Skill."""
+    requirement = (requirement or "").strip()
+    if not requirement:
+        return None
+
+    async with async_session_maker() as session:
+        conditions = [
+            ProjectKnowledge.skill_status == "confirmed",
+            ProjectKnowledge.skill_content.isnot(None),
+        ]
+        if tenant_id > 0:
+            conditions.append(ProjectKnowledge.tenant_id.in_([tenant_id, 0]))
+
+        result = await session.execute(
+            select(ProjectKnowledge)
+            .where(and_(*conditions))
+            .order_by(ProjectKnowledge.update_time.desc())
+            .limit(50)
+        )
+        rows = result.scalars().all()
+
+    skills = [
+        _knowledge_to_dict(row)
+        for row in rows
+        if (row.skill_content or "").strip() and _is_frontend_project_skill(_knowledge_to_dict(row))
+    ]
+    if not skills:
+        return None
+
+    llm_match = await _select_project_skill_match_with_llm(requirement, skills)
+    if llm_match:
+        return llm_match
+    return select_project_skill_match(requirement, skills)
+
+
+async def match_backend_project_skill_for_requirement(
+    requirement: str,
+    tenant_id: int = 0,
+    exclude_project_id: str = "",
+) -> Optional[Dict]:
+    """Match a product requirement to a confirmed backend Project Skill."""
+    requirement = (requirement or "").strip()
+    if not requirement:
+        return None
+
+    async with async_session_maker() as session:
+        conditions = [
+            ProjectKnowledge.skill_status == "confirmed",
+            ProjectKnowledge.skill_content.isnot(None),
+        ]
+        if tenant_id > 0:
+            conditions.append(ProjectKnowledge.tenant_id.in_([tenant_id, 0]))
+        if str(exclude_project_id or "").isdigit():
+            conditions.append(ProjectKnowledge.project_id != int(exclude_project_id))
+
+        result = await session.execute(
+            select(ProjectKnowledge)
+            .where(and_(*conditions))
+            .order_by(ProjectKnowledge.update_time.desc())
+            .limit(50)
+        )
+        rows = result.scalars().all()
+
+    skills = [
+        _knowledge_to_dict(row)
+        for row in rows
+        if (row.skill_content or "").strip() and _is_backend_project_skill(_knowledge_to_dict(row))
+    ]
+    if not skills:
+        return None
+
+    # Backend pairing happens inside pipeline creation. Keep it deterministic so
+    # product runs are not delayed by a second LLM router call after frontend matching.
     return select_project_skill_match(requirement, skills)
 
 

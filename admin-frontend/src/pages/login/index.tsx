@@ -20,7 +20,6 @@ export default function Login() {
       const data: any = await authApi.login({
         username: values.username,
         password: values.password,
-        tenantId: 1, // 默认租户ID，实际租户由后端根据用户分配返回
       })
       setToken(data.token)
       // 获取用户信息

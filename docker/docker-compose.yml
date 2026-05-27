@@ -45,9 +45,10 @@ services:
     ports:
       - "8081:8081"
     environment:
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/admin_platform
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/admin_platform
       - REDIS_URL=redis://redis:6379/5
       - JWT_SECRET=admin-platform-jwt-secret-key-2026-dev-only
+      - DEBUG=false
     depends_on:
       - postgres
       - redis

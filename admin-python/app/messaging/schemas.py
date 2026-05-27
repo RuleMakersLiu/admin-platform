@@ -20,6 +20,10 @@ class MessageType(str, Enum):
     VIDEO = "video"
     AUDIO = "audio"
     FILE = "file"
+    LOCATION = "location"
+    CONTACT = "contact"
+    STICKER = "sticker"
+    INTERACTIVE = "interactive"
     SYSTEM = "system"
 
 
@@ -40,6 +44,21 @@ class UnifiedAttachment(BaseModel):
     file_size: Optional[int] = None
     url: Optional[str] = None
     thumbnail_url: Optional[str] = None
+
+
+class UnifiedLocation(BaseModel):
+    """统一位置格式"""
+    latitude: float
+    longitude: float
+    accuracy: Optional[float] = None
+
+
+class UnifiedContact(BaseModel):
+    """统一联系人格式"""
+    phone_number: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    user_id: Optional[str] = None
 
 
 class Response(BaseModel):
@@ -108,6 +127,8 @@ class UnifiedMessage(BaseModel):
     message_type: Optional[MessageType] = None
     raw_content: Optional[Dict[str, Any]] = None
     attachments: Optional[List[UnifiedAttachment]] = None
+    location: Optional[UnifiedLocation] = None
+    contact: Optional[UnifiedContact] = None
     reply_to: Optional[str] = None
     status: Optional[MessageStatus] = None
     metadata: Optional[Dict[str, Any]] = None

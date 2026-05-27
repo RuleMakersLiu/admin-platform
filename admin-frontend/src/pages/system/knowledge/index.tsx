@@ -131,7 +131,7 @@ export default function KnowledgeList() {
     }
   }, [form])
 
-  const handleDelete = useCallback(async (id: number) => {
+  const handleDelete = useCallback(async (id: string) => {
     try {
       await knowledgeService.delete(id)
       message.success('删除成功')

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Form, Input, Select, Space, Spin, Table, Tag, Typography, message } from 'antd'
-import { BranchesOutlined, CheckCircleOutlined, ImportOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons'
+import { Alert, Button, Form, Input, Modal, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from 'antd'
+import { BranchesOutlined, CheckCircleOutlined, DeleteOutlined, ImportOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons'
 import { generatorApi, systemApi } from '@/services/api'
 import { pipelineApi, type ProjectSkill } from '@/services/pipeline'
 import { saveLastPortalPath, useAuthStore } from '@/stores/auth'
@@ -134,6 +134,27 @@ export default function DeveloperPortal() {
     await loadSkill(projectId)
   }
 
+  const handleDeleteProject = (project: any) => {
+    const projectId = project.id || project.project_id
+    if (!projectId) return
+    Modal.confirm({
+      title: '删除已接入项目',
+      content: `确定删除「${project.name || project.project_name || project.code || projectId}」吗？`,
+      okText: '删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        await generatorApi.deleteProject(Number(projectId))
+        message.success('项目已删除')
+        if (String(selectedProjectId) === String(projectId)) {
+          setSelectedProject(null)
+          setSkill(null)
+        }
+        await loadProjects()
+      },
+    })
+  }
+
   const handleAnalyze = async () => {
     if (!selectedProjectId) return
     setSkill((prev) => prev ? { ...prev, skill_status: 'analyzing', analysis_status: 'analyzing' } : prev)
@@ -225,6 +246,24 @@ export default function DeveloperPortal() {
                 { title: '名称', dataIndex: 'name', render: (value, row: any) => value || row.project_name },
                 { title: '编码', dataIndex: 'code', width: 150 },
                 { title: '框架', dataIndex: 'framework', width: 130, render: (value) => value || '-' },
+                {
+                  title: '操作',
+                  key: 'actions',
+                  width: 72,
+                  render: (_value, row: any) => (
+                    <Tooltip title="删除">
+                      <Button
+                        size="small"
+                        danger
+                        icon={<DeleteOutlined />}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          handleDeleteProject(row)
+                        }}
+                      />
+                    </Tooltip>
+                  ),
+                },
               ]}
             />
           </div>

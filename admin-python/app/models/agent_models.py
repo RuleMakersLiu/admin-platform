@@ -239,6 +239,7 @@ class AgentKnowledge(Base):
     version: Mapped[int] = mapped_column(Integer, default=1)
     view_count: Mapped[int] = mapped_column(Integer, default=0)
     embedding_status: Mapped[str] = mapped_column(String(32), default="pending")
+    status: Mapped[int] = mapped_column(Integer, default=1)
     create_time: Mapped[int] = mapped_column(BigInteger, default=lambda: int(time.time() * 1000))
     update_time: Mapped[int] = mapped_column(BigInteger, default=lambda: int(time.time() * 1000))
     is_deleted: Mapped[int] = mapped_column(Integer, default=0)

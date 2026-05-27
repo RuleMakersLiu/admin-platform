@@ -29,10 +29,6 @@ CREATE TABLE IF NOT EXISTS project_knowledge (
     update_time BIGINT NOT NULL DEFAULT ((EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT)
 );
 
-CREATE INDEX IF NOT EXISTS idx_project_knowledge_project ON project_knowledge(project_id);
-CREATE INDEX IF NOT EXISTS idx_project_knowledge_status ON project_knowledge(skill_status);
-CREATE INDEX IF NOT EXISTS idx_project_knowledge_tenant ON project_knowledge(tenant_id);
-
 ALTER TABLE project_knowledge ADD COLUMN IF NOT EXISTS project_brief TEXT;
 ALTER TABLE project_knowledge ADD COLUMN IF NOT EXISTS skill_content TEXT;
 ALTER TABLE project_knowledge ADD COLUMN IF NOT EXISTS skill_status VARCHAR(20) NOT NULL DEFAULT 'draft';
@@ -40,6 +36,10 @@ ALTER TABLE project_knowledge ADD COLUMN IF NOT EXISTS skill_version INTEGER NOT
 ALTER TABLE project_knowledge ADD COLUMN IF NOT EXISTS confirmed_by BIGINT;
 ALTER TABLE project_knowledge ADD COLUMN IF NOT EXISTS confirmed_at BIGINT;
 ALTER TABLE project_knowledge ADD COLUMN IF NOT EXISTS analysis_error TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_project_knowledge_project ON project_knowledge(project_id);
+CREATE INDEX IF NOT EXISTS idx_project_knowledge_status ON project_knowledge(skill_status);
+CREATE INDEX IF NOT EXISTS idx_project_knowledge_tenant ON project_knowledge(tenant_id);
 
 ALTER TABLE dev_pipeline ADD COLUMN IF NOT EXISTS workspace_path VARCHAR(512);
 ALTER TABLE dev_pipeline ADD COLUMN IF NOT EXISTS git_repo_url VARCHAR(512);
@@ -63,7 +63,7 @@ BEGIN
 
     IF project_parent_id IS NULL THEN
         INSERT INTO sys_menu (
-            parent_id, name, path, component, permission, icon, type, visible, sort,
+            parent_id, name, path, component, permission, icon, menu_type, visible, sort,
             status, tenant_id, create_time, update_time
         )
         VALUES (0, '项目管理', '/project', 'Layout', NULL, 'CodeOutlined', 1, 1, 20, 1, 1, now_ms, now_ms)
@@ -78,7 +78,7 @@ BEGIN
 
     IF pipeline_parent_id IS NULL THEN
         INSERT INTO sys_menu (
-            parent_id, name, path, component, permission, icon, type, visible, sort,
+            parent_id, name, path, component, permission, icon, menu_type, visible, sort,
             status, tenant_id, create_time, update_time
         )
         VALUES (0, '开发流水线', '/pipeline', 'Layout', NULL, 'RocketOutlined', 1, 1, 30, 1, 1, now_ms, now_ms)
@@ -86,7 +86,7 @@ BEGIN
     END IF;
 
     INSERT INTO sys_menu (
-        parent_id, name, path, component, permission, icon, type, visible, sort,
+        parent_id, name, path, component, permission, icon, menu_type, visible, sort,
         status, tenant_id, create_time, update_time
     )
     SELECT
@@ -95,7 +95,7 @@ BEGIN
     WHERE NOT EXISTS (SELECT 1 FROM sys_menu WHERE permission = 'portal:select');
 
     INSERT INTO sys_menu (
-        parent_id, name, path, component, permission, icon, type, visible, sort,
+        parent_id, name, path, component, permission, icon, menu_type, visible, sort,
         status, tenant_id, create_time, update_time
     )
     SELECT
@@ -104,7 +104,7 @@ BEGIN
     WHERE NOT EXISTS (SELECT 1 FROM sys_menu WHERE permission = 'portal:developer');
 
     INSERT INTO sys_menu (
-        parent_id, name, path, component, permission, icon, type, visible, sort,
+        parent_id, name, path, component, permission, icon, menu_type, visible, sort,
         status, tenant_id, create_time, update_time
     )
     SELECT
@@ -113,7 +113,7 @@ BEGIN
     WHERE NOT EXISTS (SELECT 1 FROM sys_menu WHERE permission = 'portal:product');
 
     INSERT INTO sys_menu (
-        parent_id, name, path, component, permission, icon, type, visible, sort,
+        parent_id, name, path, component, permission, icon, menu_type, visible, sort,
         status, tenant_id, create_time, update_time
     )
     SELECT
@@ -122,7 +122,7 @@ BEGIN
     WHERE NOT EXISTS (SELECT 1 FROM sys_menu WHERE permission = 'flow:pipeline:list');
 
     INSERT INTO sys_menu (
-        parent_id, name, path, component, permission, icon, type, visible, sort,
+        parent_id, name, path, component, permission, icon, menu_type, visible, sort,
         status, tenant_id, create_time, update_time
     )
     SELECT
@@ -131,7 +131,7 @@ BEGIN
     WHERE NOT EXISTS (SELECT 1 FROM sys_menu WHERE permission = 'developer:project-skill:confirm');
 
     INSERT INTO sys_menu (
-        parent_id, name, path, component, permission, icon, type, visible, sort,
+        parent_id, name, path, component, permission, icon, menu_type, visible, sort,
         status, tenant_id, create_time, update_time
     )
     SELECT
@@ -140,28 +140,28 @@ BEGIN
     WHERE NOT EXISTS (SELECT 1 FROM sys_menu WHERE permission = 'product:pipeline:create');
 
     INSERT INTO sys_menu (
-        parent_id, name, path, component, permission, icon, type, visible, sort,
+        parent_id, name, path, component, permission, icon, menu_type, visible, sort,
         status, tenant_id, create_time, update_time
     )
     SELECT pipeline_parent_id, '匹配项目 Skill', NULL, NULL, 'flow:pipeline:match', NULL, 3, 0, 25, 1, 1, now_ms, now_ms
     WHERE NOT EXISTS (SELECT 1 FROM sys_menu WHERE permission = 'flow:pipeline:match');
 
     INSERT INTO sys_menu (
-        parent_id, name, path, component, permission, icon, type, visible, sort,
+        parent_id, name, path, component, permission, icon, menu_type, visible, sort,
         status, tenant_id, create_time, update_time
     )
     SELECT pipeline_parent_id, '创建流水线', NULL, NULL, 'flow:pipeline:create', NULL, 3, 0, 26, 1, 1, now_ms, now_ms
     WHERE NOT EXISTS (SELECT 1 FROM sys_menu WHERE permission = 'flow:pipeline:create');
 
     INSERT INTO sys_menu (
-        parent_id, name, path, component, permission, icon, type, visible, sort,
+        parent_id, name, path, component, permission, icon, menu_type, visible, sort,
         status, tenant_id, create_time, update_time
     )
     SELECT pipeline_parent_id, '执行流水线', NULL, NULL, 'flow:pipeline:execute', NULL, 3, 0, 27, 1, 1, now_ms, now_ms
     WHERE NOT EXISTS (SELECT 1 FROM sys_menu WHERE permission = 'flow:pipeline:execute');
 
     INSERT INTO sys_menu (
-        parent_id, name, path, component, permission, icon, type, visible, sort,
+        parent_id, name, path, component, permission, icon, menu_type, visible, sort,
         status, tenant_id, create_time, update_time
     )
     SELECT pipeline_parent_id, '确认流水线', NULL, NULL, 'flow:pipeline:confirm', NULL, 3, 0, 28, 1, 1, now_ms, now_ms

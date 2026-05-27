@@ -27,6 +27,18 @@ export interface PipelineStatus {
   user_request: string
   status: string
   current_stage: string
+  project_skill?: {
+    project_id: string
+    project_name: string
+    skill_version?: number
+    confirmed_at?: number | null
+  } | null
+  backend_project_skill?: {
+    project_id: string
+    project_name: string
+    skill_version?: number
+    confirmed_at?: number | null
+  } | null
   stages: Record<string, StageResult>
   created_at: string
   updated_at: string
@@ -50,6 +62,7 @@ export interface ProjectSkill {
 
 export interface ProjectSkillMatch {
   skill: ProjectSkill
+  backend_match?: ProjectSkillMatch
   confidence: number
   match_reason: string
   match_source: 'llm' | 'rule' | string
@@ -64,15 +77,20 @@ export interface PipelineArtifact {
   api_contract: string
   frontend_files: Record<string, string>
   review: Record<string, any>
+  review_status?: string
+  review_output?: string
   report: string
 }
 
 export interface PipelineListItem {
   pipeline_id: string
   project_id: string
+  user_request: string
   status: string
   current_stage: string
-  created_at: string
+  retry_count?: number
+  create_time: number
+  update_time: number
 }
 
 export interface PipelineStreamEvent {
@@ -194,8 +212,27 @@ export const pipelineApi = {
   getArtifact: (id: string) =>
     api.get(`${BASE}/${id}/artifact`) as any as Promise<PipelineArtifact>,
 
-  downloadFrontend: (id: string) => {
-    window.open(`/api${BASE}/${id}/frontend-download`, '_blank')
+  downloadFrontend: async (id: string) => {
+    const { token, user } = useAuthStore.getState()
+    const headers: Record<string, string> = {}
+    if (token) headers.Authorization = `Bearer ${token}`
+    if (user) {
+      headers['X-Admin-Id'] = String(user.adminId)
+      headers['X-Tenant-Id'] = String(user.tenantId)
+    }
+
+    const response = await fetch(`/api${BASE}/${id}/frontend-download`, { headers })
+    if (!response.ok) {
+      throw new Error(await response.text() || '下载失败')
+    }
+
+    const blob = await response.blob()
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${id}-frontend.zip`
+    link.click()
+    URL.revokeObjectURL(url)
   },
 
   getOutput: (id: string, stage?: string) =>
@@ -206,6 +243,9 @@ export const pipelineApi = {
 
   rollback: (id: string) =>
     api.post(`${BASE}/${id}/rollback`) as any,
+
+  delete: (id: string) =>
+    api.delete(`${BASE}/${id}`) as any,
 
   getTemplates: () =>
     api.get('/flow/templates') as any,

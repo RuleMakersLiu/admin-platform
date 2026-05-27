@@ -15,7 +15,7 @@ BEGIN
 
     IF project_parent_id IS NULL THEN
         INSERT INTO sys_menu (
-            parent_id, name, path, component, permission, icon, type, visible, sort,
+            parent_id, name, path, component, permission, icon, menu_type, visible, sort,
             status, tenant_id, create_time, update_time
         )
         VALUES (0, '项目管理', '/project', 'Layout', NULL, 'CodeOutlined', 1, 1, 20, 1, 1, now_ms, now_ms)
@@ -30,7 +30,7 @@ BEGIN
 
     IF pipeline_parent_id IS NULL THEN
         INSERT INTO sys_menu (
-            parent_id, name, path, component, permission, icon, type, visible, sort,
+            parent_id, name, path, component, permission, icon, menu_type, visible, sort,
             status, tenant_id, create_time, update_time
         )
         VALUES (0, '开发流水线', '/pipeline', 'Layout', NULL, 'RocketOutlined', 1, 1, 30, 1, 1, now_ms, now_ms)
@@ -49,7 +49,7 @@ BEGIN
         path = '/project/access',
         component = 'portal/developer/index',
         icon = 'CodeOutlined',
-        type = 2,
+        menu_type = 2,
         visible = 1,
         status = 1,
         sort = 0,
@@ -58,7 +58,7 @@ BEGIN
 
     IF NOT FOUND THEN
         INSERT INTO sys_menu (
-            parent_id, name, path, component, permission, icon, type, visible, sort,
+            parent_id, name, path, component, permission, icon, menu_type, visible, sort,
             status, tenant_id, create_time, update_time
         )
         VALUES (
@@ -73,8 +73,8 @@ BEGIN
         path = '/pipeline/requirement',
         component = 'portal/product/index',
         icon = 'RocketOutlined',
-        type = 2,
-        visible = 1,
+        menu_type = 2,
+        visible = 0,
         status = 1,
         sort = 0,
         update_time = now_ms
@@ -82,7 +82,7 @@ BEGIN
 
     IF NOT FOUND THEN
         INSERT INTO sys_menu (
-            parent_id, name, path, component, permission, icon, type, visible, sort,
+            parent_id, name, path, component, permission, icon, menu_type, visible, sort,
             status, tenant_id, create_time, update_time
         )
         VALUES (
@@ -97,47 +97,49 @@ BEGIN
         path = '/pipeline/development',
         component = 'pipeline/index',
         icon = 'ThunderboltOutlined',
-        type = 2,
+        menu_type = 2,
+        permission = NULL,
         visible = 1,
         status = 1,
-        sort = 1,
+        sort = 0,
         update_time = now_ms
-    WHERE permission = 'flow:pipeline:list';
+    WHERE permission = 'flow:pipeline:list'
+       OR path = '/pipeline/development';
 
     IF NOT FOUND THEN
         INSERT INTO sys_menu (
-            parent_id, name, path, component, permission, icon, type, visible, sort,
+            parent_id, name, path, component, permission, icon, menu_type, visible, sort,
             status, tenant_id, create_time, update_time
         )
         VALUES (
-            pipeline_parent_id, '开发流水线', '/pipeline/development', 'pipeline/index', 'flow:pipeline:list',
-            'ThunderboltOutlined', 2, 1, 1, 1, 1, now_ms, now_ms
+            pipeline_parent_id, '开发流水线', '/pipeline/development', 'pipeline/index', NULL,
+            'ThunderboltOutlined', 2, 1, 0, 1, 1, now_ms, now_ms
         );
     END IF;
 
     INSERT INTO sys_menu (
-        parent_id, name, path, component, permission, icon, type, visible, sort,
+        parent_id, name, path, component, permission, icon, menu_type, visible, sort,
         status, tenant_id, create_time, update_time
     )
     SELECT pipeline_parent_id, '匹配项目 Skill', NULL, NULL, 'flow:pipeline:match', NULL, 3, 0, 25, 1, 1, now_ms, now_ms
     WHERE NOT EXISTS (SELECT 1 FROM sys_menu WHERE permission = 'flow:pipeline:match');
 
     INSERT INTO sys_menu (
-        parent_id, name, path, component, permission, icon, type, visible, sort,
+        parent_id, name, path, component, permission, icon, menu_type, visible, sort,
         status, tenant_id, create_time, update_time
     )
     SELECT pipeline_parent_id, '创建流水线', NULL, NULL, 'flow:pipeline:create', NULL, 3, 0, 26, 1, 1, now_ms, now_ms
     WHERE NOT EXISTS (SELECT 1 FROM sys_menu WHERE permission = 'flow:pipeline:create');
 
     INSERT INTO sys_menu (
-        parent_id, name, path, component, permission, icon, type, visible, sort,
+        parent_id, name, path, component, permission, icon, menu_type, visible, sort,
         status, tenant_id, create_time, update_time
     )
     SELECT pipeline_parent_id, '执行流水线', NULL, NULL, 'flow:pipeline:execute', NULL, 3, 0, 27, 1, 1, now_ms, now_ms
     WHERE NOT EXISTS (SELECT 1 FROM sys_menu WHERE permission = 'flow:pipeline:execute');
 
     INSERT INTO sys_menu (
-        parent_id, name, path, component, permission, icon, type, visible, sort,
+        parent_id, name, path, component, permission, icon, menu_type, visible, sort,
         status, tenant_id, create_time, update_time
     )
     SELECT pipeline_parent_id, '确认流水线', NULL, NULL, 'flow:pipeline:confirm', NULL, 3, 0, 28, 1, 1, now_ms, now_ms

@@ -2,7 +2,7 @@ import api from './api'
 
 // 知识条目接口
 export interface Knowledge {
-  id: number
+  id: string
   title: string
   content: string
   category: string
@@ -26,11 +26,16 @@ export interface KnowledgeForm {
 // 知识库服务
 export const knowledgeService = {
   list: (params?: { keyword?: string; category?: string; agent_type?: string }) =>
-    api.get('/knowledge/search/list', { params }),
-  get: (id: number) => api.get(`/knowledge/${id}`),
+    api.get('/knowledge/search/list', {
+      params: {
+        query: params?.keyword,
+        category: params?.category,
+      },
+    }),
+  get: (id: string) => api.get(`/knowledge/${id}`),
   create: (data: KnowledgeForm) => api.post('/knowledge/create', data),
-  update: (id: number, data: Partial<KnowledgeForm>) => api.put(`/knowledge/${id}`, data),
-  delete: (id: number) => api.delete(`/knowledge/${id}`),
+  update: (id: string, data: Partial<KnowledgeForm>) => api.put(`/knowledge/${id}`, data),
+  delete: (id: string) => api.delete(`/knowledge/${id}`),
 }
 
 // 知识分类选项

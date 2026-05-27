@@ -24,10 +24,12 @@ interface AuthState {
 export const DEVELOPER_PORTAL_PERMISSIONS = ['portal:developer', 'developer:project-skill:confirm', 'project:create']
 export const PRODUCT_PORTAL_PERMISSIONS = ['portal:product', 'product:pipeline:create', 'flow:pipeline:match', 'flow:pipeline:create']
 export const PIPELINE_WORKBENCH_PERMISSIONS = ['flow:pipeline:list']
+export const PIPELINE_PAGE_PERMISSIONS = [...PRODUCT_PORTAL_PERMISSIONS, ...PIPELINE_WORKBENCH_PERMISSIONS]
 
 const PORTAL_PATH_ALIASES: Record<string, string> = {
   '/developer': '/project/access',
-  '/product': '/pipeline/requirement',
+  '/product': '/pipeline/development',
+  '/pipeline/requirement': '/pipeline/development',
   '/pipeline/advanced': '/pipeline/development',
 }
 
@@ -91,8 +93,7 @@ const getStorage = () => {
 const isPortalPathAllowed = (user: User | null | undefined, path: string | null) => {
   if (!path) return false
   if (path === '/project/access') return canUseDeveloperPortal(user)
-  if (path === '/pipeline/requirement') return canUseProductPortal(user)
-  if (path === '/pipeline/development') return canUsePipelineWorkbench(user)
+  if (path === '/pipeline/development') return canUseProductPortal(user) || canUsePipelineWorkbench(user)
   return false
 }
 
@@ -128,7 +129,7 @@ export const resolveLandingPath = (user: User | null | undefined) => {
   const product = canUseProductPortal(user)
   const pipeline = canUsePipelineWorkbench(user)
   if (developer && (product || pipeline)) return getLastPortalPath(user) || '/portal-select'
-  if (product) return '/pipeline/requirement'
+  if (product) return '/pipeline/development'
   if (pipeline) return '/pipeline/development'
   if (developer) return '/project/access'
   return '/project/create'

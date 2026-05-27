@@ -24,6 +24,7 @@ class CreateKnowledgeRequest(BaseModel):
     tags: Optional[List[str]] = None
     source: Optional[str] = None
     project_id: Optional[int] = None
+    status: int = 1
 
 
 class UpdateKnowledgeRequest(BaseModel):
@@ -32,6 +33,7 @@ class UpdateKnowledgeRequest(BaseModel):
     category: Optional[str] = None
     tags: Optional[List[str]] = None
     source: Optional[str] = None
+    status: Optional[int] = None
 
 
 class CreateEdgeRequest(BaseModel):
@@ -56,6 +58,7 @@ async def create_knowledge(req: CreateKnowledgeRequest, http_request: Request):
         tags=req.tags,
         source=req.source,
         project_id=req.project_id,
+        status=req.status,
     )
     return {"code": 200, "message": "创建成功", "data": {"knowledge_id": knowledge.knowledge_id}}
 
@@ -190,6 +193,7 @@ async def get_knowledge(knowledge_id: str):
             "category": knowledge.category,
             "tags": json.loads(knowledge.tags) if knowledge.tags else [],
             "source": knowledge.source,
+            "status": knowledge.status,
             "version": knowledge.version,
             "view_count": knowledge.view_count,
             "create_time": knowledge.create_time,
@@ -208,6 +212,7 @@ async def update_knowledge(knowledge_id: str, req: UpdateKnowledgeRequest):
         category=req.category,
         tags=req.tags,
         source=req.source,
+        status=req.status,
     )
     if not knowledge:
         raise HTTPException(status_code=404, detail="知识不存在")

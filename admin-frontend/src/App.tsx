@@ -3,8 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-route
 import { Result, Spin } from 'antd'
 import {
   DEVELOPER_PORTAL_PERMISSIONS,
-  PIPELINE_WORKBENCH_PERMISSIONS,
-  PRODUCT_PORTAL_PERMISSIONS,
+  PIPELINE_PAGE_PERMISSIONS,
   canUsePipelineWorkbench,
   canUseProductPortal,
   resolveLandingPath,
@@ -25,7 +24,6 @@ import KnowledgeList from '@/pages/system/knowledge'
 import WebChatPage from '@/pages/webchat'
 import SkillMarketPage from '@/pages/skills/market'
 import KanbanPage from '@/pages/kanban'
-import PipelinePage from '@/pages/pipeline'
 import ProjectCreate from '@/pages/project/create'
 import ProjectList from '@/pages/project/list'
 import ProjectTest from '@/pages/project/test'
@@ -107,13 +105,17 @@ function PipelineRedirect() {
   const params = new URLSearchParams(location.search)
   const target = params.has('id')
     ? '/pipeline/development'
-    : canUseProductPortal(user)
-      ? '/pipeline/requirement'
-      : canUsePipelineWorkbench(user)
-        ? '/pipeline/development'
-        : resolveLandingPath(user)
+    : canUseProductPortal(user) || canUsePipelineWorkbench(user)
+      ? '/pipeline/development'
+      : resolveLandingPath(user)
 
   return <Navigate to={`${target}${location.search}${location.hash}`} replace />
+}
+
+function PipelineEntry() {
+  const { user } = useAuthStore()
+  if (!user) return <LoadingGate />
+  return <ProductPortal />
 }
 
 function App() {
@@ -155,15 +157,15 @@ function App() {
 
             <Route path="portal-select" element={<PortalSelect />} />
             <Route path="developer" element={<RedirectWithSearch to="/project/access" />} />
-            <Route path="product" element={<RedirectWithSearch to="/pipeline/requirement" />} />
+            <Route path="product" element={<RedirectWithSearch to="/pipeline/development" />} />
 
             <Route path="webchat" element={<WebChatPage />} />
             <Route path="kanban" element={<KanbanPage />} />
 
             <Route path="pipeline">
               <Route index element={<PipelineRedirect />} />
-              <Route path="requirement" element={withPermission(PRODUCT_PORTAL_PERMISSIONS, <ProductPortal />)} />
-              <Route path="development" element={withPermission(PIPELINE_WORKBENCH_PERMISSIONS, <PipelinePage />)} />
+              <Route path="requirement" element={<RedirectWithSearch to="/pipeline/development" />} />
+              <Route path="development" element={withPermission(PIPELINE_PAGE_PERMISSIONS, <PipelineEntry />)} />
               <Route path="advanced" element={<RedirectWithSearch to="/pipeline/development" />} />
             </Route>
 

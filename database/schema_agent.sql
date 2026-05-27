@@ -222,6 +222,7 @@ CREATE TABLE agent_knowledge (
     version INTEGER NOT NULL DEFAULT 1,
     view_count INTEGER NOT NULL DEFAULT 0,
     embedding_status VARCHAR(32) DEFAULT 'pending',
+    status SMALLINT NOT NULL DEFAULT 1,
     create_time BIGINT NOT NULL,
     update_time BIGINT NOT NULL,
     is_deleted SMALLINT NOT NULL DEFAULT 0

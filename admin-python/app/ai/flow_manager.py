@@ -12,6 +12,7 @@ import json
 import uuid
 import asyncio
 import logging
+import os
 import time
 from datetime import datetime
 from enum import Enum
@@ -141,15 +142,20 @@ def _build_pipeline_artifact(stages: Dict[str, Any]) -> Dict[str, Any]:
     delivery_stage = stages.get("delivery", {})
     frontend_stage = stages.get("frontend_dev", {})
     review_stage = stages.get("code_review", {})
-    review = review_stage.get("structured_output") or {}
-    if not review:
+    review = {}
+    if review_stage.get("status") == "completed":
+        review = review_stage.get("structured_output") or {}
+    if review_stage.get("status") == "completed" and not review:
         review = {"output": review_stage.get("output", "")}
 
     return {
         "preview_html": preview_stage.get("preview_html", ""),
+        "preview_source": preview_stage.get("preview_html", "") or preview_stage.get("output", ""),
         "api_contract": delivery_stage.get("output", ""),
         "frontend_files": frontend_stage.get("code_files", {}) or {},
         "review": review,
+        "review_status": review_stage.get("status", "pending"),
+        "review_output": review_stage.get("output", "") if review_stage.get("status") == "completed" else "",
         "report": (stages.get("report", {}) or {}).get("output", ""),
     }
 
@@ -245,6 +251,10 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 
     "delivery": """基于需求分析、页面设计和原型预览，整理一份完整的交付文档包。
 
+## 后端项目规范来源
+- 后端项目: {{backend_project_name}}
+- 后端技术栈: {{backend_tech}}
+
 ## 需求文档
 {{requirement_output}}
 
@@ -257,6 +267,11 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 3. 交互流程说明（主流程 + 异常流程）
 4. 前端实现要点（组件选择、状态管理、路由规划）
 5. API 接口草案（接口路径、请求方法、请求参数、响应格式）
+   - 必须单独写明“参考后端项目：{{backend_project_name}}”
+   - 必须按后端 Project Skill 的 API Contract Patterns 生成，不能凭空创造另一套规范
+   - 必须体现后端鉴权、权限校验、错误响应、Swagger/接口文档规则
+   - 响应格式必须逐字遵循后端 Project Skill 中的统一响应模型；如果后端 Skill 定义了 ApiResult/traceId/message/data 结构，所有接口响应示例都必须使用该结构，不允许改成扁平的 {code,message,data}
+   - 如果后端项目是 BFF/API 转发层，要明确哪些接口是本层接收、鉴权和转发
 6. Mock 数据示例（至少包含列表和详情的 mock 数据）
 7. 权限规则表（角色 × 操作权限矩阵）
 8. 测试验收标准（功能测试用例清单、边界条件、兼容性要求）""",
@@ -565,6 +580,8 @@ def _render_prompt_template(template: str, context: Dict[str, Any]) -> str:
 
     backend_tech = context.get("backend_tech", "")
     frontend_tech = context.get("frontend_tech", "")
+    backend_project_name = context.get("backend_project_name", "")
+    frontend_project_name = context.get("frontend_project_name", "")
 
     replacements = {
         "{{user_request}}": user_request[:2000],
@@ -581,6 +598,8 @@ def _render_prompt_template(template: str, context: Dict[str, Any]) -> str:
         "{{commit_output}}": prev_outputs.get("commit", {}).get("output", "未提供")[:1000],
         "{{backend_tech}}": backend_tech or "未指定",
         "{{frontend_tech}}": frontend_tech or "未指定",
+        "{{backend_project_name}}": backend_project_name or "未匹配后端项目",
+        "{{frontend_project_name}}": frontend_project_name or "未匹配前端项目",
         # 截断版本（report 阶段用）
         "{{requirement_output_short}}": (prev_outputs.get("requirement", {}).get("output", "未提供") or "")[:500],
         "{{code_review_output_short}}": (prev_outputs.get("code_review", {}).get("output", "未提供") or "")[:500],
@@ -1276,7 +1295,7 @@ async def _fetch_project_files_from_git(project_id: str) -> Dict[str, str]:
     try:
         # 1. 从 Generator 获取项目信息
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"http://localhost:8082/generator/projects/{project_id}")
+            resp = await client.get(f"http://admin-generator:8082/generator/projects/{project_id}")
             if resp.status_code != 200:
                 return {}
             proj_data = resp.json().get("data", {})
@@ -1291,13 +1310,8 @@ async def _fetch_project_files_from_git(project_id: str) -> Dict[str, str]:
         token = await _get_git_token_for_project(project_id) or await _get_git_token_for_repo(repo_url)
         clone_url = _inject_git_credentials(repo_url, token)
 
-        proc = await asyncio.create_subprocess_exec(
-            "git", "clone", "--depth", "1", "--branch", branch, clone_url, tmp_dir,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-        if proc.returncode != 0:
+        stdout, stderr, returncode = await _clone_project_repo(clone_url, branch, tmp_dir)
+        if returncode != 0:
             logger.warning(f"Git clone failed for project {project_id}: {stderr.decode()[:200]}")
             return {}
 
@@ -1329,6 +1343,35 @@ async def _fetch_project_files_from_git(project_id: str) -> Dict[str, str]:
     except Exception as e:
         logger.warning(f"Failed to load project context for {project_id}: {e}")
         return {}
+
+
+async def _clone_project_repo(clone_url: str, branch: str, tmp_dir: str):
+    """Clone a repo, falling back to the remote default branch when stored branch is stale."""
+    proc = await asyncio.create_subprocess_exec(
+        "git", "clone", "--depth", "1", "--branch", branch, clone_url, tmp_dir,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+    if proc.returncode == 0 or not branch:
+        return stdout, stderr, proc.returncode
+
+    logger.warning(
+        "Git clone branch %s failed, retrying default branch: %s",
+        branch,
+        stderr.decode(errors="ignore")[:200],
+    )
+    import shutil
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    os.makedirs(tmp_dir, exist_ok=True)
+
+    proc = await asyncio.create_subprocess_exec(
+        "git", "clone", "--depth", "1", clone_url, tmp_dir,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+    return stdout, stderr, proc.returncode
 
 
 def _inject_git_credentials(repo_url: str, token: str = "") -> str:
@@ -1374,7 +1417,7 @@ async def _get_git_token_for_project(project_id: str) -> str:
     try:
         # 先从 Generator 获取项目的 git_config_id
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"http://localhost:8082/generator/projects/{project_id}")
+            resp = await client.get(f"http://admin-generator:8082/generator/projects/{project_id}")
             if resp.status_code != 200:
                 return ""
             proj = resp.json().get("data", {})
@@ -1449,6 +1492,16 @@ class DevPipelineManager:
                 config["output_scope"] = "preview_frontend_contract_review"
                 project_id = project_id or skill_project_id
 
+                if backend_project_id:
+                    backend_result = await session.execute(
+                        select(ProjectKnowledge).where(ProjectKnowledge.project_id == int(backend_project_id))
+                    )
+                    backend_skill = backend_result.scalar_one_or_none()
+                    if backend_skill:
+                        backend_skill_dict = _knowledge_to_project_skill_dict(backend_skill)
+                        _validate_project_skill_ready(backend_skill_dict)
+                        config["backend_project_skill_snapshot"] = _build_pipeline_skill_snapshot(backend_skill_dict)
+
             db_obj = DevPipeline(
                 pipeline_id=pipeline_id,
                 project_id=project_id,
@@ -1493,6 +1546,7 @@ class DevPipelineManager:
         stages = self._parse_stages(pipe)
         pipe_config = json.loads(pipe.skill_config or "{}")
         skill_snapshot = pipe_config.get("project_skill_snapshot") or {}
+        backend_skill_snapshot = pipe_config.get("backend_project_skill_snapshot") or {}
         return {
             "pipeline_id": pipe.pipeline_id,
             "project_id": pipe.project_id or "",
@@ -1506,6 +1560,12 @@ class DevPipelineManager:
                 "skill_version": skill_snapshot.get("skill_version"),
                 "confirmed_at": skill_snapshot.get("confirmed_at"),
             } if skill_snapshot else None,
+            "backend_project_skill": {
+                "project_id": backend_skill_snapshot.get("project_id", ""),
+                "project_name": backend_skill_snapshot.get("project_name", ""),
+                "skill_version": backend_skill_snapshot.get("skill_version"),
+                "confirmed_at": backend_skill_snapshot.get("confirmed_at"),
+            } if backend_skill_snapshot else None,
             "stages": stages,
             "retry_count": pipe.retry_count,
             "workspace_path": pipe.workspace_path or "",
@@ -1822,14 +1882,24 @@ class DevPipelineManager:
         be_proj_id = pipe_config.get("backend_project_id", "")
         ctx_parts = []
         project_skill_snapshot = pipe_config.get("project_skill_snapshot") or {}
+        backend_skill_snapshot = pipe_config.get("backend_project_skill_snapshot") or {}
+        context["frontend_project_name"] = project_skill_snapshot.get("project_name", "")
+        context["backend_project_name"] = backend_skill_snapshot.get("project_name", "")
         if project_skill_snapshot.get("skill_content"):
             ctx_parts.append(
-                "## Confirmed Project Skill Snapshot\n"
+                "## Confirmed Frontend Project Skill Snapshot\n"
                 f"Project: {project_skill_snapshot.get('project_name', '')}\n"
                 f"Version: {project_skill_snapshot.get('skill_version', '')}\n\n"
                 f"{project_skill_snapshot.get('skill_content', '')}"
             )
-        if fe_proj_id and stage_key in ("frontend_dev", "prototype", "page_design"):
+        if backend_skill_snapshot.get("skill_content") and stage_key in ("delivery", "frontend_dev", "code_review", "testing"):
+            ctx_parts.append(
+                "## Confirmed Backend/API Project Skill Snapshot\n"
+                f"Project: {backend_skill_snapshot.get('project_name', '')}\n"
+                f"Version: {backend_skill_snapshot.get('skill_version', '')}\n\n"
+                f"{backend_skill_snapshot.get('skill_content', '')}"
+            )
+        if fe_proj_id and stage_key in ("frontend_dev", "prototype", "page_design", "delivery", "code_review"):
             from app.services.knowledge_service import get_relevant_context
             ctx = await get_relevant_context(
                 query=user_request,
@@ -1842,7 +1912,7 @@ class DevPipelineManager:
                 fe_ctx = await _load_project_context(fe_proj_id, "frontend")
                 if fe_ctx:
                     ctx_parts.append(f"## 前端项目代码参考\n{fe_ctx}")
-        if be_proj_id and stage_key in ("backend_dev", "code_review", "testing"):
+        if be_proj_id and stage_key in ("delivery", "frontend_dev", "backend_dev", "code_review", "testing"):
             from app.services.knowledge_service import get_relevant_context
             ctx = await get_relevant_context(
                 query=user_request,
@@ -2111,6 +2181,9 @@ class DevPipelineManager:
                     )
                     if user_input:
                         user_input = ""
+
+                    if current_stage in ("prototype", "ui_preview") and not (parsed.get("preview_html") or "").strip():
+                        raise ValueError("预览生成阶段没有产出可渲染 HTML，请重新生成")
 
                     # 更新阶段状态
                     stages[current_stage].update({
