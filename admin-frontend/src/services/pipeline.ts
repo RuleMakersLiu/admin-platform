@@ -39,6 +39,12 @@ export interface PipelineStatus {
     skill_version?: number
     confirmed_at?: number | null
   } | null
+  backend_project_skills?: Array<{
+    project_id: string
+    project_name: string
+    skill_version?: number
+    confirmed_at?: number | null
+  }>
   stages: Record<string, StageResult>
   created_at: string
   updated_at: string
@@ -63,6 +69,7 @@ export interface ProjectSkill {
 export interface ProjectSkillMatch {
   skill: ProjectSkill
   backend_match?: ProjectSkillMatch
+  backend_matches?: ProjectSkillMatch[]
   confidence: number
   match_reason: string
   match_source: 'llm' | 'rule' | string
@@ -128,6 +135,7 @@ export const pipelineApi = {
     project_id?: string
     project_name?: string
     backend_project_id?: string
+    backend_project_ids?: string[]
     frontend_project_id?: string
     backend_tech?: string
     frontend_tech?: string

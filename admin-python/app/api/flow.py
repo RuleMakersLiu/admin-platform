@@ -4,7 +4,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 
 from app.ai.flow_manager import pipeline_manager, STAGE_DEFINITIONS, DEFAULT_STAGE_PROMPTS
 
@@ -20,6 +20,7 @@ class CreatePipelineRequest(BaseModel):
     git_branch: Optional[str] = Field(default="main", description="分支名")
     skill_config: Optional[dict] = Field(default=None, description="每阶段 Skill 配置")
     backend_project_id: Optional[str] = Field(default="", description="后端项目ID")
+    backend_project_ids: Optional[List[str]] = Field(default=None, description="后端关联项目ID列表")
     frontend_project_id: Optional[str] = Field(default="", description="前端项目ID")
     backend_tech: Optional[str] = Field(default="", description="后端技术栈 如 java/spring-boot")
     frontend_tech: Optional[str] = Field(default="", description="前端技术栈 如 javascript/vue")
@@ -83,6 +84,7 @@ async def create_pipeline(request: CreatePipelineRequest, http_request: Request)
         pipeline_mode = raw_body.get("pipeline_mode") or "full"
         skill_config = dict(request.skill_config or {})
         backend_project_id = request.backend_project_id or ""
+        backend_project_ids = [str(item) for item in (request.backend_project_ids or []) if str(item).strip()]
         frontend_project_id = request.frontend_project_id or ""
         backend_tech = request.backend_tech or ""
         frontend_tech = request.frontend_tech or ""
@@ -96,11 +98,29 @@ async def create_pipeline(request: CreatePipelineRequest, http_request: Request)
                 exclude_project_id=frontend_project_id or request.project_id or "",
             )
             if backend_match:
-                backend_skill = backend_match.get("skill") or {}
+                backend_matches = backend_match.get("matches") or [backend_match]
+                backend_skill = (backend_matches[0].get("skill") if backend_matches else backend_match.get("skill")) or {}
                 backend_project_id = str(backend_skill.get("project_id") or "")
+                backend_project_ids = [
+                    str((item.get("skill") or {}).get("project_id") or "")
+                    for item in backend_matches
+                    if (item.get("skill") or {}).get("project_id")
+                ]
                 backend_tech = backend_tech or "/".join(
                     part for part in [backend_skill.get("language"), backend_skill.get("framework")] if part
                 )
+                skill_config["backend_project_skills"] = [
+                    {
+                        "project_id": (item.get("skill") or {}).get("project_id"),
+                        "project_name": (item.get("skill") or {}).get("project_name"),
+                        "skill_version": (item.get("skill") or {}).get("skill_version"),
+                        "confirmed_at": (item.get("skill") or {}).get("confirmed_at"),
+                        "match_source": item.get("match_source"),
+                        "match_reason": item.get("match_reason"),
+                        "match_confidence": item.get("confidence"),
+                    }
+                    for item in backend_matches
+                ]
                 skill_config["backend_project_skill"] = {
                     "project_id": backend_skill.get("project_id"),
                     "project_name": backend_skill.get("project_name"),
@@ -128,6 +148,7 @@ async def create_pipeline(request: CreatePipelineRequest, http_request: Request)
             backend_tech=backend_tech,
             frontend_tech=frontend_tech,
             backend_project_id=backend_project_id,
+            backend_project_ids=backend_project_ids,
             frontend_project_id=frontend_project_id,
             pipeline_mode=pipeline_mode,
         )
@@ -175,6 +196,7 @@ async def match_project_skill(request: MatchProjectSkillRequest, http_request: R
     )
     if backend_match:
         match["backend_match"] = backend_match
+        match["backend_matches"] = backend_match.get("matches") or [backend_match]
     return {"code": 200, "message": "匹配成功", "data": match}
 
 

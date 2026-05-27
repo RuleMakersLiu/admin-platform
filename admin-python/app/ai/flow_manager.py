@@ -1468,6 +1468,7 @@ class DevPipelineManager:
                               git_branch: str = "main", skill_config: dict = None,
                               backend_tech: str = "", frontend_tech: str = "",
                               backend_project_id: str = "", frontend_project_id: str = "",
+                              backend_project_ids: List[str] = None,
                               pipeline_mode: str = "full") -> str:
         pipeline_id = f"pipe_{uuid.uuid4().hex[:12]}"
         now = int(time.time() * 1000)
@@ -1483,6 +1484,13 @@ class DevPipelineManager:
             config["frontend_tech"] = frontend_tech
         if backend_project_id:
             config["backend_project_id"] = backend_project_id
+        backend_project_ids = [
+            str(item) for item in (backend_project_ids or []) if str(item).strip()
+        ]
+        if backend_project_id and backend_project_id not in backend_project_ids:
+            backend_project_ids.insert(0, backend_project_id)
+        if backend_project_ids:
+            config["backend_project_ids"] = backend_project_ids
         if frontend_project_id:
             config["frontend_project_id"] = frontend_project_id
 
@@ -1504,15 +1512,28 @@ class DevPipelineManager:
                 config["output_scope"] = "preview_frontend_contract_review"
                 project_id = project_id or skill_project_id
 
-                if backend_project_id:
+                if backend_project_ids:
                     backend_result = await session.execute(
-                        select(ProjectKnowledge).where(ProjectKnowledge.project_id == int(backend_project_id))
+                        select(ProjectKnowledge).where(ProjectKnowledge.project_id.in_([
+                            int(project_id)
+                            for project_id in backend_project_ids
+                            if str(project_id).isdigit()
+                        ]))
                     )
-                    backend_skill = backend_result.scalar_one_or_none()
-                    if backend_skill:
+                    backend_skills = backend_result.scalars().all()
+                    backend_skill_snapshots = []
+                    for backend_skill in backend_skills:
                         backend_skill_dict = _knowledge_to_project_skill_dict(backend_skill)
                         _validate_project_skill_ready(backend_skill_dict)
-                        config["backend_project_skill_snapshot"] = _build_pipeline_skill_snapshot(backend_skill_dict)
+                        backend_skill_snapshots.append(_build_pipeline_skill_snapshot(backend_skill_dict))
+                    backend_skill_snapshots.sort(
+                        key=lambda snapshot: backend_project_ids.index(str(snapshot.get("project_id")))
+                        if str(snapshot.get("project_id")) in backend_project_ids
+                        else 999
+                    )
+                    if backend_skill_snapshots:
+                        config["backend_project_skill_snapshots"] = backend_skill_snapshots
+                        config["backend_project_skill_snapshot"] = backend_skill_snapshots[0]
 
             db_obj = DevPipeline(
                 pipeline_id=pipeline_id,
@@ -1559,6 +1580,7 @@ class DevPipelineManager:
         pipe_config = json.loads(pipe.skill_config or "{}")
         skill_snapshot = pipe_config.get("project_skill_snapshot") or {}
         backend_skill_snapshot = pipe_config.get("backend_project_skill_snapshot") or {}
+        backend_skill_snapshots = pipe_config.get("backend_project_skill_snapshots") or []
         return {
             "pipeline_id": pipe.pipeline_id,
             "project_id": pipe.project_id or "",
@@ -1578,6 +1600,15 @@ class DevPipelineManager:
                 "skill_version": backend_skill_snapshot.get("skill_version"),
                 "confirmed_at": backend_skill_snapshot.get("confirmed_at"),
             } if backend_skill_snapshot else None,
+            "backend_project_skills": [
+                {
+                    "project_id": snapshot.get("project_id", ""),
+                    "project_name": snapshot.get("project_name", ""),
+                    "skill_version": snapshot.get("skill_version"),
+                    "confirmed_at": snapshot.get("confirmed_at"),
+                }
+                for snapshot in backend_skill_snapshots
+            ],
             "stages": stages,
             "retry_count": pipe.retry_count,
             "workspace_path": pipe.workspace_path or "",
@@ -1892,11 +1923,21 @@ class DevPipelineManager:
         project_ctx_section = ""
         fe_proj_id = pipe_config.get("frontend_project_id", "")
         be_proj_id = pipe_config.get("backend_project_id", "")
+        be_proj_ids = [
+            str(item) for item in (pipe_config.get("backend_project_ids") or []) if str(item).strip()
+        ]
+        if be_proj_id and be_proj_id not in be_proj_ids:
+            be_proj_ids.insert(0, be_proj_id)
         ctx_parts = []
         project_skill_snapshot = pipe_config.get("project_skill_snapshot") or {}
         backend_skill_snapshot = pipe_config.get("backend_project_skill_snapshot") or {}
+        backend_skill_snapshots = pipe_config.get("backend_project_skill_snapshots") or []
         context["frontend_project_name"] = project_skill_snapshot.get("project_name", "")
-        context["backend_project_name"] = backend_skill_snapshot.get("project_name", "")
+        context["backend_project_name"] = "、".join(
+            snapshot.get("project_name", "")
+            for snapshot in (backend_skill_snapshots or [backend_skill_snapshot])
+            if snapshot.get("project_name")
+        )
         if project_skill_snapshot.get("skill_content"):
             ctx_parts.append(
                 "## Confirmed Frontend Project Skill Snapshot\n"
@@ -1916,12 +1957,14 @@ class DevPipelineManager:
             "testing",
             "report",
         )
-        if backend_skill_snapshot.get("skill_content") and stage_key in backend_context_stages:
+        for snapshot in (backend_skill_snapshots or [backend_skill_snapshot]):
+            if not snapshot.get("skill_content") or stage_key not in backend_context_stages:
+                continue
             ctx_parts.append(
                 "## Confirmed Backend/API Project Skill Snapshot\n"
-                f"Project: {backend_skill_snapshot.get('project_name', '')}\n"
-                f"Version: {backend_skill_snapshot.get('skill_version', '')}\n\n"
-                f"{backend_skill_snapshot.get('skill_content', '')}"
+                f"Project: {snapshot.get('project_name', '')}\n"
+                f"Version: {snapshot.get('skill_version', '')}\n\n"
+                f"{snapshot.get('skill_content', '')}"
             )
         if fe_proj_id and stage_key in ("frontend_dev", "prototype", "page_design", "delivery", "code_review"):
             from app.services.knowledge_service import get_relevant_context
@@ -1936,17 +1979,19 @@ class DevPipelineManager:
                 fe_ctx = await _load_project_context(fe_proj_id, "frontend")
                 if fe_ctx:
                     ctx_parts.append(f"## 前端项目代码参考\n{fe_ctx}")
-        if be_proj_id and stage_key in backend_context_stages:
+        for current_be_proj_id in be_proj_ids:
+            if not current_be_proj_id or stage_key not in backend_context_stages:
+                continue
             from app.services.knowledge_service import get_relevant_context
             ctx = await get_relevant_context(
                 query=user_request,
-                project_id=be_proj_id,
+                project_id=current_be_proj_id,
                 tenant_id=pipe.tenant_id,
             )
             if ctx:
                 ctx_parts.append(ctx)
             else:
-                be_ctx = await _load_project_context(be_proj_id, "backend")
+                be_ctx = await _load_project_context(current_be_proj_id, "backend")
                 if be_ctx:
                     ctx_parts.append(f"## 后端项目代码参考\n{be_ctx}")
         if ctx_parts:

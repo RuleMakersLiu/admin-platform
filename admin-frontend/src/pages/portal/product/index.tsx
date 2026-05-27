@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { Alert, Button, Collapse, Empty, Input, List, Modal, Space, Steps, Tag, Typography, message } from 'antd'
 import {
   CheckCircleOutlined,
@@ -192,20 +192,26 @@ export default function ProductPortal() {
       const match = await pipelineApi.matchProjectSkill({ user_request: trimmedRequirement })
       setMatchedSkill(match)
       appendLog(`已匹配前端项目：${match.skill.project_name || match.skill.project_id}（${formatMatchSource(match.match_source)}）`)
-      if (match.backend_match) {
-        appendLog(`已匹配后端项目：${match.backend_match.skill.project_name || match.backend_match.skill.project_id}（${formatMatchSource(match.backend_match.match_source)}）`)
+      const backendMatches = match.backend_matches || (match.backend_match ? [match.backend_match] : [])
+      if (backendMatches.length) {
+        appendLog(`已匹配后端项目组：${backendMatches.map(item => item.skill.project_name || item.skill.project_id).join('、')}`)
       }
 
       const projectId = String(match.skill.project_id)
-      const backendProjectId = match.backend_match ? String(match.backend_match.skill.project_id) : ''
+      const backendProjectIds = backendMatches.map(item => String(item.skill.project_id))
+      const backendProjectId = backendProjectIds[0] || ''
       const created = await pipelineApi.create({
         user_request: trimmedRequirement,
         project_id: projectId,
         frontend_project_id: projectId,
         backend_project_id: backendProjectId,
+        backend_project_ids: backendProjectIds,
         frontend_tech: [match.skill.language, match.skill.framework].filter(Boolean).join('/'),
-        backend_tech: match.backend_match
-          ? [match.backend_match.skill.language, match.backend_match.skill.framework].filter(Boolean).join('/')
+        backend_tech: backendMatches.length
+          ? backendMatches
+              .map(item => [item.skill.language, item.skill.framework].filter(Boolean).join('/'))
+              .filter(Boolean)
+              .join(' + ')
           : undefined,
         pipeline_mode: 'frontend_contract_review',
         skill_config: {
@@ -220,14 +226,23 @@ export default function ProductPortal() {
             skill_version: match.skill.skill_version,
             confirmed_at: match.skill.confirmed_at,
           },
-          backend_project_skill: match.backend_match ? {
-            project_id: match.backend_match.skill.project_id,
-            project_name: match.backend_match.skill.project_name,
-            skill_version: match.backend_match.skill.skill_version,
-            confirmed_at: match.backend_match.skill.confirmed_at,
-            match_source: match.backend_match.match_source,
-            match_reason: match.backend_match.match_reason,
-            match_confidence: match.backend_match.confidence,
+          backend_project_skills: backendMatches.map(item => ({
+            project_id: item.skill.project_id,
+            project_name: item.skill.project_name,
+            skill_version: item.skill.skill_version,
+            confirmed_at: item.skill.confirmed_at,
+            match_source: item.match_source,
+            match_reason: item.match_reason,
+            match_confidence: item.confidence,
+          })),
+          backend_project_skill: backendMatches[0] ? {
+            project_id: backendMatches[0].skill.project_id,
+            project_name: backendMatches[0].skill.project_name,
+            skill_version: backendMatches[0].skill.skill_version,
+            confirmed_at: backendMatches[0].skill.confirmed_at,
+            match_source: backendMatches[0].match_source,
+            match_reason: backendMatches[0].match_reason,
+            match_confidence: backendMatches[0].confidence,
           } : undefined,
         },
       })
@@ -379,18 +394,18 @@ export default function ProductPortal() {
                     <Tag color="green">{Math.round(matchedSkill.confidence * 100)}%</Tag>
                   </Text>
                   <Text>{matchedSkill.match_reason}</Text>
-                  {matchedSkill.backend_match && (
-                    <>
+                  {(matchedSkill.backend_matches || (matchedSkill.backend_match ? [matchedSkill.backend_match] : [])).map((backendMatch) => (
+                    <Fragment key={backendMatch.skill.project_id}>
                       <Text>
-                        后端：{matchedSkill.backend_match.skill.project_name || matchedSkill.backend_match.skill.project_id} · {' '}
-                        {matchedSkill.backend_match.skill.language || 'unknown'} / {matchedSkill.backend_match.skill.framework || 'unknown'}
-                        <Tag style={{ marginLeft: 8 }}>v{matchedSkill.backend_match.skill.skill_version}</Tag>
-                        <Tag color={matchedSkill.backend_match.match_source === 'llm' ? 'blue' : 'gold'}>{formatMatchSource(matchedSkill.backend_match.match_source)}</Tag>
-                        <Tag color="green">{Math.round(matchedSkill.backend_match.confidence * 100)}%</Tag>
+                        后端：{backendMatch.skill.project_name || backendMatch.skill.project_id} · {' '}
+                        {backendMatch.skill.language || 'unknown'} / {backendMatch.skill.framework || 'unknown'}
+                        <Tag style={{ marginLeft: 8 }}>v{backendMatch.skill.skill_version}</Tag>
+                        <Tag color={backendMatch.match_source === 'llm' ? 'blue' : 'gold'}>{formatMatchSource(backendMatch.match_source)}</Tag>
+                        <Tag color="green">{Math.round(backendMatch.confidence * 100)}%</Tag>
                       </Text>
-                      <Text>{matchedSkill.backend_match.match_reason}</Text>
-                    </>
-                  )}
+                      <Text>{backendMatch.match_reason}</Text>
+                    </Fragment>
+                  ))}
                 </Space>
               }
             />
@@ -523,9 +538,9 @@ export default function ProductPortal() {
                 {status.project_skill && (
                   <Tag color="cyan">前端：{status.project_skill.project_name || status.project_skill.project_id}</Tag>
                 )}
-                {status.backend_project_skill && (
-                  <Tag color="purple">后端：{status.backend_project_skill.project_name || status.backend_project_skill.project_id}</Tag>
-                )}
+                {(status.backend_project_skills?.length ? status.backend_project_skills : status.backend_project_skill ? [status.backend_project_skill] : []).map((backendSkill) => (
+                  <Tag key={backendSkill.project_id} color="purple">后端：{backendSkill.project_name || backendSkill.project_id}</Tag>
+                ))}
               </Space>
             )}
             <Steps

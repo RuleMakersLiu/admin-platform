@@ -13,6 +13,8 @@ from app.ai.flow_manager import (
 from app.services.knowledge_service import (
     _build_project_skill_content,
     _format_project_skill_context,
+    select_backend_project_skill_match,
+    select_backend_project_skill_matches,
     select_project_skill_match,
 )
 
@@ -180,3 +182,79 @@ def test_requirement_auto_match_prefers_relevant_confirmed_project_skill():
     assert match["confidence"] > 0.2
     assert match["candidates_considered"] == 2
     assert "退款" in match["match_reason"]
+
+
+def test_backend_match_prefers_service_layer_over_core_models():
+    candidates = [
+        {
+            "project_id": 7,
+            "project_name": "wealth-glsw-core",
+            "language": "java",
+            "framework": "maven",
+            "project_brief": "酒店智能体管理平台、供应链中台、商品管理平台的java项目core层",
+            "skill_content": "纯后端服务基础核心模块，主要包含 model、DTO、VO、Result 和数据模型定义。",
+            "skill_status": "confirmed",
+            "skill_version": 3,
+        },
+        {
+            "project_id": 6,
+            "project_name": "wealth-glsw-service",
+            "language": "java",
+            "framework": "spring-boot",
+            "project_brief": "酒店智能体管理平台、供应链中台、商品管理平台的java项目service层",
+            "skill_content": "Spring Boot 服务层，包含业务逻辑、MyBatis Mapper、Dubbo RPC、接口响应和数据处理。",
+            "skill_status": "confirmed",
+            "skill_version": 1,
+        },
+    ]
+
+    match = select_backend_project_skill_match(
+        "商城管理平台需要增一个费用明细系统",
+        candidates,
+    )
+
+    assert match["skill"]["project_id"] == 6
+    assert "后端实现层信号" in match["match_reason"]
+
+
+def test_backend_match_returns_dubbo_related_project_group():
+    candidates = [
+        {
+            "project_id": 2,
+            "project_name": "wealth-admin-home",
+            "language": "java",
+            "framework": "spring-boot",
+            "project_brief": "酒店智能体管理平台、供应链中台、商品管理平台接口项目，controller层",
+            "skill_content": "Controller API 接口项目，负责接收管理后台请求并通过 Dubbo 调用 service。",
+            "skill_status": "confirmed",
+            "skill_version": 1,
+        },
+        {
+            "project_id": 6,
+            "project_name": "wealth-glsw-service",
+            "language": "java",
+            "framework": "spring-boot",
+            "project_brief": "酒店智能体管理平台、供应链中台、商品管理平台的java项目service层",
+            "skill_content": "Service 层实现业务逻辑，通过 Dubbo 暴露服务，使用 MyBatis Mapper。",
+            "skill_status": "confirmed",
+            "skill_version": 1,
+        },
+        {
+            "project_id": 7,
+            "project_name": "wealth-glsw-core",
+            "language": "java",
+            "framework": "maven",
+            "project_brief": "酒店智能体管理平台、供应链中台、商品管理平台的java项目core层",
+            "skill_content": "Core 层定义 model、DTO、VO、Result 等数据模型。",
+            "skill_status": "confirmed",
+            "skill_version": 1,
+        },
+    ]
+
+    match = select_backend_project_skill_matches(
+        "商城管理平台需要增一个费用明细系统",
+        candidates,
+    )
+
+    assert [item["skill"]["project_id"] for item in match["matches"]] == [2, 6, 7]
+    assert "Dubbo 分层后端项目组" in match["match_reason"]

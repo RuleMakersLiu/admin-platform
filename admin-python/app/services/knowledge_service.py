@@ -252,6 +252,181 @@ def select_project_skill_match(requirement: str, candidates: List[Any]) -> Optio
     }
 
 
+def select_backend_project_skill_match(requirement: str, candidates: List[Any]) -> Optional[Dict]:
+    """Select a backend/API implementation Project Skill.
+
+    Backend repos often split service/API code from core/model packages. Product
+    feature requests should prefer the service/API layer over a model-only core
+    package even when both share broad business keywords.
+    """
+    requirement = (requirement or "").strip()
+    if not requirement:
+        return None
+
+    skills = [
+        _project_skill_to_dict(candidate)
+        for candidate in candidates
+        if (_attr(candidate, "skill_status") or "").lower() == "confirmed"
+        and (_attr(candidate, "skill_content") or "").strip()
+    ]
+    if not skills:
+        return None
+
+    terms = _extract_match_terms(requirement)
+    feature_request = any(
+        token in requirement
+        for token in ("新增", "新建", "增加", "开发", "系统", "模块", "功能", "接口", "页面", "管理")
+    )
+    service_signals = (
+        "service", "api", "controller", "mapper", "mybatis", "spring boot", "spring-boot",
+        "dubbo", "rpc", "业务逻辑", "服务层", "service层", "dao", "rest", "接口",
+    )
+    core_only_signals = (
+        "core", "model", "dto", "vo", "result", "基础核心", "纯后端服务基础核心模块",
+        "数据模型定义", "model层", "core层", "实体", "pojo",
+    )
+
+    scored = []
+    for skill in skills:
+        text = _project_skill_match_text(skill)
+        project_name = str(skill.get("project_name") or "").lower()
+        project_brief = str(skill.get("project_brief") or "").lower()
+        matched_terms = [term for term in terms if term in text]
+        score = 0.0
+
+        for term in matched_terms:
+            if term in project_name:
+                score += 2.5
+            elif term in project_brief:
+                score += 2.0
+            elif term in str(skill.get("skill_content") or "").lower():
+                score += 1.5
+            else:
+                score += 1.0
+
+        service_hits = [signal for signal in service_signals if signal in text or signal in project_name]
+        core_hits = [signal for signal in core_only_signals if signal in text or signal in project_name]
+
+        if service_hits:
+            score += min(5.0, 1.4 * len(service_hits))
+        if feature_request and ("service" in project_name or "api" in project_name):
+            score += 3.0
+        if feature_request and ("core" in project_name or "model" in project_name):
+            score -= 5.0
+        if core_hits and not any(signal in project_name for signal in ("service", "api")):
+            score -= min(4.0, 0.8 * len(core_hits))
+
+        score += min(float(skill.get("skill_version") or 1) * 0.01, 0.08)
+        scored.append((score, len(matched_terms), len(service_hits), skill, matched_terms, service_hits, core_hits))
+
+    scored.sort(
+        key=lambda item: (item[0], item[1], item[2], int(item[3].get("skill_version") or 0)),
+        reverse=True,
+    )
+    best_score, _, _, best_skill, matched_terms, service_hits, core_hits = scored[0]
+    confidence = (
+        0.12
+        if best_score <= 0
+        else min(0.95, round(0.25 + (best_score / (best_score + 12.0)) * 0.7, 2))
+    )
+    reason_parts = []
+    if matched_terms:
+        reason_parts.append(f"业务关键词：{', '.join(matched_terms[:6])}")
+    if service_hits:
+        reason_parts.append(f"后端实现层信号：{', '.join(service_hits[:4])}")
+    if core_hits:
+        reason_parts.append("已降低 core/model-only 项目优先级")
+    match_reason = "；".join(reason_parts) or "后端兜底选择最相关的已确认 Project Skill"
+
+    return {
+        "skill": best_skill,
+        "confidence": confidence,
+        "match_reason": match_reason,
+        "match_source": "rule",
+        "candidates_considered": len(skills),
+    }
+
+
+def _backend_layer_rank(skill: Dict) -> int:
+    text = _project_skill_match_text(skill)
+    project_name = str(skill.get("project_name") or "").lower()
+    if "controller" in text or "接口项目" in text or project_name.endswith("-home") or "admin-home" in project_name:
+        return 0
+    if "service" in project_name or "service层" in text or "业务逻辑" in text:
+        return 1
+    if "core" in project_name or "core层" in text or "model" in text or "数据模型定义" in text:
+        return 2
+    return 3
+
+
+def _backend_business_terms(skill: Dict) -> set:
+    text = f"{skill.get('project_name') or ''}\n{skill.get('project_brief') or ''}\n{skill.get('skill_content') or ''}"
+    terms = set()
+    for term in ("商品管理平台", "商城管理平台", "供应链中台", "酒店智能体管理平台", "管理平台"):
+        if term in text:
+            terms.add(term)
+    for term in _extract_match_terms(str(skill.get("project_brief") or "")):
+        if len(term) >= 3:
+            terms.add(term)
+    return terms
+
+
+def select_backend_project_skill_matches(requirement: str, candidates: List[Any]) -> Optional[Dict]:
+    """Select an associated backend project group for layered Dubbo systems."""
+    base_match = select_backend_project_skill_match(requirement, candidates)
+    if not base_match:
+        return None
+
+    skills = [
+        _project_skill_to_dict(candidate)
+        for candidate in candidates
+        if (_attr(candidate, "skill_status") or "").lower() == "confirmed"
+        and (_attr(candidate, "skill_content") or "").strip()
+    ]
+    best_skill = base_match["skill"]
+    best_terms = _backend_business_terms(best_skill)
+    requirement_terms = set(_extract_match_terms(requirement))
+
+    associated = []
+    for skill in skills:
+        skill_terms = _backend_business_terms(skill)
+        same_business = bool(best_terms and skill_terms and best_terms.intersection(skill_terms))
+        skill_text = _project_skill_match_text(skill)
+        requirement_related = any(term in skill_text for term in requirement_terms)
+        if same_business or requirement_related or skill.get("project_id") == best_skill.get("project_id"):
+            associated.append(skill)
+
+    associated.sort(key=lambda skill: (_backend_layer_rank(skill), str(skill.get("project_name") or "")))
+    unique = []
+    seen = set()
+    for skill in associated:
+        project_id = skill.get("project_id")
+        if project_id in seen:
+            continue
+        seen.add(project_id)
+        unique.append(skill)
+
+    matches = [
+        {
+            "skill": skill,
+            "confidence": base_match["confidence"],
+            "match_reason": (
+                f"关联后端项目组：{skill.get('project_name')} "
+                f"({['controller/API层', 'service层', 'core/model层', '后端项目'][_backend_layer_rank(skill)]})"
+            ),
+            "match_source": base_match["match_source"],
+            "candidates_considered": base_match["candidates_considered"],
+        }
+        for skill in unique
+    ]
+    return {
+        **base_match,
+        "skill": matches[0]["skill"],
+        "match_reason": "识别到 Dubbo 分层后端项目组，已同时匹配 controller/API、service 和 core/model 关联项目。",
+        "matches": matches,
+    }
+
+
 def _build_match_candidate_prompt(skills: List[Dict]) -> str:
     brief_candidates = []
     for skill in skills[:20]:
@@ -1494,7 +1669,7 @@ async def match_backend_project_skill_for_requirement(
 
     # Backend pairing happens inside pipeline creation. Keep it deterministic so
     # product runs are not delayed by a second LLM router call after frontend matching.
-    return select_project_skill_match(requirement, skills)
+    return select_backend_project_skill_matches(requirement, skills)
 
 
 async def update_project_skill(
