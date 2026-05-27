@@ -314,6 +314,12 @@ func TestBuildPermissionIdentifier(t *testing.T) {
 			method:     "POST",
 			wantPrefix: "flow:pipeline:match",
 		},
+		{
+			name:       "flow pipeline delete with path param",
+			path:       "/api/flow/pipeline/:id",
+			method:     "DELETE",
+			wantPrefix: "flow:pipeline:delete",
+		},
 	}
 
 	for _, tt := range tests {

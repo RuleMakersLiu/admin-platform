@@ -182,7 +182,9 @@ func buildPermissionCandidates(path, method string) []string {
 
 	if module == "flow" {
 		resource = "pipeline"
-		if len(clean) >= 2 {
+		if method == "DELETE" && len(clean) == 2 && hadParam {
+			action = "delete"
+		} else if len(clean) >= 2 {
 			action = clean[len(clean)-1]
 		} else if method == "GET" {
 			action = "list"
