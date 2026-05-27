@@ -42,6 +42,7 @@ class ConfirmStageRequest(BaseModel):
 class UpdateProjectSkillRequest(BaseModel):
     project_brief: Optional[str] = Field(default=None, description="Project brief")
     skill_content: Optional[str] = Field(default=None, description="Project Skill Markdown")
+    tenant_scope_ids: Optional[List[int]] = Field(default=None, description="适用租户")
 
 
 def _get_tenant_id(request: Request) -> int:
@@ -83,6 +84,10 @@ async def create_pipeline(request: CreatePipelineRequest, http_request: Request)
             raw_body = {}
         pipeline_mode = raw_body.get("pipeline_mode") or "full"
         skill_config = dict(request.skill_config or {})
+        from app.services.knowledge_service import resolve_project_skill_tenant_scope
+        tenant_scope = await resolve_project_skill_tenant_scope(admin_id, tenant_id)
+        allowed_tenant_ids = tenant_scope.get("allowed_tenant_ids") or []
+        skill_config["tenant_scope"] = tenant_scope
         backend_project_id = request.backend_project_id or ""
         backend_project_ids = [str(item) for item in (request.backend_project_ids or []) if str(item).strip()]
         frontend_project_id = request.frontend_project_id or ""
@@ -96,6 +101,7 @@ async def create_pipeline(request: CreatePipelineRequest, http_request: Request)
                 request.user_request.strip(),
                 tenant_id=tenant_id,
                 exclude_project_id=frontend_project_id or request.project_id or "",
+                allowed_tenant_ids=allowed_tenant_ids,
             )
             if backend_match:
                 backend_matches = backend_match.get("matches") or [backend_match]
@@ -175,28 +181,37 @@ async def match_project_skill(request: MatchProjectSkillRequest, http_request: R
         match_backend_project_skill_for_requirement,
         match_frontend_project_skill_for_requirement,
         match_project_skill_for_requirement,
+        resolve_project_skill_tenant_scope,
     )
+    tenant_id = _get_tenant_id(http_request)
+    admin_id = _get_admin_id(http_request)
+    tenant_scope = await resolve_project_skill_tenant_scope(admin_id, tenant_id)
+    allowed_tenant_ids = tenant_scope.get("allowed_tenant_ids") or []
 
     match = await match_frontend_project_skill_for_requirement(
         request.user_request.strip(),
-        tenant_id=_get_tenant_id(http_request),
+        tenant_id=tenant_id,
+        allowed_tenant_ids=allowed_tenant_ids,
     )
     if not match:
         match = await match_project_skill_for_requirement(
             request.user_request.strip(),
-            tenant_id=_get_tenant_id(http_request),
+            tenant_id=tenant_id,
+            allowed_tenant_ids=allowed_tenant_ids,
         )
     if not match:
         raise HTTPException(status_code=404, detail="未找到可用的已确认项目 Skill，请先由开发角色完成项目接入和 Skill 确认")
 
     backend_match = await match_backend_project_skill_for_requirement(
         request.user_request.strip(),
-        tenant_id=_get_tenant_id(http_request),
+        tenant_id=tenant_id,
         exclude_project_id=str((match.get("skill") or {}).get("project_id") or ""),
+        allowed_tenant_ids=allowed_tenant_ids,
     )
     if backend_match:
         match["backend_match"] = backend_match
         match["backend_matches"] = backend_match.get("matches") or [backend_match]
+    match["tenant_scope"] = tenant_scope
     return {"code": 200, "message": "匹配成功", "data": match}
 
 
@@ -626,9 +641,13 @@ async def get_project_skill_api(project_id: str):
 
 
 @router.put("/projects/{project_id}/skill")
-async def update_project_skill_api(project_id: str, request: UpdateProjectSkillRequest):
+async def update_project_skill_api(project_id: str, request: UpdateProjectSkillRequest, http_request: Request):
     """Save developer-edited project Skill content and return it to draft state."""
-    from app.services.knowledge_service import update_project_skill
+    from app.services.knowledge_service import (
+        resolve_project_skill_tenant_scope,
+        update_project_skill,
+        update_project_tenant_scope,
+    )
 
     skill = await update_project_skill(
         project_id,
@@ -637,6 +656,20 @@ async def update_project_skill_api(project_id: str, request: UpdateProjectSkillR
     )
     if not skill:
         raise HTTPException(status_code=404, detail="项目知识不存在，请先触发项目分析")
+    if request.tenant_scope_ids is not None:
+        tenant_scope = await resolve_project_skill_tenant_scope(
+            _get_admin_id(http_request),
+            _get_tenant_id(http_request),
+        )
+        allowed = set(int(item) for item in tenant_scope.get("allowed_tenant_ids") or [])
+        requested = [int(item) for item in request.tenant_scope_ids]
+        if 0 in requested and tenant_scope.get("scope_type") != "system_admin":
+            raise HTTPException(status_code=403, detail="只有系统管理员可以配置全局适用租户")
+        invalid = [item for item in requested if item != 0 and item not in allowed]
+        if invalid:
+            raise HTTPException(status_code=403, detail=f"无权配置租户: {invalid}")
+        await update_project_tenant_scope(project_id, requested, admin_id=_get_admin_id(http_request))
+        skill["tenant_scope_ids"] = requested
     return {"code": 200, "message": "保存成功", "data": skill}
 
 

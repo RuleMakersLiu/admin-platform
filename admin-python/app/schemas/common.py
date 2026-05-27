@@ -49,6 +49,7 @@ class LoginResponse(BaseModel):
     username: str
     real_name: str = Field(alias="realName")
     tenant_id: int = Field(alias="tenantId")
+    tenant_ids: List[int] = Field(default_factory=list, alias="tenantIds")
 
     class Config:
         populate_by_name = True
@@ -67,6 +68,7 @@ class UserInfo(BaseModel):
     is_super: bool = Field(False, alias="isSuper")
     permissions: List[str] = Field(default_factory=list)
     tenant_id: int = Field(alias="tenantId")
+    tenant_ids: List[int] = Field(default_factory=list, alias="tenantIds")
 
     class Config:
         populate_by_name = True

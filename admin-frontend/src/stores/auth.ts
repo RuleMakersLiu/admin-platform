@@ -6,6 +6,7 @@ export interface User {
   username: string
   realName: string
   tenantId: number
+  tenantIds?: number[]
   groupName?: string
   isSuper?: boolean
   permissions: string[]

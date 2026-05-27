@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.models import SysAdmin, SysAdminGroup
+from app.models.models import SysAdmin, SysAdminGroup, SysAdminTenant
 
 
 async def get_current_user(
@@ -63,6 +63,12 @@ async def get_current_user(
             row = grp_result.first()
             if row:
                 is_super = row[0]
+        tenant_result = await db.execute(
+            select(SysAdminTenant.tenant_id).where(SysAdminTenant.admin_id == admin.id)
+        )
+        tenant_ids = [int(row[0]) for row in tenant_result.all()]
+        if admin.tenant_id and int(admin.tenant_id) not in tenant_ids:
+            tenant_ids.insert(0, int(admin.tenant_id))
 
         return {
             "adminId": admin_id,
@@ -70,6 +76,7 @@ async def get_current_user(
             "username": admin.username,
             "realName": admin.real_name,
             "isSuper": is_super,
+            "tenantIds": tenant_ids,
         }
 
     except jwt.ExpiredSignatureError:

@@ -109,6 +109,7 @@ export const generatorApi = {
 export const systemApi = {
   getGitConfigs: () => api.get('/system/git'),
   getLlmConfigs: () => api.get('/system/llm'),
+  getTenants: () => api.get('/system/tenant/all'),
 }
 
 // 部署接口

@@ -32,6 +32,7 @@ export default function DeveloperPortal() {
   const { user } = useAuthStore()
   const [projects, setProjects] = useState<any[]>([])
   const [gitConfigs, setGitConfigs] = useState<any[]>([])
+  const [tenants, setTenants] = useState<any[]>([])
   const [selectedProject, setSelectedProject] = useState<any>(null)
   const [skill, setSkill] = useState<ProjectSkill | null>(null)
   const [loadingProjects, setLoadingProjects] = useState(false)
@@ -76,6 +77,9 @@ export default function DeveloperPortal() {
         setGitConfigs(list)
       })
       .catch(() => setGitConfigs([]))
+    systemApi.getTenants()
+      .then((data: any) => setTenants(Array.isArray(data) ? data : data?.list || []))
+      .catch(() => setTenants([]))
   }, [])
 
   useEffect(() => {
@@ -98,6 +102,7 @@ export default function DeveloperPortal() {
         repo_url: values.repo_url,
         branch: values.branch || 'main',
         git_config_id: values.git_config_id,
+        tenant_scope_ids: values.tenant_scope_ids?.length ? values.tenant_scope_ids : [user?.tenantId].filter(Boolean),
       })
       const project = data?.project || data
       const projectId = project?.id || project?.project_id
@@ -115,6 +120,7 @@ export default function DeveloperPortal() {
         skill_status: 'analyzing',
         skill_version: 1,
         analysis_status: 'analyzing',
+        tenant_scope_ids: values.tenant_scope_ids?.length ? values.tenant_scope_ids : [user?.tenantId].filter(Boolean),
       })
       message.success('项目导入成功，已开始分析')
       await pipelineApi.analyzeProject(projectId)
@@ -170,6 +176,7 @@ export default function DeveloperPortal() {
       const next = await pipelineApi.updateProjectSkill(selectedProjectId, {
         project_brief: skill.project_brief,
         skill_content: skill.skill_content,
+        tenant_scope_ids: (skill as any).tenant_scope_ids || [],
       })
       setSkill(next)
       message.success('项目 Skill 已保存为草稿')
@@ -200,7 +207,7 @@ export default function DeveloperPortal() {
       <div className="workbench-grid">
         <div className="workbench-card" style={{ background: '#fff', border: '1px solid #e5eaf3', borderRadius: 8, padding: 20 }}>
           <Title level={4}>导入 Git 项目</Title>
-          <Form form={form} layout="vertical" initialValues={{ branch: 'main' }}>
+          <Form form={form} layout="vertical" initialValues={{ branch: 'main', tenant_scope_ids: user?.tenantIds || [user?.tenantId].filter(Boolean) }}>
             <Form.Item name="name" label="项目名称" rules={[{ required: true, message: '请输入项目名称' }]}>
               <Input placeholder="例如 Admin Portal" />
             </Form.Item>
@@ -221,6 +228,20 @@ export default function DeveloperPortal() {
                 allowClear
                 placeholder="公开仓库可不选"
                 options={gitConfigs.map((item) => ({ label: item.name || item.config_name || item.id, value: item.id }))}
+              />
+            </Form.Item>
+            <Form.Item
+              name="tenant_scope_ids"
+              label="适用租户"
+              rules={[{ required: true, message: '请选择适用租户' }]}
+            >
+              <Select
+                mode="multiple"
+                placeholder="选择哪些租户的生成流程可以使用该项目"
+                options={[
+                  ...(user?.isSuper ? [{ label: '全局', value: 0 }] : []),
+                  ...tenants.map((item) => ({ label: item.name, value: item.id })),
+                ]}
               />
             </Form.Item>
             <Button type="primary" block icon={<ImportOutlined />} loading={importing} onClick={handleImport}>
@@ -293,6 +314,19 @@ export default function DeveloperPortal() {
                   value={skill?.project_brief || ''}
                   onChange={(event) => setSkill((prev) => prev ? { ...prev, project_brief: event.target.value } : prev)}
                   style={{ marginTop: 8, marginBottom: 12 }}
+                />
+
+                <Text strong>适用租户</Text>
+                <Select
+                  mode="multiple"
+                  value={(skill as any)?.tenant_scope_ids || []}
+                  onChange={(value) => setSkill((prev) => prev ? { ...prev, tenant_scope_ids: value } as any : prev)}
+                  style={{ width: '100%', marginTop: 8, marginBottom: 12 }}
+                  placeholder="选择哪些租户的生成流程可以使用该项目"
+                  options={[
+                    ...(user?.isSuper ? [{ label: '全局', value: 0 }] : []),
+                    ...tenants.map((item) => ({ label: item.name, value: item.id })),
+                  ]}
                 />
 
                 <Text strong>项目级 Skill Markdown</Text>

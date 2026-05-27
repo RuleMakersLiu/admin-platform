@@ -10,7 +10,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.core.redis import get_gateway_redis
-from app.models.models import SysAdmin, SysAdminGroup, SysMenu, SysTenant, SysLlmConfig, SysGitConfig
+from app.models.models import (
+    ProjectTenantScope,
+    SysAdmin,
+    SysAdminGroup,
+    SysAdminTenant,
+    SysGitConfig,
+    SysLlmConfig,
+    SysMenu,
+    SysTenant,
+)
 from app.schemas.common import PaginatedResult, Response
 from app.services.permissions import parse_power, serialize_power
 
@@ -35,6 +44,55 @@ async def invalidate_group_permission_cache(db: AsyncSession, group_id: int) -> 
     await invalidate_permission_cache([row[0] for row in result.all()])
 
 
+async def get_accessible_tenant_ids(db: AsyncSession, user: dict) -> List[int]:
+    """Tenant ids the current admin can assign or operate on."""
+    if user.get("isSuper"):
+        result = await db.execute(
+            select(SysTenant.id).where(SysTenant.status == 1, SysTenant.is_deleted == 0).order_by(SysTenant.id)
+        )
+        return [int(row[0]) for row in result.all()]
+
+    admin_id = int(user.get("adminId") or 0)
+    result = await db.execute(
+        select(SysAdminTenant.tenant_id).where(SysAdminTenant.admin_id == admin_id)
+    )
+    tenant_ids = [int(row[0]) for row in result.all()]
+    tenant_id = int(user.get("tenantId") or 0)
+    if tenant_id and tenant_id not in tenant_ids:
+        tenant_ids.insert(0, tenant_id)
+    return tenant_ids
+
+
+def normalize_tenant_ids(tenant_ids: Optional[List[int]], default_tenant_id: int, allowed_tenant_ids: List[int], is_super: bool) -> List[int]:
+    values = [int(item) for item in (tenant_ids or []) if int(item) > 0]
+    if default_tenant_id and default_tenant_id not in values:
+        values.insert(0, int(default_tenant_id))
+    if not values and default_tenant_id:
+        values = [int(default_tenant_id)]
+    if not is_super:
+        allowed = set(allowed_tenant_ids)
+        values = [item for item in values if item in allowed]
+    return sorted(set(values))
+
+
+async def replace_admin_tenants(
+    db: AsyncSession,
+    admin_id: int,
+    tenant_ids: List[int],
+    default_tenant_id: int,
+) -> None:
+    now = int(time.time() * 1000)
+    await db.execute(delete(SysAdminTenant).where(SysAdminTenant.admin_id == admin_id))
+    for tenant_id in tenant_ids:
+        db.add(SysAdminTenant(
+            admin_id=admin_id,
+            tenant_id=tenant_id,
+            is_default=1 if tenant_id == default_tenant_id else 0,
+            create_time=now,
+            update_time=now,
+        ))
+
+
 # ==================== 请求模型 ====================
 class CreateAdminRequest(BaseModel):
     """创建管理员请求"""
@@ -45,6 +103,7 @@ class CreateAdminRequest(BaseModel):
     email: Optional[str] = Field(None, max_length=128)
     admin_group_id: int
     tenant_id: int = 1
+    tenant_ids: List[int] = Field(default_factory=list)
     status: int = 1
 
 
@@ -54,6 +113,8 @@ class UpdateAdminRequest(BaseModel):
     phone: Optional[str] = Field(None, max_length=20)
     email: Optional[str] = Field(None, max_length=128)
     admin_group_id: Optional[int] = None
+    tenant_id: Optional[int] = None
+    tenant_ids: Optional[List[int]] = None
     status: Optional[int] = None
     password: Optional[str] = Field(None, min_length=6, max_length=128)
 
@@ -112,10 +173,14 @@ async def list_admins(
     """获取管理员列表"""
     tenant_id = user.get("tenantId")
     is_super = user.get("isSuper")
+    allowed_tenant_ids = await get_accessible_tenant_ids(db, user)
 
     conditions = [SysAdmin.is_deleted == 0]
     if not is_super:
-        conditions.append(SysAdmin.tenant_id == tenant_id)
+        scoped_admin_ids = select(SysAdminTenant.admin_id).where(
+            SysAdminTenant.tenant_id.in_(allowed_tenant_ids)
+        )
+        conditions.append(or_(SysAdmin.tenant_id == tenant_id, SysAdmin.id.in_(scoped_admin_ids)))
 
     if keyword:
         conditions.append(
@@ -147,6 +212,15 @@ async def list_admins(
     rows = result.all()
 
     items = []
+    admin_ids = [admin.id for admin, _ in rows]
+    tenant_map: Dict[int, List[int]] = {admin_id: [] for admin_id in admin_ids}
+    if admin_ids:
+        tenant_result = await db.execute(
+            select(SysAdminTenant.admin_id, SysAdminTenant.tenant_id).where(SysAdminTenant.admin_id.in_(admin_ids))
+        )
+        for admin_id, admin_tenant_id in tenant_result.all():
+            tenant_map.setdefault(admin_id, []).append(int(admin_tenant_id))
+
     for admin, group_name in rows:
         items.append({
             "id": admin.id,
@@ -158,6 +232,7 @@ async def list_admins(
             "groupName": group_name,
             "status": admin.status,
             "tenantId": admin.tenant_id,
+            "tenantIds": tenant_map.get(admin.id) or [admin.tenant_id],
             "createTime": admin.create_time,
             "updateTime": admin.update_time,
         })
@@ -174,6 +249,7 @@ async def create_admin(
     """创建管理员"""
     import bcrypt
     is_super = user.get("isSuper")
+    allowed_tenant_ids = await get_accessible_tenant_ids(db, user)
 
     # 检查用户名是否已存在
     stmt = select(SysAdmin).where(SysAdmin.username == request.username)
@@ -186,6 +262,9 @@ async def create_admin(
 
     # 非超管只能创建本租户用户
     create_tenant_id = request.tenant_id if is_super else user.get("tenantId")
+    tenant_ids = normalize_tenant_ids(request.tenant_ids, create_tenant_id, allowed_tenant_ids, bool(is_super))
+    if not tenant_ids or int(create_tenant_id) not in tenant_ids:
+        return Response(code=400, message="租户权限范围不合法")
 
     now = int(time.time() * 1000)
     admin = SysAdmin(
@@ -205,6 +284,7 @@ async def create_admin(
     db.add(admin)
     await db.flush()
     await db.refresh(admin)
+    await replace_admin_tenants(db, admin.id, tenant_ids, int(create_tenant_id))
 
     return Response(data={
         "id": admin.id,
@@ -222,10 +302,14 @@ async def get_admin(
     """获取管理员详情"""
     tenant_id = user.get("tenantId")
     is_super = user.get("isSuper")
+    allowed_tenant_ids = await get_accessible_tenant_ids(db, user)
 
     conditions = [SysAdmin.id == admin_id, SysAdmin.is_deleted == 0]
     if not is_super:
-        conditions.append(SysAdmin.tenant_id == tenant_id)
+        scoped_admin_ids = select(SysAdminTenant.admin_id).where(
+            SysAdminTenant.tenant_id.in_(allowed_tenant_ids)
+        )
+        conditions.append(or_(SysAdmin.tenant_id == tenant_id, SysAdmin.id.in_(scoped_admin_ids)))
 
     stmt = (
         select(SysAdmin, SysAdminGroup.name)
@@ -239,6 +323,10 @@ async def get_admin(
         return Response(code=404, message="用户不存在")
 
     admin, group_name = row
+    tenant_result = await db.execute(
+        select(SysAdminTenant.tenant_id).where(SysAdminTenant.admin_id == admin.id)
+    )
+    tenant_ids = [int(item[0]) for item in tenant_result.all()] or [admin.tenant_id]
     return Response(data={
         "id": admin.id,
         "username": admin.username,
@@ -249,6 +337,7 @@ async def get_admin(
         "groupName": group_name,
         "status": admin.status,
         "tenantId": admin.tenant_id,
+        "tenantIds": tenant_ids,
         "createTime": admin.create_time,
     })
 
@@ -263,10 +352,14 @@ async def update_admin(
     """更新管理员"""
     tenant_id = user.get("tenantId")
     is_super = user.get("isSuper")
+    allowed_tenant_ids = await get_accessible_tenant_ids(db, user)
 
     conditions = [SysAdmin.id == admin_id, SysAdmin.is_deleted == 0]
     if not is_super:
-        conditions.append(SysAdmin.tenant_id == tenant_id)
+        scoped_admin_ids = select(SysAdminTenant.admin_id).where(
+            SysAdminTenant.tenant_id.in_(allowed_tenant_ids)
+        )
+        conditions.append(or_(SysAdmin.tenant_id == tenant_id, SysAdmin.id.in_(scoped_admin_ids)))
 
     stmt = select(SysAdmin).where(*conditions)
     result = await db.execute(stmt)
@@ -283,6 +376,28 @@ async def update_admin(
         admin.email = request.email
     if request.admin_group_id is not None:
         admin.admin_group_id = request.admin_group_id
+    if request.tenant_id is not None:
+        new_tenant_id = int(request.tenant_id) if is_super else int(admin.tenant_id)
+        tenant_ids = normalize_tenant_ids(
+            request.tenant_ids,
+            new_tenant_id,
+            allowed_tenant_ids,
+            bool(is_super),
+        )
+        if not tenant_ids or new_tenant_id not in tenant_ids:
+            return Response(code=400, message="租户权限范围不合法")
+        admin.tenant_id = new_tenant_id
+        await replace_admin_tenants(db, admin.id, tenant_ids, new_tenant_id)
+    elif request.tenant_ids is not None:
+        tenant_ids = normalize_tenant_ids(
+            request.tenant_ids,
+            int(admin.tenant_id),
+            allowed_tenant_ids,
+            bool(is_super),
+        )
+        if not tenant_ids or int(admin.tenant_id) not in tenant_ids:
+            return Response(code=400, message="租户权限范围不合法")
+        await replace_admin_tenants(db, admin.id, tenant_ids, int(admin.tenant_id))
     if request.status is not None:
         admin.status = request.status
     if request.password:
@@ -305,10 +420,14 @@ async def delete_admin(
     """删除管理员（软删除）"""
     tenant_id = user.get("tenantId")
     is_super = user.get("isSuper")
+    allowed_tenant_ids = await get_accessible_tenant_ids(db, user)
 
     conditions = [SysAdmin.id == admin_id, SysAdmin.is_deleted == 0]
     if not is_super:
-        conditions.append(SysAdmin.tenant_id == tenant_id)
+        scoped_admin_ids = select(SysAdminTenant.admin_id).where(
+            SysAdminTenant.tenant_id.in_(allowed_tenant_ids)
+        )
+        conditions.append(or_(SysAdmin.tenant_id == tenant_id, SysAdmin.id.in_(scoped_admin_ids)))
 
     stmt = select(SysAdmin).where(*conditions)
     result = await db.execute(stmt)
@@ -689,8 +808,12 @@ async def get_all_tenants(
     db: AsyncSession = Depends(get_db),
 ):
     """获取所有启用的租户（下拉框用）"""
+    allowed_tenant_ids = await get_accessible_tenant_ids(db, user)
+    conditions = [SysTenant.status == 1, SysTenant.is_deleted == 0]
+    if not user.get("isSuper"):
+        conditions.append(SysTenant.id.in_(allowed_tenant_ids))
     result = await db.execute(
-        select(SysTenant).where(SysTenant.status == 1, SysTenant.is_deleted == 0).order_by(SysTenant.id)
+        select(SysTenant).where(*conditions).order_by(SysTenant.id)
     )
     tenants = result.scalars().all()
     return Response(data=[

@@ -64,6 +64,7 @@ export interface ProjectSkill {
   confirmed_at?: number | null
   analysis_status: string
   analysis_error?: string
+  tenant_scope_ids?: number[]
 }
 
 export interface ProjectSkillMatch {
@@ -276,7 +277,7 @@ export const pipelineApi = {
 
   updateProjectSkill: (
     projectId: string | number,
-    data: { project_brief?: string; skill_content?: string },
+    data: { project_brief?: string; skill_content?: string; tenant_scope_ids?: number[] },
   ) =>
     api.put(`/flow/projects/${projectId}/skill`, data) as any as Promise<ProjectSkill>,
 

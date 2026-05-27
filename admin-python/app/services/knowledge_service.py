@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session_maker
 from app.models.agent_models import AgentKnowledge, KnowledgeEdge, ProjectKnowledge
+from app.models.models import ProjectTenantScope, SysAdmin, SysAdminGroup, SysAdminTenant, SysTenant
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,48 @@ PROJECT_SKILL_MATCH_PROMPT = """你是需求入口的项目 Skill 路由器。�
 输出格式：
 {{"project_id": 123, "confidence": 0.82, "match_reason": "选择原因，简明说明匹配到的业务关键词和 Skill 能力"}}
 """
+
+
+async def resolve_project_skill_tenant_scope(admin_id: int, tenant_id: int) -> Dict:
+    """Resolve which tenant-scoped projects may participate in generation."""
+    tenant_id = int(tenant_id or 0)
+    admin_id = int(admin_id or 0)
+    if not admin_id:
+        return {"scope_type": "developer", "allowed_tenant_ids": [tenant_id] if tenant_id else []}
+
+    async with async_session_maker() as session:
+        result = await session.execute(select(SysAdmin).where(SysAdmin.id == admin_id, SysAdmin.is_deleted == 0))
+        admin = result.scalar_one_or_none()
+        if not admin:
+            return {"scope_type": "developer", "allowed_tenant_ids": [tenant_id] if tenant_id else []}
+
+        group = None
+        if admin.admin_group_id:
+            group_result = await session.execute(
+                select(SysAdminGroup).where(SysAdminGroup.id == admin.admin_group_id, SysAdminGroup.status == 1)
+            )
+            group = group_result.scalar_one_or_none()
+
+        if group and group.is_super == 1:
+            tenant_result = await session.execute(
+                select(SysTenant.id).where(SysTenant.status == 1, SysTenant.is_deleted == 0).order_by(SysTenant.id)
+            )
+            return {
+                "scope_type": "system_admin",
+                "allowed_tenant_ids": [int(row[0]) for row in tenant_result.all()],
+            }
+
+        tenant_result = await session.execute(
+            select(SysAdminTenant.tenant_id).where(SysAdminTenant.admin_id == admin.id)
+        )
+        tenant_ids = [int(row[0]) for row in tenant_result.all()]
+        if admin.tenant_id and int(admin.tenant_id) not in tenant_ids:
+            tenant_ids.insert(0, int(admin.tenant_id))
+
+    return {
+        "scope_type": "project_admin" if len(tenant_ids) > 1 else "developer",
+        "allowed_tenant_ids": sorted(set(tenant_ids or ([tenant_id] if tenant_id else []))),
+    }
 
 
 def _stringify_list(value: Any) -> List[str]:
@@ -1496,7 +1539,23 @@ def _knowledge_to_dict(k) -> Dict:
         "confirmed_by": k.confirmed_by,
         "confirmed_at": k.confirmed_at,
         "analysis_error": k.analysis_error or "",
+        "tenant_id": k.tenant_id,
     }
+
+
+def _project_scope_filter(allowed_tenant_ids: Optional[List[int]], fallback_tenant_id: int = 0):
+    allowed = [int(item) for item in (allowed_tenant_ids or []) if int(item) > 0]
+    if fallback_tenant_id > 0 and fallback_tenant_id not in allowed:
+        allowed.append(int(fallback_tenant_id))
+    scope_tenants = sorted(set([0, *allowed]))
+    scoped_project_ids = select(ProjectTenantScope.project_id).where(
+        ProjectTenantScope.enabled == 1,
+        ProjectTenantScope.tenant_id.in_(scope_tenants),
+    )
+    return or_(
+        ProjectKnowledge.project_id.in_(scoped_project_ids),
+        ProjectKnowledge.tenant_id.in_(scope_tenants),
+    )
 
 
 async def get_project_skill(project_id: str) -> Optional[Dict]:
@@ -1514,10 +1573,42 @@ async def get_project_skill(project_id: str) -> Optional[Dict]:
             k.update_time = int(time.time() * 1000)
             await session.commit()
             await session.refresh(k)
-        return _knowledge_to_dict(k)
+        data = _knowledge_to_dict(k)
+        scope_result = await session.execute(
+            select(ProjectTenantScope.tenant_id).where(
+                ProjectTenantScope.project_id == int(project_id),
+                ProjectTenantScope.enabled == 1,
+            )
+        )
+        data["tenant_scope_ids"] = [int(row[0]) for row in scope_result.all()]
+        return data
 
 
-async def match_project_skill_for_requirement(requirement: str, tenant_id: int = 0) -> Optional[Dict]:
+async def update_project_tenant_scope(
+    project_id: str,
+    tenant_scope_ids: List[int],
+    admin_id: int = 0,
+) -> None:
+    async with async_session_maker() as session:
+        now = int(time.time() * 1000)
+        await session.execute(delete(ProjectTenantScope).where(ProjectTenantScope.project_id == int(project_id)))
+        for tenant_id in sorted(set(int(item) for item in tenant_scope_ids)):
+            session.add(ProjectTenantScope(
+                project_id=int(project_id),
+                tenant_id=tenant_id,
+                enabled=1,
+                created_by=admin_id,
+                create_time=now,
+                update_time=now,
+            ))
+        await session.commit()
+
+
+async def match_project_skill_for_requirement(
+    requirement: str,
+    tenant_id: int = 0,
+    allowed_tenant_ids: Optional[List[int]] = None,
+) -> Optional[Dict]:
     """Match a product requirement to one confirmed Project Skill."""
     requirement = (requirement or "").strip()
     if not requirement:
@@ -1528,10 +1619,7 @@ async def match_project_skill_for_requirement(requirement: str, tenant_id: int =
             ProjectKnowledge.skill_status == "confirmed",
             ProjectKnowledge.skill_content.isnot(None),
         ]
-        if tenant_id > 0:
-            # Keep tenant isolation while still allowing old project_knowledge rows
-            # that were created before tenant_id was consistently populated.
-            conditions.append(ProjectKnowledge.tenant_id.in_([tenant_id, 0]))
+        conditions.append(_project_scope_filter(allowed_tenant_ids, tenant_id))
         result = await session.execute(
             select(ProjectKnowledge)
             .where(and_(*conditions))
@@ -1595,7 +1683,11 @@ def _is_frontend_project_skill(skill: Dict) -> bool:
     )
 
 
-async def match_frontend_project_skill_for_requirement(requirement: str, tenant_id: int = 0) -> Optional[Dict]:
+async def match_frontend_project_skill_for_requirement(
+    requirement: str,
+    tenant_id: int = 0,
+    allowed_tenant_ids: Optional[List[int]] = None,
+) -> Optional[Dict]:
     """Match a product requirement to a confirmed frontend Project Skill."""
     requirement = (requirement or "").strip()
     if not requirement:
@@ -1606,8 +1698,7 @@ async def match_frontend_project_skill_for_requirement(requirement: str, tenant_
             ProjectKnowledge.skill_status == "confirmed",
             ProjectKnowledge.skill_content.isnot(None),
         ]
-        if tenant_id > 0:
-            conditions.append(ProjectKnowledge.tenant_id.in_([tenant_id, 0]))
+        conditions.append(_project_scope_filter(allowed_tenant_ids, tenant_id))
 
         result = await session.execute(
             select(ProjectKnowledge)
@@ -1635,6 +1726,7 @@ async def match_backend_project_skill_for_requirement(
     requirement: str,
     tenant_id: int = 0,
     exclude_project_id: str = "",
+    allowed_tenant_ids: Optional[List[int]] = None,
 ) -> Optional[Dict]:
     """Match a product requirement to a confirmed backend Project Skill."""
     requirement = (requirement or "").strip()
@@ -1646,8 +1738,7 @@ async def match_backend_project_skill_for_requirement(
             ProjectKnowledge.skill_status == "confirmed",
             ProjectKnowledge.skill_content.isnot(None),
         ]
-        if tenant_id > 0:
-            conditions.append(ProjectKnowledge.tenant_id.in_([tenant_id, 0]))
+        conditions.append(_project_scope_filter(allowed_tenant_ids, tenant_id))
         if str(exclude_project_id or "").isdigit():
             conditions.append(ProjectKnowledge.project_id != int(exclude_project_id))
 
@@ -1701,7 +1792,15 @@ async def update_project_skill(
         k.update_time = int(time.time() * 1000)
         await session.commit()
         await session.refresh(k)
-        return _knowledge_to_dict(k)
+        data = _knowledge_to_dict(k)
+        scope_result = await session.execute(
+            select(ProjectTenantScope.tenant_id).where(
+                ProjectTenantScope.project_id == int(project_id),
+                ProjectTenantScope.enabled == 1,
+            )
+        )
+        data["tenant_scope_ids"] = [int(row[0]) for row in scope_result.all()]
+        return data
 
 
 async def confirm_project_skill(project_id: str, confirmed_by: int = 0) -> Optional[Dict]:
@@ -1722,7 +1821,15 @@ async def confirm_project_skill(project_id: str, confirmed_by: int = 0) -> Optio
         k.update_time = k.confirmed_at
         await session.commit()
         await session.refresh(k)
-        return _knowledge_to_dict(k)
+        data = _knowledge_to_dict(k)
+        scope_result = await session.execute(
+            select(ProjectTenantScope.tenant_id).where(
+                ProjectTenantScope.project_id == int(project_id),
+                ProjectTenantScope.enabled == 1,
+            )
+        )
+        data["tenant_scope_ids"] = [int(row[0]) for row in scope_result.all()]
+        return data
 
 
 # ==================== 上下文工程增强 ====================

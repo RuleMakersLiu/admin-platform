@@ -119,3 +119,28 @@ class SysTenant(Base):
     create_time: Mapped[int] = mapped_column(BigInteger, default=lambda: int(time.time() * 1000))
     update_time: Mapped[int] = mapped_column(BigInteger, default=lambda: int(time.time() * 1000))
     is_deleted: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class SysAdminTenant(Base):
+    """管理员可管理租户关系"""
+    __tablename__ = "sys_admin_tenant"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    admin_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    tenant_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    is_default: Mapped[int] = mapped_column(Integer, default=0)
+    create_time: Mapped[int] = mapped_column(BigInteger, default=lambda: int(time.time() * 1000))
+    update_time: Mapped[int] = mapped_column(BigInteger, default=lambda: int(time.time() * 1000))
+
+
+class ProjectTenantScope(Base):
+    """项目可参与生成的租户范围"""
+    __tablename__ = "project_tenant_scope"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    project_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    tenant_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    enabled: Mapped[int] = mapped_column(Integer, default=1)
+    created_by: Mapped[int] = mapped_column(BigInteger, default=0)
+    create_time: Mapped[int] = mapped_column(BigInteger, default=lambda: int(time.time() * 1000))
+    update_time: Mapped[int] = mapped_column(BigInteger, default=lambda: int(time.time() * 1000))

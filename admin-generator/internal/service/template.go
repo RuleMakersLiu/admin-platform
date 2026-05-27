@@ -10,28 +10,30 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 // ProjectTemplate 项目模板
 type ProjectTemplate struct {
-	ID           int64       `json:"id"`
-	Name         string      `json:"name"`
-	Code         string      `json:"code"`
-	Language     string      `json:"language"`
-	Framework    string      `json:"framework"`
-	Version      string      `json:"version"`
-	Description  string      `json:"description"`
-	Structure    string      `json:"structure"`
-	Variables    string      `json:"variables"`
-	TestConfig   string      `json:"test_config"`
-	BuildConfig  string      `json:"build_config"`
-	Icon         string      `json:"icon"`
-	Sort         int         `json:"sort"`
-	IsBuiltin    int         `json:"is_builtin"`
-	TenantID     int64       `json:"tenant_id"`
-	Status       int         `json:"status"`
-	CreateTime   int64       `json:"create_time"`
-	UpdateTime   int64       `json:"update_time"`
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	Code        string `json:"code"`
+	Language    string `json:"language"`
+	Framework   string `json:"framework"`
+	Version     string `json:"version"`
+	Description string `json:"description"`
+	Structure   string `json:"structure"`
+	Variables   string `json:"variables"`
+	TestConfig  string `json:"test_config"`
+	BuildConfig string `json:"build_config"`
+	Icon        string `json:"icon"`
+	Sort        int    `json:"sort"`
+	IsBuiltin   int    `json:"is_builtin"`
+	TenantID    int64  `json:"tenant_id"`
+	Status      int    `json:"status"`
+	CreateTime  int64  `json:"create_time"`
+	UpdateTime  int64  `json:"update_time"`
 }
 
 // TemplateFile 模板文件
@@ -194,27 +196,27 @@ func (s *TemplateService) ListLanguages() ([]map[string]interface{}, error) {
 
 // GenProject 已生成项目
 type GenProject struct {
-	ID               int64   `json:"id"`
-	Name             string  `json:"name"`
-	Code             string  `json:"code"`
-	Description      string  `json:"description"`
-	TemplateID       int64   `json:"template_id"`
-	Language         string  `json:"language"`
-	Framework        string  `json:"framework"`
-	Variables        *string  `json:"variables"`
-	ConfigJSON       *string  `json:"config_json"`
-	RepoURL          string  `json:"repo_url"`
-	Branch           string  `json:"branch"`
-	DeployProjectID  *int64  `json:"deploy_project_id"`
-	TestPassRate     *float64 `json:"test_pass_rate"`
-	LastTestTime     *int64  `json:"last_test_time"`
-	GitConfigID      *int64  `json:"git_config_id"`
-	LlmConfigID      *int64  `json:"llm_config_id"`
-	AdminID          int64   `json:"admin_id"`
-	TenantID         int64   `json:"tenant_id"`
-	Status           int     `json:"status"`
-	CreateTime       int64   `json:"create_time"`
-	UpdateTime       int64   `json:"update_time"`
+	ID              int64    `json:"id"`
+	Name            string   `json:"name"`
+	Code            string   `json:"code"`
+	Description     string   `json:"description"`
+	TemplateID      int64    `json:"template_id"`
+	Language        string   `json:"language"`
+	Framework       string   `json:"framework"`
+	Variables       *string  `json:"variables"`
+	ConfigJSON      *string  `json:"config_json"`
+	RepoURL         string   `json:"repo_url"`
+	Branch          string   `json:"branch"`
+	DeployProjectID *int64   `json:"deploy_project_id"`
+	TestPassRate    *float64 `json:"test_pass_rate"`
+	LastTestTime    *int64   `json:"last_test_time"`
+	GitConfigID     *int64   `json:"git_config_id"`
+	LlmConfigID     *int64   `json:"llm_config_id"`
+	AdminID         int64    `json:"admin_id"`
+	TenantID        int64    `json:"tenant_id"`
+	Status          int      `json:"status"`
+	CreateTime      int64    `json:"create_time"`
+	UpdateTime      int64    `json:"update_time"`
 }
 
 // ProjectService 项目生成服务
@@ -231,13 +233,14 @@ func NewProjectService() *ProjectService {
 
 // CreateProjectRequest 创建项目请求
 type CreateProjectRequest struct {
-	Name        string            `json:"name" binding:"required"`
-	Code        string            `json:"code" binding:"required"`
-	Description string            `json:"description"`
-	TemplateID  int64             `json:"template_id" binding:"required"`
-	Variables   map[string]string `json:"variables"`
-	RepoURL     string            `json:"repo_url"`
-	Branch      string            `json:"branch"`
+	Name           string            `json:"name" binding:"required"`
+	Code           string            `json:"code" binding:"required"`
+	Description    string            `json:"description"`
+	TemplateID     int64             `json:"template_id" binding:"required"`
+	Variables      map[string]string `json:"variables"`
+	RepoURL        string            `json:"repo_url"`
+	Branch         string            `json:"branch"`
+	TenantScopeIDs []int64           `json:"tenant_scope_ids"`
 }
 
 // CreateProject 创建项目并生成代码
@@ -285,6 +288,13 @@ func (s *ProjectService) CreateProject(req *CreateProjectRequest, adminID, tenan
 
 	db := cfg.GetDB()
 	if err := db.Table("gen_project").Create(project).Error; err != nil {
+		return nil, nil, err
+	}
+	scopeIDs, err := s.normalizeProjectTenantScopes(adminID, tenantID, req.TenantScopeIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := replaceProjectTenantScopes(db, project.ID, scopeIDs, adminID); err != nil {
 		return nil, nil, err
 	}
 
@@ -551,14 +561,35 @@ func (s *ProjectService) UpdateProject(id int64, tenantID int64, updates map[str
 	return query.Updates(updates).Error
 }
 
+func (s *ProjectService) UpdateProjectTenantScopes(id int64, tenantID int64, tenantScopeIDs []int64, adminID int64) error {
+	db := cfg.GetDB()
+	query := db.Table("gen_project").Where("id = ?", id)
+	if tenantID > 0 {
+		query = query.Where("tenant_id = ? OR tenant_id = 0", tenantID)
+	}
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return err
+	}
+	if count == 0 {
+		return fmt.Errorf("项目不存在或无权限")
+	}
+	scopeIDs, err := s.normalizeProjectTenantScopes(adminID, tenantID, tenantScopeIDs)
+	if err != nil {
+		return err
+	}
+	return replaceProjectTenantScopes(db, id, scopeIDs, adminID)
+}
+
 // ImportProjectRequest 从 Git 导入项目请求
 type ImportProjectRequest struct {
-	Name        string `json:"name" binding:"required"`
-	Code        string `json:"code" binding:"required"`
-	Description string `json:"description"`
-	RepoURL     string `json:"repo_url" binding:"required"`
-	Branch      string `json:"branch"`
-	GitConfigID *int64 `json:"git_config_id"`
+	Name           string  `json:"name" binding:"required"`
+	Code           string  `json:"code" binding:"required"`
+	Description    string  `json:"description"`
+	RepoURL        string  `json:"repo_url" binding:"required"`
+	Branch         string  `json:"branch"`
+	GitConfigID    *int64  `json:"git_config_id"`
+	TenantScopeIDs []int64 `json:"tenant_scope_ids"`
 }
 
 // ImportProject 从 Git 仓库导入项目
@@ -605,8 +636,103 @@ func (s *ProjectService) ImportProject(req *ImportProjectRequest, adminID, tenan
 	if err := db.Table("gen_project").Create(project).Error; err != nil {
 		return nil, err
 	}
+	scopeIDs, err := s.normalizeProjectTenantScopes(adminID, tenantID, req.TenantScopeIDs)
+	if err != nil {
+		return nil, err
+	}
+	if err := replaceProjectTenantScopes(db, project.ID, scopeIDs, adminID); err != nil {
+		return nil, err
+	}
 
 	return project, nil
+}
+
+func (s *ProjectService) normalizeProjectTenantScopes(adminID int64, defaultTenantID int64, requested []int64) ([]int64, error) {
+	if len(requested) == 0 {
+		return []int64{defaultTenantID}, nil
+	}
+
+	db := cfg.GetDB()
+	allowed := map[int64]bool{}
+	var superCount int64
+	if adminID > 0 {
+		db.Table("sys_admin").
+			Joins("JOIN sys_admin_group ON sys_admin_group.id = sys_admin.admin_group_id").
+			Where("sys_admin.id = ? AND sys_admin.is_deleted = 0 AND sys_admin_group.status = 1 AND sys_admin_group.is_super = 1", adminID).
+			Count(&superCount)
+	}
+
+	if superCount > 0 {
+		var tenantIDs []int64
+		if err := db.Table("sys_tenant").
+			Where("status = 1 AND is_deleted = 0").
+			Pluck("id", &tenantIDs).Error; err != nil {
+			return nil, err
+		}
+		for _, tenantID := range tenantIDs {
+			allowed[tenantID] = true
+		}
+		allowed[0] = true
+	} else {
+		var tenantIDs []int64
+		if adminID > 0 {
+			if err := db.Table("sys_admin_tenant").
+				Where("admin_id = ?", adminID).
+				Pluck("tenant_id", &tenantIDs).Error; err != nil {
+				return nil, err
+			}
+		}
+		for _, tenantID := range tenantIDs {
+			allowed[tenantID] = true
+		}
+		if defaultTenantID > 0 {
+			allowed[defaultTenantID] = true
+		}
+	}
+
+	seen := map[int64]bool{}
+	var normalized []int64
+	for _, tenantID := range requested {
+		if tenantID < 0 {
+			return nil, fmt.Errorf("租户范围不合法")
+		}
+		if !allowed[tenantID] {
+			return nil, fmt.Errorf("无权配置租户: %d", tenantID)
+		}
+		if !seen[tenantID] {
+			seen[tenantID] = true
+			normalized = append(normalized, tenantID)
+		}
+	}
+	if len(normalized) == 0 && defaultTenantID > 0 {
+		normalized = append(normalized, defaultTenantID)
+	}
+	return normalized, nil
+}
+
+func replaceProjectTenantScopes(db *gorm.DB, projectID int64, tenantScopeIDs []int64, adminID int64) error {
+	now := time.Now().UnixMilli()
+	seen := map[int64]bool{}
+	if err := db.Table("project_tenant_scope").Where("project_id = ?", projectID).Delete(map[string]interface{}{}).Error; err != nil {
+		return err
+	}
+	for _, tenantID := range tenantScopeIDs {
+		if tenantID < 0 || seen[tenantID] {
+			continue
+		}
+		seen[tenantID] = true
+		if err := db.Table("project_tenant_scope").Create(map[string]interface{}{
+			"project_id":  projectID,
+			"tenant_id":   tenantID,
+			"enabled":     1,
+			"created_by":  adminID,
+			"create_time": now,
+			"update_time": now,
+		}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func cloneRepository(cloneURL, branch, tmpDir string) ([]byte, error) {

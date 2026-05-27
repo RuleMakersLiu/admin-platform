@@ -303,7 +303,7 @@ func GetProjectTestConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"code": 200, "message": "成功",
 		"data": gin.H{
-			"project":     project,
+			"project":      project,
 			"test_config":  testCfg,
 			"build_config": buildCfg,
 		},
@@ -325,7 +325,23 @@ func UpdateProject(c *gin.Context) {
 		"name": true, "description": true, "repo_url": true, "branch": true, "status": true, "git_config_id": true, "llm_config_id": true, "language": true, "framework": true,
 	}
 	filtered := make(map[string]interface{})
+	var tenantScopeIDs []int64
 	for k, v := range updates {
+		if k == "tenant_scope_ids" {
+			if rawList, ok := v.([]interface{}); ok {
+				for _, item := range rawList {
+					switch value := item.(type) {
+					case float64:
+						tenantScopeIDs = append(tenantScopeIDs, int64(value))
+					case int64:
+						tenantScopeIDs = append(tenantScopeIDs, value)
+					case int:
+						tenantScopeIDs = append(tenantScopeIDs, int64(value))
+					}
+				}
+			}
+			continue
+		}
 		if allowedFields[k] {
 			filtered[k] = v
 		}
@@ -334,6 +350,13 @@ func UpdateProject(c *gin.Context) {
 	if err := projectService.UpdateProject(id, tenantID, filtered); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
 		return
+	}
+	if len(tenantScopeIDs) > 0 {
+		adminID, _ := strconv.ParseInt(c.GetHeader("X-Admin-Id"), 10, 64)
+		if err := projectService.UpdateProjectTenantScopes(id, tenantID, tenantScopeIDs, adminID); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+			return
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "更新成功", "data": gin.H{"id": id}})

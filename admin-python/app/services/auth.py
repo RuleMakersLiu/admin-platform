@@ -8,13 +8,32 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models.models import SysAdmin, SysAdminGroup
+from app.models.models import SysAdmin, SysAdminGroup, SysAdminTenant, SysTenant
 from app.schemas.common import LoginResponse, UserInfo
 from app.services.permissions import parse_power
 
 
 class AuthService:
     """认证服务"""
+
+    @staticmethod
+    async def get_admin_tenant_ids(db: AsyncSession, admin: SysAdmin, is_super: bool = False) -> list[int]:
+        """Return tenant ids this admin can operate on."""
+        if is_super:
+            result = await db.execute(
+                select(SysTenant.id).where(SysTenant.status == 1, SysTenant.is_deleted == 0).order_by(SysTenant.id)
+            )
+            return [int(row[0]) for row in result.all()]
+
+        result = await db.execute(
+            select(SysAdminTenant.tenant_id)
+            .where(SysAdminTenant.admin_id == admin.id)
+            .order_by(SysAdminTenant.is_default.desc(), SysAdminTenant.tenant_id)
+        )
+        tenant_ids = [int(row[0]) for row in result.all()]
+        if admin.tenant_id and int(admin.tenant_id) not in tenant_ids:
+            tenant_ids.insert(0, int(admin.tenant_id))
+        return tenant_ids or [int(admin.tenant_id or 0)]
 
     @staticmethod
     def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -69,9 +88,6 @@ class AuthService:
             SysAdmin.is_deleted == 0,
             SysAdmin.status == 1,
         )
-        if tenant_id:
-            stmt = stmt.where(SysAdmin.tenant_id == tenant_id)
-
         result = await db.execute(stmt)
         admin = result.scalar_one_or_none()
 
@@ -82,15 +98,31 @@ class AuthService:
         if not AuthService.verify_password(password, admin.password):
             return None
 
+        group = None
+        if admin.admin_group_id:
+            group_result = await db.execute(
+                select(SysAdminGroup).where(
+                    SysAdminGroup.id == admin.admin_group_id,
+                    SysAdminGroup.status == 1,
+                )
+            )
+            group = group_result.scalar_one_or_none()
+        is_super = bool(group and group.is_super == 1)
+        tenant_ids = await AuthService.get_admin_tenant_ids(db, admin, is_super=is_super)
+        login_tenant_id = int(tenant_id or admin.tenant_id or 0)
+        if not is_super and login_tenant_id not in tenant_ids:
+            return None
+
         # 创建Token
-        token = AuthService.create_token(admin.id, admin.username, admin.tenant_id)
+        token = AuthService.create_token(admin.id, admin.username, login_tenant_id)
 
         return LoginResponse(
             token=token,
             admin_id=admin.id,
             username=admin.username,
             real_name=admin.real_name,
-            tenant_id=admin.tenant_id,
+            tenant_id=login_tenant_id,
+            tenant_ids=tenant_ids,
         )
 
     @staticmethod
@@ -117,6 +149,7 @@ class AuthService:
 
         is_super = bool(group and group.is_super == 1)
         permissions = ["*"] if is_super else parse_power(group.power if group else None)
+        tenant_ids = await AuthService.get_admin_tenant_ids(db, admin, is_super=is_super)
 
         return UserInfo(
             admin_id=admin.id,
@@ -130,4 +163,5 @@ class AuthService:
             is_super=is_super,
             permissions=permissions,
             tenant_id=admin.tenant_id,
+            tenant_ids=tenant_ids,
         )

@@ -16,6 +16,7 @@ interface Admin {
   adminGroupId: number
   groupName: string
   tenantId?: number
+  tenantIds?: number[]
   tenantName?: string
   status: number
   lastLoginTime: number
@@ -104,7 +105,7 @@ export default function AdminList() {
   const handleCreate = () => {
     setEditingAdmin(null)
     form.resetFields()
-    form.setFieldsValue({ status: 1, admin_group_id: undefined })
+    form.setFieldsValue({ status: 1, admin_group_id: undefined, tenant_ids: [] })
     setModalVisible(true)
   }
 
@@ -119,6 +120,7 @@ export default function AdminList() {
         email: result.email,
         admin_group_id: result.adminGroupId,
         tenant_id: result.tenantId || 1,
+        tenant_ids: result.tenantIds || [result.tenantId || 1],
         status: result.status,
       })
       setModalVisible(true)
@@ -149,6 +151,8 @@ export default function AdminList() {
           phone: values.phone,
           email: values.email,
           admin_group_id: values.admin_group_id,
+          tenant_id: values.tenant_id,
+          tenant_ids: values.tenant_ids,
           status: values.status ? 1 : 0,
           password: values.password || undefined,
         })
@@ -163,6 +167,7 @@ export default function AdminList() {
           email: values.email,
           admin_group_id: values.admin_group_id,
           tenant_id: values.tenant_id || 1,
+          tenant_ids: values.tenant_ids || [values.tenant_id || 1],
           status: values.status ? 1 : 0,
         })
         message.success('创建成功')
@@ -328,10 +333,24 @@ export default function AdminList() {
 
           <Form.Item
             name="tenant_id"
-            label="租户"
-            rules={[{ required: true, message: '请选择租户' }]}
+            label="默认租户"
+            rules={[{ required: true, message: '请选择默认租户' }]}
           >
-            <Select placeholder="请选择租户">
+            <Select placeholder="请选择默认租户">
+              {tenants.map((t) => (
+                <Option key={t.id} value={t.id}>
+                  {t.name}
+                </Option>
+              ))}
+            </Select>
+          </Form.Item>
+
+          <Form.Item
+            name="tenant_ids"
+            label="租户权限"
+            rules={[{ required: true, message: '请选择租户权限' }]}
+          >
+            <Select mode="multiple" placeholder="请选择用户可管理的租户">
               {tenants.map((t) => (
                 <Option key={t.id} value={t.id}>
                   {t.name}
