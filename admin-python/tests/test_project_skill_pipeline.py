@@ -6,7 +6,9 @@ from app.ai.flow_manager import (
     _build_pipeline_artifact,
     _build_pipeline_skill_snapshot,
     _init_stages_for_mode,
+    _render_prompt_template,
     _validate_project_skill_ready,
+    DEFAULT_STAGE_PROMPTS,
 )
 from app.services.knowledge_service import (
     _build_project_skill_content,
@@ -109,6 +111,7 @@ def test_pipeline_artifact_collects_preview_frontend_contract_and_review():
     stages["frontend_dev"].update({"code_files": {"src/pages/users.tsx": "export default function Users() {}"}})
     stages["code_review"].update(
         {
+            "status": "completed",
             "structured_output": {
                 "review_passed": True,
                 "fix_suggestions": "",
@@ -124,6 +127,24 @@ def test_pipeline_artifact_collects_preview_frontend_contract_and_review():
     assert artifact["api_contract"] == "# API Contract\nGET /api/users"
     assert artifact["frontend_files"] == {"src/pages/users.tsx": "export default function Users() {}"}
     assert artifact["review"]["review_passed"] is True
+
+
+def test_requirement_prompt_names_frontend_and_backend_projects():
+    prompt = _render_prompt_template(
+        DEFAULT_STAGE_PROMPTS["requirement"],
+        {
+            "user_request": "新增费用明细系统",
+            "frontend_project_name": "web-product-agent",
+            "frontend_tech": "javascript/vue",
+            "backend_project_name": "wealth-glsw-service",
+            "backend_tech": "java/spring-boot",
+            "stage_outputs": {},
+        },
+    )
+
+    assert "前端项目: web-product-agent" in prompt
+    assert "后端项目: wealth-glsw-service" in prompt
+    assert "必须分别写明前端参考项目和后端参考项目" in prompt
 
 
 def test_requirement_auto_match_prefers_relevant_confirmed_project_skill():

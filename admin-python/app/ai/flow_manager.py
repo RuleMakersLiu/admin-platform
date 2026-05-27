@@ -180,17 +180,29 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 用户需求:
 {{user_request}}
 
+## 已识别项目
+- 前端项目: {{frontend_project_name}}
+- 前端技术栈: {{frontend_tech}}
+- 后端项目: {{backend_project_name}}
+- 后端技术栈: {{backend_tech}}
+
 ## 参考项目
-如果上方有「前端项目代码参考」或「后端项目代码参考」，请结合项目现有的架构、字段、组件来撰写需求，保持与项目一致的技术风格。
+如果上方有「Confirmed Frontend Project Skill Snapshot」「Confirmed Backend/API Project Skill Snapshot」「前端项目代码参考」或「后端项目代码参考」，请同时结合前端和后端项目的现有架构、字段、组件、接口规范来撰写需求，保持与项目一致的技术风格。
 
 直接输出 Markdown 格式的 PRD 文档（不要用代码块包裹），不要写任何寒暄、开场白或解释，直接从标题开始。包含:
-1. 项目概述
+1. 项目概述（必须分别写明前端参考项目和后端参考项目）
 2. 功能需求列表（含优先级 P0/P1/P2/P3）
 3. 用户故事
 4. 非功能需求
 5. 验收标准""",
 
     "page_design": """基于以下需求文档，进行详细的页面设计。
+
+## 已识别项目
+- 前端项目: {{frontend_project_name}}
+- 前端技术栈: {{frontend_tech}}
+- 后端项目: {{backend_project_name}}
+- 后端技术栈: {{backend_tech}}
 
 ## 需求文档
 {{requirement_output}}
@@ -1892,7 +1904,19 @@ class DevPipelineManager:
                 f"Version: {project_skill_snapshot.get('skill_version', '')}\n\n"
                 f"{project_skill_snapshot.get('skill_content', '')}"
             )
-        if backend_skill_snapshot.get("skill_content") and stage_key in ("delivery", "frontend_dev", "code_review", "testing"):
+        backend_context_stages = (
+            "requirement",
+            "page_design",
+            "prototype",
+            "ui_preview",
+            "delivery",
+            "frontend_dev",
+            "backend_dev",
+            "code_review",
+            "testing",
+            "report",
+        )
+        if backend_skill_snapshot.get("skill_content") and stage_key in backend_context_stages:
             ctx_parts.append(
                 "## Confirmed Backend/API Project Skill Snapshot\n"
                 f"Project: {backend_skill_snapshot.get('project_name', '')}\n"
@@ -1912,7 +1936,7 @@ class DevPipelineManager:
                 fe_ctx = await _load_project_context(fe_proj_id, "frontend")
                 if fe_ctx:
                     ctx_parts.append(f"## 前端项目代码参考\n{fe_ctx}")
-        if be_proj_id and stage_key in ("delivery", "frontend_dev", "backend_dev", "code_review", "testing"):
+        if be_proj_id and stage_key in backend_context_stages:
             from app.services.knowledge_service import get_relevant_context
             ctx = await get_relevant_context(
                 query=user_request,
