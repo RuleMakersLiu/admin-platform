@@ -27,6 +27,7 @@ export interface PipelineStatus {
   user_request: string
   status: string
   current_stage: string
+  pipeline_mode?: string
   project_skill?: {
     project_id: string
     project_name: string
@@ -82,6 +83,7 @@ export interface PipelineArtifact {
   status: string
   pipeline_mode: string
   preview_html: string
+  preview_url?: string
   api_contract: string
   frontend_files: Record<string, string>
   review: Record<string, any>
@@ -218,6 +220,14 @@ export const pipelineApi = {
   getPreview: (id: string) =>
     api.get(`${BASE}/${id}/preview`) as any as Promise<{ preview_html: string; output: string }>,
 
+  startSandboxPreview: (id: string) =>
+    api.post(`${BASE}/${id}/sandbox-preview/start`) as any as Promise<{
+      pipeline_id: string
+      status: string
+      preview_url: string
+      preview_token: string
+    }>,
+
   getArtifact: (id: string) =>
     api.get(`${BASE}/${id}/artifact`) as any as Promise<PipelineArtifact>,
 
@@ -250,8 +260,8 @@ export const pipelineApi = {
   list: () =>
     api.get(`${BASE}/list`) as any,
 
-  rollback: (id: string) =>
-    api.post(`${BASE}/${id}/rollback`) as any,
+  rollback: (id: string, stage?: string, feedback?: string) =>
+    api.post(`${BASE}/${id}/rollback`, { stage, feedback: feedback || '' }) as any,
 
   delete: (id: string) =>
     api.delete(`${BASE}/${id}`) as any,

@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     # ==================== Pipeline v2 配置 ====================
     pipeline_workspace_root: str = "/data/pipelines"
     pipeline_test_timeout: int = 120
+    pipeline_preview_host: str = "127.0.0.1"
+    pipeline_preview_port_start: int = 43000
+    pipeline_preview_port_end: int = 43100
     deploy_service_url: str = "http://admin-deploy:8083"
 
     # ==================== 埋点数据配置 ====================

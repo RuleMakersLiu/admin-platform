@@ -33,10 +33,10 @@ func Setup(r *gin.Engine) {
 		// 埋点服务（不需要认证，可选认证）
 		trackingGroup := api.Group("/tracking")
 		{
-			trackingGroup.POST("/events", handler.TrackEvents)          // 批量事件
-			trackingGroup.POST("/event", handler.TrackSingleEvent)      // 单个事件
-			trackingGroup.GET("/health", handler.TrackingHealth)        // 健康检查
-			trackingGroup.GET("/device-id", handler.GetDeviceID)        // 获取设备ID
+			trackingGroup.POST("/events", handler.TrackEvents)     // 批量事件
+			trackingGroup.POST("/event", handler.TrackSingleEvent) // 单个事件
+			trackingGroup.GET("/health", handler.TrackingHealth)   // 健康检查
+			trackingGroup.GET("/device-id", handler.GetDeviceID)   // 获取设备ID
 		}
 
 		// 认证相关（不需要权限校验）

@@ -73,6 +73,7 @@ class ChatGLM:
         max_tokens: Optional[int] = None,
         api_key: Optional[str] = None,
         temperature: float = 0.7,
+        thinking: Optional[dict] = None,
     ):
         self.model = model
         self.api_key = api_key or settings.zai_api_key
@@ -84,6 +85,7 @@ class ChatGLM:
         if _is_reasoning_model(model) and self.max_tokens < 8192:
             self.max_tokens = max(self.max_tokens * 4, 16384)
         self.temperature = temperature
+        self.thinking = thinking
         self._client: Optional[httpx.AsyncClient] = None
 
         if not self.api_key:
@@ -119,13 +121,16 @@ class ChatGLM:
             else:
                 glm_messages.append({"role": "user", "content": str(msg)})
 
-        return {
+        payload = {
             "model": self.model,
             "messages": glm_messages,
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
             "stream": stream,
         }
+        if self.thinking:
+            payload["thinking"] = self.thinking
+        return payload
 
     async def ainvoke(self, messages: list) -> GLMMessage:
         """异步非流式调用"""

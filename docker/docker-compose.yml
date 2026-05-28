@@ -52,6 +52,8 @@ services:
     depends_on:
       - postgres
       - redis
+    volumes:
+      - pipeline_data:/data/pipelines
     networks:
       - admin-network
 
@@ -133,6 +135,7 @@ volumes:
   postgres_data:
   redis_data:
   deploy_data:
+  pipeline_data:
 
 networks:
   admin-network:

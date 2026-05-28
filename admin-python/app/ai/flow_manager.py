@@ -35,6 +35,7 @@ MAX_FIX_ITERATIONS = 3
 MAX_LLM_RETRIES = 3
 RETRY_BASE_DELAY = 2  # seconds
 LLM_STAGE_TIMEOUT = 600  # 单阶段 LLM 调用最大超时（秒）
+LLM_STREAM_IDLE_TIMEOUT = 45  # seconds without stream chunks before fallback
 
 
 class PipelineStatus(str, Enum):
@@ -50,7 +51,7 @@ STAGE_DEFINITIONS = [
     # 产品设计流程
     {"key": "requirement",    "name": "需求分析",   "agent": "PM",  "need_confirm": True},
     {"key": "page_design",    "name": "页面设计",   "agent": "PM",  "need_confirm": True},
-    {"key": "prototype",      "name": "原型预览",   "agent": "FE",  "need_confirm": True},
+    {"key": "prototype",      "name": "前端预览代码", "agent": "FE",  "need_confirm": True},
     {"key": "delivery",       "name": "交付包",     "agent": "PJM", "need_confirm": True},
     # 开发流程
     {"key": "frontend_dev",   "name": "前端开发",   "agent": "FE",  "need_confirm": True},
@@ -71,7 +72,6 @@ PIPELINE_MODE_STAGES = {
         "page_design",
         "prototype",
         "delivery",
-        "frontend_dev",
         "code_review",
         "report",
     ],
@@ -94,6 +94,17 @@ def _stage_needs_confirm(stage_key: str) -> bool:
 
 def _stage_keys_for_mode(pipeline_mode: str = "full") -> List[str]:
     return PIPELINE_MODE_STAGES.get(pipeline_mode or "full", STAGE_KEYS)
+
+
+def _is_product_preview_code_stage(stage_key: str, pipe_config: Dict[str, Any]) -> bool:
+    return stage_key == "prototype" and pipe_config.get("pipeline_mode") == "frontend_contract_review"
+
+
+def _compact_context(text: str, limit: int = 4000) -> str:
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n...[context truncated]"
 
 
 def _init_stages_for_mode(pipeline_mode: str = "full") -> Dict[str, Any]:
@@ -131,6 +142,7 @@ def _build_pipeline_skill_snapshot(project_skill: Dict[str, Any]) -> Dict[str, A
     return {
         "project_id": str(project_skill.get("project_id") or ""),
         "project_name": project_skill.get("project_name") or "",
+        "repo_url": project_skill.get("repo_url") or "",
         "skill_content": project_skill.get("skill_content") or "",
         "skill_version": project_skill.get("skill_version") or 1,
         "confirmed_at": project_skill.get("confirmed_at"),
@@ -152,7 +164,7 @@ def _build_pipeline_artifact(stages: Dict[str, Any]) -> Dict[str, Any]:
         "preview_html": preview_stage.get("preview_html", ""),
         "preview_source": preview_stage.get("preview_html", "") or preview_stage.get("output", ""),
         "api_contract": delivery_stage.get("output", ""),
-        "frontend_files": frontend_stage.get("code_files", {}) or {},
+        "frontend_files": frontend_stage.get("code_files", {}) or preview_stage.get("code_files", {}) or {},
         "review": review,
         "review_status": review_stage.get("status", "pending"),
         "review_output": review_stage.get("output", "") if review_stage.get("status") == "completed" else "",
@@ -167,6 +179,7 @@ def _knowledge_to_project_skill_dict(project_skill: ProjectKnowledge) -> Dict[st
     return {
         "project_id": project_skill.project_id,
         "project_name": project_skill.project_name,
+        "repo_url": project_skill.repo_url or "",
         "skill_content": project_skill.skill_content or "",
         "skill_status": project_skill.skill_status or "",
         "skill_version": project_skill.skill_version or 1,
@@ -217,7 +230,7 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 7. 权限控制点（页面级权限 + 按钮/操作级权限）
 8. 开发确认要点（需要开发团队确认的技术问题）""",
 
-    "prototype": """根据需求文档和页面设计，生成一个可交互的前端原型页面。
+    "prototype": """根据需求文档和页面设计，直接生成可写入匹配前端项目的前端预览代码。
 
 ## 需求文档
 {{requirement_output}}
@@ -231,37 +244,44 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 ## 用户需求
 {{user_request}}
 
-## 输出要求
-- 只输出一个 ```html 代码块，不要在代码块前后写任何文字说明
-- HTML 必须完整输出，不能被截断，控制在 420 行以内
-- `<body>` 必须包含 `data-preview-ready="true"`，主内容容器必须使用 `id="preview-root"`，便于系统自动检查预览是否可用
+## 重要：参考项目
+结合 Frontend Project Skill，优先复用现有项目的目录、组件库、路由、API 封装、权限判断、表格/表单模式和样式规范。不要展开解释。
 
-## 重要：参考项目代码
-如果上方有「前端项目代码参考」，参考其组件用法、样式风格和布局结构来设计原型。
-
-## 技术方案
-只用 antd CSS + 原生 JS（禁止使用 Vue/React）：
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ant-design-vue@1.7.8/dist/antd.min.css">
-
-用 antd CSS 类名渲染组件外观（.ant-btn, .ant-table, .ant-input, .ant-modal, .ant-tag 等）。
-用一个 <script> 标签写原生 JS 实现交互，只允许用以下简单模式：
-- 弹窗显示/隐藏：document.getElementById('xxx').style.display = 'block'/'none'
-- 按钮点击：onclick="函数名()"
-- 提交反馈：alert('操作成功')
-不要用任何框架、不要用模板语法、不要用数据绑定。
+## 生成目标
+本阶段就是前端代码生成阶段，不再有后续单独的“前端开发”阶段。产物会直接覆盖到匹配前端项目的沙箱副本中，并通过该项目自己的 npm 脚本启动预览。
 
 ## 实现要求
-1. 纯 HTML + antd CSS 类名 + 内联 `<style>` + 少量原生 JS，不引入任何框架
-2. 第一屏必须是完整后台工作台：左侧菜单、顶部标题区、搜索筛选区、表格区、操作按钮区，不要做营销页或空白说明页
-3. 实现：主列表页 + 搜索 + 新增/编辑弹窗或抽屉 + 批量处理弹窗 + 删除确认弹窗
-4. 弹窗默认隐藏，点击按钮显示，点取消/确定关闭；保存/删除/批量操作要有 toast 或 alert 反馈
-5. 表格放 5 条 mock 数据（中文），列和字段要与页面设计一致，状态用 tag 展示
-6. 必须展示页面状态：空数据、加载中、无权限、搜索无结果、接口异常，至少以独立区域或提示条形式出现
-7. 必须展示权限效果：菜单/页面/按钮/数据范围至少 3 类；无权限按钮要 disabled 并解释原因
-8. 弹窗中的表单字段要能输入，关键字段要有必填/格式提示
-9. 视觉风格要像成熟管理后台：信息密度适中、对齐清晰、颜色克制，避免大面积霓虹、渐变球、营销 hero 和占位文案""",
+1. 根据目标技术栈生成真实项目代码，不要再输出纯静态 HTML mock。
+2. Vue 项目生成 1 个 `.vue` 页面组件和 1 个 API/mock 服务模块即可；不要生成大量文件。
+3. 第一屏必须是成熟后台工作台：搜索筛选、表格、操作按钮、新增/编辑弹窗或抽屉、删除确认、权限态、空/加载/异常状态。
+4. 所有按钮必须有真实前端交互，不允许出现未定义函数、空 onclick、只展示不响应的控件。
+5. 可以使用 mock API 数据，但文件结构要能在真实项目中运行预览。
+6. 代码要短而完整：页面组件控制在 260 行以内，API/mock 服务模块控制在 120 行以内。
+7. 只生成与本需求相关的新增/修改文件，不要输出说明文字。
 
-    "delivery": """基于需求分析、页面设计和原型预览，整理一份完整的交付文档包。
+## 输出格式
+只允许输出 JSON 文件数组，不要输出 Markdown，不要输出代码块围栏，不要输出解释文字。系统会直接解析这个 JSON 并写入前端项目。
+
+JSON 格式如下:
+[
+  {"path": "src/views/Marketing/FlashSaleList.vue", "content": "完整文件内容"},
+  {"path": "src/api/marketing.js", "content": "完整文件内容"}
+]
+
+要求：
+- 必须是合法 JSON，最外层必须是数组
+- 每项必须包含 path 和 content
+- content 里放完整文件内容，换行用 JSON 字符串转义；必须完整闭合所有 JSON 字符串、对象和数组
+- 只输出 2 个文件：页面组件 + API/mock 服务模块
+- 禁止输出 ```json 或任何 Markdown 包裹
+
+示例:
+[
+  {"path": "src/views/Marketing/FlashSaleList.vue", "content": "完整文件内容"},
+  {"path": "src/api/marketing.js", "content": "完整文件内容"}
+]""",
+
+    "delivery": """基于需求分析、页面设计和前端预览代码，整理一份完整的交付文档包。
 
 ## 后端项目规范来源
 - 后端项目: {{backend_project_name}}
@@ -597,13 +617,17 @@ def _render_prompt_template(template: str, context: Dict[str, Any]) -> str:
 
     replacements = {
         "{{user_request}}": user_request[:2000],
-        "{{requirement_output}}": prev_outputs.get("requirement", {}).get("output", "未提供")[:3000],
-        "{{page_design_output}}": prev_outputs.get("page_design", {}).get("output", "未提供")[:3000],
+        "{{requirement_output}}": prev_outputs.get("requirement", {}).get("output", "未提供")[:1800],
+        "{{page_design_output}}": prev_outputs.get("page_design", {}).get("output", "未提供")[:2200],
         "{{prototype_output}}": prev_outputs.get("prototype", {}).get("output", "未提供")[:3000],
         "{{delivery_output}}": prev_outputs.get("delivery", {}).get("output", "未提供")[:3000],
         "{{ui_preview_output}}": prev_outputs.get("ui_preview", {}).get("output", "未提供")[:3000],
         "{{backend_dev_output}}": prev_outputs.get("backend_dev", {}).get("output", "未提供")[:3000],
-        "{{frontend_dev_output}}": prev_outputs.get("frontend_dev", {}).get("output", "未提供")[:3000],
+        "{{frontend_dev_output}}": (
+            prev_outputs.get("frontend_dev", {}).get("output")
+            or prev_outputs.get("prototype", {}).get("output")
+            or "未提供"
+        )[:3000],
         "{{development_output}}": prev_outputs.get("development", {}).get("output", "未提供")[:3000],
         "{{code_review_output}}": prev_outputs.get("code_review", {}).get("output", "未提供")[:2000],
         "{{testing_output}}": prev_outputs.get("testing", {}).get("output", "未提供")[:2000],
@@ -666,10 +690,10 @@ def _build_pipeline_prompt(stage_key: str, context: Dict[str, Any],
         prompt += """
 
 ## First-Version Review Scope
-This pipeline only delivers preview HTML, frontend code, API contract, and review results.
+This pipeline delivers frontend preview code in the preview stage, API contract, and review results.
 Do not require backend implementation, test execution, commit, or deployment in this mode.
 Focus the review on:
-1. Preview HTML usability: complete HTML, `data-preview-ready="true"`, and `#preview-root`.
+1. Frontend code completeness and whether it can run inside the matched frontend project sandbox.
 2. Frontend code consistency with the confirmed Project Skill.
 3. API contract completeness: endpoints, methods, params, response shape, error cases, and permissions.
 
@@ -685,22 +709,40 @@ def _try_parse_json_code_files(raw_output: str) -> Dict[str, str]:
     支持格式: ```json\n{"path": "src/xxx", "content": "..."}\n``` 或直接 JSON 对象
     """
     import re
+    raw = (raw_output or "").strip()
+
+    def parse_data(data: Any) -> Dict[str, str]:
+        if isinstance(data, dict):
+            return {k: v for k, v in data.items() if isinstance(v, str)}
+        if isinstance(data, list):
+            files = {}
+            for item in data:
+                if isinstance(item, dict) and "path" in item and "content" in item:
+                    files[str(item["path"])] = str(item["content"])
+            return files
+        return {}
+
+    if raw:
+        try:
+            parsed = parse_data(json.loads(raw))
+            if parsed:
+                return parsed
+        except (json.JSONDecodeError, TypeError):
+            try:
+                data, _ = json.JSONDecoder().raw_decode(raw)
+                parsed = parse_data(data)
+                if parsed:
+                    return parsed
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+
     # 尝试匹配 ```json 代码块中的文件列表
     pattern = re.compile(r"```(?:json|JSON)\s*\n(.*?)```", re.DOTALL)
     for match in pattern.finditer(raw_output):
         try:
-            data = json.loads(match.group(1).strip())
-            if isinstance(data, dict):
-                # {"path": "content"} 格式
-                return {k: v for k, v in data.items() if isinstance(v, str)}
-            if isinstance(data, list):
-                # [{"path": "src/a.js", "content": "..."}] 格式
-                files = {}
-                for item in data:
-                    if isinstance(item, dict) and "path" in item and "content" in item:
-                        files[item["path"]] = item["content"]
-                if files:
-                    return files
+            files = parse_data(json.loads(match.group(1).strip()))
+            if files:
+                return files
         except (json.JSONDecodeError, TypeError):
             continue
 
@@ -986,7 +1028,7 @@ def _parse_agent_output(stage_key: str, raw_output: str) -> Dict[str, Any]:
                         result["preview_html"] = raw_output[start:].strip()
         result["preview_quality"] = _validate_preview_html(result.get("preview_html", ""))
 
-    if stage_key in ("development", "frontend_dev", "backend_dev", "testing"):
+    if stage_key in ("development", "prototype", "frontend_dev", "backend_dev", "testing"):
         # 优先尝试解析 JSON 结构化输出
         files = _try_parse_json_code_files(raw_output)
         if not files:
@@ -1074,18 +1116,23 @@ def _is_retriable_error(e: Exception) -> bool:
 
 async def _call_agent_with_retry(agent_service: AgentService, session_id: str,
                                   message: str, agent_type: str,
-                                  max_tokens_override: int = None) -> str:
+                                  max_tokens_override: int = None,
+                                  thinking_override: Optional[Dict[str, Any]] = None) -> str:
     """调用 Agent，自动重试可恢复的错误"""
     last_error = None
     original_max_tokens = None
+    original_thinking = None
 
-    # HTML 生成阶段需要更高的 max_tokens 防止截断
-    if max_tokens_override:
+    if max_tokens_override or thinking_override is not None:
         from app.ai.agents import AgentFactory
         agent = AgentFactory.get_agent(agent_type)
-        if hasattr(agent, 'llm') and agent.llm and hasattr(agent.llm, 'max_tokens'):
-            original_max_tokens = agent.llm.max_tokens
-            agent.llm.max_tokens = max_tokens_override
+        llm = agent._get_llm() if hasattr(agent, "_get_llm") else getattr(agent, "_llm", None)
+        if max_tokens_override and llm and hasattr(llm, "max_tokens"):
+            original_max_tokens = llm.max_tokens
+            llm.max_tokens = max_tokens_override
+        if llm and thinking_override is not None and hasattr(llm, "thinking"):
+            original_thinking = llm.thinking
+            llm.thinking = thinking_override
 
     try:
         for attempt in range(MAX_LLM_RETRIES):
@@ -1116,14 +1163,33 @@ async def _call_agent_with_retry(agent_service: AgentService, session_id: str,
         if original_max_tokens is not None:
             from app.ai.agents import AgentFactory
             agent = AgentFactory.get_agent(agent_type)
-            if hasattr(agent, 'llm') and agent.llm and hasattr(agent.llm, 'max_tokens'):
-                agent.llm.max_tokens = original_max_tokens
+            llm = getattr(agent, "_llm", None)
+            if llm and hasattr(llm, "max_tokens"):
+                llm.max_tokens = original_max_tokens
+        if original_thinking is not None:
+            from app.ai.agents import AgentFactory
+            agent = AgentFactory.get_agent(agent_type)
+            llm = getattr(agent, "_llm", None)
+            if llm and hasattr(llm, "thinking"):
+                llm.thinking = original_thinking
 
 
 def _normalize_stream_chunk(chunk: Any) -> Tuple[str, bool, Optional[str]]:
     """Normalize raw LLM stream chunks into content/done/error fields."""
     if chunk is None:
         return "", False, None
+
+    if hasattr(chunk, "content"):
+        content = getattr(chunk, "content", "")
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, dict):
+                    parts.append(str(item.get("text") or item.get("content") or ""))
+                else:
+                    parts.append(str(item))
+            content = "".join(parts)
+        return str(content or ""), False, None
 
     if not isinstance(chunk, str):
         return str(chunk), False, None
@@ -1159,17 +1225,23 @@ async def _call_agent_with_retry_stream(
     agent_type: str,
     on_chunk: Callable[[str], Awaitable[None]],
     max_tokens_override: int = None,
+    thinking_override: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Call an agent with streaming chunks while preserving the final reply."""
     last_error = None
     original_max_tokens = None
+    original_thinking = None
 
-    if max_tokens_override:
+    if max_tokens_override or thinking_override is not None:
         from app.ai.agents import AgentFactory
         agent = AgentFactory.get_agent(agent_type)
-        if hasattr(agent, 'llm') and agent.llm and hasattr(agent.llm, 'max_tokens'):
-            original_max_tokens = agent.llm.max_tokens
-            agent.llm.max_tokens = max_tokens_override
+        llm = agent._get_llm() if hasattr(agent, "_get_llm") else getattr(agent, "_llm", None)
+        if max_tokens_override and llm and hasattr(llm, "max_tokens"):
+            original_max_tokens = llm.max_tokens
+            llm.max_tokens = max_tokens_override
+        if llm and thinking_override is not None and hasattr(llm, "thinking"):
+            original_thinking = llm.thinking
+            llm.thinking = thinking_override
 
     try:
         for attempt in range(MAX_LLM_RETRIES):
@@ -1184,7 +1256,23 @@ async def _call_agent_with_retry_stream(
                 agent = AgentFactory.get_agent(agent_type)
                 history = agent_service.sessions.get(session_id, [])
 
-                async for raw_chunk in agent.astream(message, history):
+                stream = agent.astream(message, history).__aiter__()
+                while True:
+                    try:
+                        raw_chunk = await asyncio.wait_for(
+                            stream.__anext__(),
+                            timeout=LLM_STREAM_IDLE_TIMEOUT,
+                        )
+                    except StopAsyncIteration:
+                        break
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "Agent stream idle for %ss, falling back to final reply for %s",
+                            LLM_STREAM_IDLE_TIMEOUT,
+                            session_id,
+                        )
+                        break
+
                     content, done, error = _normalize_stream_chunk(raw_chunk)
                     if error:
                         raise RuntimeError(error)
@@ -1196,6 +1284,16 @@ async def _call_agent_with_retry_stream(
                         break
 
                 full_reply = "".join(chunks)
+                if not full_reply.strip():
+                    result = await agent_service.chat(
+                        session_id=session_id,
+                        message=message,
+                        agent_type=agent_type,
+                    )
+                    full_reply = result.get("reply", "")
+                    if full_reply:
+                        await on_chunk(full_reply)
+
                 if session_id not in agent_service.sessions:
                     agent_service.sessions[session_id] = []
                 agent_service.sessions[session_id].append({"role": "user", "content": message})
@@ -1223,8 +1321,15 @@ async def _call_agent_with_retry_stream(
         if original_max_tokens is not None:
             from app.ai.agents import AgentFactory
             agent = AgentFactory.get_agent(agent_type)
-            if hasattr(agent, 'llm') and agent.llm and hasattr(agent.llm, 'max_tokens'):
-                agent.llm.max_tokens = original_max_tokens
+            llm = getattr(agent, "_llm", None)
+            if llm and hasattr(llm, "max_tokens"):
+                llm.max_tokens = original_max_tokens
+        if original_thinking is not None:
+            from app.ai.agents import AgentFactory
+            agent = AgentFactory.get_agent(agent_type)
+            llm = getattr(agent, "_llm", None)
+            if llm and hasattr(llm, "thinking"):
+                llm.thinking = original_thinking
 
 
 # ==================== 项目上下文加载 ====================
@@ -1743,8 +1848,8 @@ class DevPipelineManager:
         skill_config = json.loads(pipe.skill_config or "{}")
         workspace = pipe.workspace_path
 
-        # Skill: code_writer — frontend_dev/backend_dev/testing 阶段写文件
-        if stage_key in ("frontend_dev", "backend_dev", "testing") and parsed.get("code_files"):
+        # Skill: code_writer — prototype/frontend_dev/backend_dev/testing 阶段写文件
+        if stage_key in ("prototype", "frontend_dev", "backend_dev", "testing") and parsed.get("code_files"):
             workspace = ensure_workspace(pipeline_id)
             pipe.workspace_path = workspace
             # testing 阶段的代码写到 tests/ 子目录
@@ -1896,6 +2001,7 @@ class DevPipelineManager:
 
         # 加载技术栈配置
         pipe_config = json.loads(pipe.skill_config or "{}")
+        compact_preview_stage = _is_product_preview_code_stage(stage_key, pipe_config)
 
         # 构建 context（先构建，后续语义搜索需要用到原始 user_request）
         # user_input 是阶段修订意见，不能替代原始需求，否则 PM 后续阶段会丢上下文。
@@ -1939,16 +2045,18 @@ class DevPipelineManager:
             if snapshot.get("project_name")
         )
         if project_skill_snapshot.get("skill_content"):
+            frontend_skill_content = project_skill_snapshot.get("skill_content", "")
+            if compact_preview_stage:
+                frontend_skill_content = _compact_context(frontend_skill_content, 2500)
             ctx_parts.append(
                 "## Confirmed Frontend Project Skill Snapshot\n"
                 f"Project: {project_skill_snapshot.get('project_name', '')}\n"
                 f"Version: {project_skill_snapshot.get('skill_version', '')}\n\n"
-                f"{project_skill_snapshot.get('skill_content', '')}"
+                f"{frontend_skill_content}"
             )
         backend_context_stages = (
             "requirement",
             "page_design",
-            "prototype",
             "ui_preview",
             "delivery",
             "frontend_dev",
@@ -1968,17 +2076,22 @@ class DevPipelineManager:
             )
         if fe_proj_id and stage_key in ("frontend_dev", "prototype", "page_design", "delivery", "code_review"):
             from app.services.knowledge_service import get_relevant_context
-            ctx = await get_relevant_context(
-                query=user_request,
-                project_id=fe_proj_id,
-                tenant_id=pipe.tenant_id,
-            )
-            if ctx:
-                ctx_parts.append(ctx)
-            else:
+            if compact_preview_stage:
                 fe_ctx = await _load_project_context(fe_proj_id, "frontend")
                 if fe_ctx:
-                    ctx_parts.append(f"## 前端项目代码参考\n{fe_ctx}")
+                    ctx_parts.append(f"## 前端项目关键文件参考\n{_compact_context(fe_ctx, 2500)}")
+            else:
+                ctx = await get_relevant_context(
+                    query=user_request,
+                    project_id=fe_proj_id,
+                    tenant_id=pipe.tenant_id,
+                )
+                if ctx:
+                    ctx_parts.append(ctx)
+                else:
+                    fe_ctx = await _load_project_context(fe_proj_id, "frontend")
+                    if fe_ctx:
+                        ctx_parts.append(f"## 前端项目代码参考\n{fe_ctx}")
         for current_be_proj_id in be_proj_ids:
             if not current_be_proj_id or stage_key not in backend_context_stages:
                 continue
@@ -1996,6 +2109,8 @@ class DevPipelineManager:
                     ctx_parts.append(f"## 后端项目代码参考\n{be_ctx}")
         if ctx_parts:
             project_ctx_section = "\n\n".join(ctx_parts)
+            if compact_preview_stage:
+                project_ctx_section = _compact_context(project_ctx_section, 6000)
 
         # 构建 prompt。流水线级 prompt（来自前端本次编辑）优先，项目级 prompt 作为兜底。
         project_prompts = await self._load_project_prompts(pipe.project_id or "")
@@ -2008,7 +2123,8 @@ class DevPipelineManager:
         # 调用 LLM
         session_id = f"{pipeline_id}_{stage_key}"
         html_stages = {"prototype", "ui_preview"}
-        max_tok = 16384 if stage_key in html_stages else None
+        max_tok = 32768 if compact_preview_stage else (16384 if stage_key in html_stages else None)
+        thinking_override = {"type": "disabled"} if compact_preview_stage else None
 
         if on_chunk:
             raw_output = await asyncio.wait_for(
@@ -2016,6 +2132,7 @@ class DevPipelineManager:
                     self.agent_service, session_id, prompt, agent_type,
                     on_chunk=on_chunk,
                     max_tokens_override=max_tok,
+                    thinking_override=thinking_override,
                 ),
                 timeout=LLM_STAGE_TIMEOUT,
             )
@@ -2024,6 +2141,7 @@ class DevPipelineManager:
                 _call_agent_with_retry(
                     self.agent_service, session_id, prompt, agent_type,
                     max_tokens_override=max_tok,
+                    thinking_override=thinking_override,
                 ),
                 timeout=LLM_STAGE_TIMEOUT,
             )
@@ -2251,7 +2369,17 @@ class DevPipelineManager:
                     if user_input:
                         user_input = ""
 
-                    if current_stage in ("prototype", "ui_preview") and not (parsed.get("preview_html") or "").strip():
+                    if current_stage == "prototype" and not parsed.get("code_files"):
+                        stages[current_stage].update({
+                            "status": "failed",
+                            "output": raw_output,
+                            "structured_output": parsed,
+                            "preview_html": parsed.get("preview_html", ""),
+                            "code_files": {},
+                            "error": "预览生成阶段没有产出前端代码文件，请重新生成",
+                        })
+                        raise ValueError("预览生成阶段没有产出前端代码文件，请重新生成")
+                    if current_stage == "ui_preview" and not (parsed.get("preview_html") or "").strip():
                         raise ValueError("预览生成阶段没有产出可渲染 HTML，请重新生成")
 
                     # 更新阶段状态
@@ -2658,53 +2786,57 @@ class DevPipelineManager:
                 raise ValueError("流水线不存在")
             await session.commit()
 
-    async def rollback(self, pipeline_id: str) -> Dict[str, Any]:
+    async def rollback(self, pipeline_id: str, target_stage: str = None, feedback: str = "") -> Dict[str, Any]:
         async with async_session_maker() as session:
             pipe = await self._load_pipeline(session, pipeline_id)
+            pipe_config = json.loads(pipe.skill_config or "{}")
+            stage_keys = _stage_keys_for_mode(pipe_config.get("pipeline_mode", "full"))
             try:
-                idx = _stage_keys_for_mode(json.loads(pipe.skill_config or "{}").get("pipeline_mode", "full")).index(pipe.current_stage)
+                current_idx = stage_keys.index(pipe.current_stage)
             except ValueError:
-                return {"error": "无效阶段"}
+                current_idx = 0
 
-            if idx == 0:
-                return {"error": "已经是第一阶段"}
+            if target_stage:
+                if target_stage not in stage_keys:
+                    raise ValueError("目标阶段无效")
+                target_idx = stage_keys.index(target_stage)
+            else:
+                target_idx = current_idx - 1
 
-            stage_keys = _stage_keys_for_mode(json.loads(pipe.skill_config or "{}").get("pipeline_mode", "full"))
-            prev_stage = stage_keys[idx - 1]
+            if target_idx < 0:
+                raise ValueError("已经是第一阶段")
+            if target_idx > current_idx:
+                raise ValueError("不能回退到当前阶段之后")
+
+            target = stage_keys[target_idx]
             stages = self._parse_stages(pipe)
 
-            # 重置当前阶段（清空输出）
-            current_key = stage_keys[idx]
-            stages[current_key]["status"] = "pending"
-            stages[current_key]["output"] = ""
-            stages[current_key]["structured_output"] = {}
-            stages[current_key]["error"] = ""
-            stages[current_key]["completed_at"] = None
+            # 回退到目标阶段后，目标阶段和后续阶段都要重新跑，避免旧产物污染。
+            for stage in stage_keys[target_idx:]:
+                if stage not in stages:
+                    continue
+                stages[stage]["status"] = "pending"
+                stages[stage]["output"] = ""
+                stages[stage]["structured_output"] = {}
+                stages[stage]["preview_html"] = ""
+                stages[stage]["code_files"] = {}
+                stages[stage]["error"] = ""
+                stages[stage]["completed_at"] = None
+                stages[stage]["revision_feedback"] = feedback.strip() if stage == target and feedback else ""
 
-            # 回退阶段：保留输出，允许用户编辑/确认
-            stages[prev_stage]["status"] = "completed"
-            stages[prev_stage]["error"] = ""
-
-            pipe.current_stage = prev_stage
+            pipe.current_stage = target
             pipe.retry_count = 0
             pipe.update_time = int(time.time() * 1000)
-
-            # 如果回退到的阶段需要确认，设为 waiting_confirm
-            if _stage_needs_confirm(prev_stage):
-                pipe.status = PipelineStatus.WAITING_CONFIRM.value
-            else:
-                pipe.status = PipelineStatus.PENDING.value
-
+            pipe.status = PipelineStatus.PENDING.value
             pipe.stages_data = json.dumps(stages, ensure_ascii=False)
             await session.commit()
 
             return {
                 "pipeline_id": pipeline_id,
-                "rolled_back_to": prev_stage,
+                "rolled_back_to": target,
                 "status": pipe.status,
-                "need_confirm": _stage_needs_confirm(prev_stage),
-                "output": stages[prev_stage].get("output", ""),
-                "preview_html": stages[prev_stage].get("preview_html", ""),
+                "need_confirm": False,
+                "message": f"已回退到 {STAGE_NAMES.get(target, target)}，可按修改意见重新执行",
             }
 
 

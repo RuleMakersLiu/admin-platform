@@ -52,6 +52,40 @@ func TestAuth_OptionsRequest_PassesThrough(t *testing.T) {
 	}
 }
 
+func TestAuth_SandboxPreviewGet_PassesThrough(t *testing.T) {
+	setupTestViper()
+	r := setupTestRouter()
+	r.Use(Auth())
+	r.GET("/api/flow/pipeline/test-pipeline/sandbox-preview/index.html", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/api/flow/pipeline/test-pipeline/sandbox-preview/index.html", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("sandbox preview GET status = %d, want %d", w.Code, http.StatusOK)
+	}
+}
+
+func TestAuth_SandboxPreviewPostStart_RequiresToken(t *testing.T) {
+	setupTestViper()
+	r := setupTestRouter()
+	r.Use(Auth())
+	r.POST("/api/flow/pipeline/test-pipeline/sandbox-preview/start", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/api/flow/pipeline/test-pipeline/sandbox-preview/start", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("sandbox preview POST status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+}
+
 // ---------- Auth middleware: missing Authorization header ----------
 
 func TestAuth_MissingAuthorization_Returns401(t *testing.T) {
@@ -319,6 +353,12 @@ func TestBuildPermissionIdentifier(t *testing.T) {
 			path:       "/api/flow/pipeline/:id",
 			method:     "DELETE",
 			wantPrefix: "flow:pipeline:delete",
+		},
+		{
+			name:       "flow pipeline sandbox preview start",
+			path:       "/api/flow/pipeline/:id/sandbox-preview/start",
+			method:     "POST",
+			wantPrefix: "flow:pipeline:preview",
 		},
 	}
 

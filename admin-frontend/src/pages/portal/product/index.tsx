@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { Alert, Button, Collapse, Empty, Input, List, Modal, Space, Steps, Tag, Typography, message } from 'antd'
 import {
   CheckCircleOutlined,
@@ -19,14 +19,15 @@ const { TextArea } = Input
 const stageLabel: Record<string, string> = {
   requirement: '需求分析',
   page_design: '页面设计',
-  prototype: '预览生成',
+  prototype: '前端预览代码',
   delivery: 'API 契约',
   frontend_dev: '前端代码',
   code_review: '自动审查',
   report: '报告',
 }
 
-const stageOrder = ['requirement', 'page_design', 'prototype', 'delivery', 'frontend_dev', 'code_review', 'report']
+const stageOrder = ['requirement', 'page_design', 'prototype', 'delivery', 'code_review', 'report']
+const LAST_PRODUCT_PIPELINE_ID = 'lastProductPipelineId'
 
 const formatMatchSource = (source: string) => (source === 'llm' ? '大模型分析' : '规则兜底')
 
@@ -45,6 +46,10 @@ export default function ProductPortal() {
   const [feedback, setFeedback] = useState('')
   const [pipelines, setPipelines] = useState<PipelineListItem[]>([])
   const [pipelineListLoading, setPipelineListLoading] = useState(false)
+  const [sandboxPreviewUrl, setSandboxPreviewUrl] = useState('')
+  const [sandboxPreviewLoading, setSandboxPreviewLoading] = useState(false)
+  const autoResumeKeyRef = useRef('')
+  const streamActiveRef = useRef(false)
 
   useEffect(() => {
     saveLastPortalPath(user, '/pipeline/development')
@@ -85,65 +90,100 @@ export default function ProductPortal() {
     ])
     setStatus(nextStatus)
     setArtifact(nextArtifact)
+    setCurrentStage(nextStatus.current_stage || '')
+    setAwaitingConfirmStage(nextStatus.status === 'waiting_confirm' ? nextStatus.current_stage : '')
+    if (nextStatus.status === 'running') {
+      setRunning(true)
+    }
     return nextStatus
   }
 
   const restorePipeline = async (id: string) => {
-    setRunning(false)
     setPipelineId(id)
+    localStorage.setItem(LAST_PRODUCT_PIPELINE_ID, id)
     setMatchedSkill(null)
     setFeedback('')
-    setStreamOutputByStage({})
+      setStreamOutputByStage({})
+      setSandboxPreviewUrl('')
     try {
       const nextStatus = await refreshOutputs(id)
       setRequirement(nextStatus.user_request || '')
-      setCurrentStage(nextStatus.current_stage || '')
-      setAwaitingConfirmStage(nextStatus.status === 'waiting_confirm' ? nextStatus.current_stage : '')
+      setRunning(nextStatus.status === 'running')
       setLogs((prev) => [`已切换到流水线：${id}`, ...prev].slice(0, 80))
     } catch (error: unknown) {
       message.error(error instanceof Error ? error.message : '加载流水线失败')
     }
   }
 
-  const runUntilPause = async (id: string, userInput = '') => {
-    for (let i = 0; i < 16; i += 1) {
-      await pipelineApi.executeStream(id, userInput, (event) => {
-        if (event.type === 'stage_started' && event.stage) {
-          setCurrentStage(event.stage)
-          appendLog(`开始执行：${stageLabel[event.stage] || event.stage}`)
-        }
-        if (event.type === 'chunk' && event.stage && event.content) {
-          setCurrentStage(event.stage)
-          appendStreamOutput(event.stage, event.content)
-        }
-        if (event.type === 'stage_completed' && event.stage) {
-          appendLog(`完成：${stageLabel[event.stage] || event.stage}`)
-        }
-        if (event.type === 'waiting_confirm' && event.stage) {
-          setAwaitingConfirmStage(event.stage)
-          setCurrentStage(event.stage)
-          appendLog(`等待人工确认：${stageLabel[event.stage] || event.stage}`)
-        }
-        if (event.type === 'failed') {
-          appendLog(`失败：${event.error || '未知错误'}`)
-        }
-      })
-      userInput = ''
-
-      const nextStatus = await refreshOutputs(id)
-      setCurrentStage(nextStatus.current_stage || currentStage)
-      if (nextStatus.status === 'waiting_confirm') {
-        setAwaitingConfirmStage(nextStatus.current_stage)
-        setRunning(false)
-        return nextStatus
-      }
-      if (nextStatus.status === 'completed' || nextStatus.status === 'failed' || nextStatus.status === 'cancelled') {
-        setRunning(false)
-        return nextStatus
-      }
+  useEffect(() => {
+    const lastId = localStorage.getItem(LAST_PRODUCT_PIPELINE_ID)
+    if (lastId) {
+      restorePipeline(lastId)
     }
-    return refreshOutputs(id)
+  }, [])
+
+  const runUntilPause = async (id: string, userInput = '') => {
+    streamActiveRef.current = true
+    setRunning(true)
+    try {
+      for (let i = 0; i < 16; i += 1) {
+        await pipelineApi.executeStream(id, userInput, (event) => {
+          if (event.type === 'stage_started' && event.stage) {
+            setCurrentStage(event.stage)
+            appendLog(`开始执行：${stageLabel[event.stage] || event.stage}`)
+          }
+          if (event.type === 'chunk' && event.stage && event.content) {
+            setCurrentStage(event.stage)
+            appendStreamOutput(event.stage, event.content)
+          }
+          if (event.type === 'stage_completed' && event.stage) {
+            appendLog(`完成：${stageLabel[event.stage] || event.stage}`)
+          }
+          if (event.type === 'waiting_confirm' && event.stage) {
+            setAwaitingConfirmStage(event.stage)
+            setCurrentStage(event.stage)
+            appendLog(`等待人工确认：${stageLabel[event.stage] || event.stage}`)
+          }
+          if (event.type === 'failed') {
+            appendLog(`失败：${event.error || '未知错误'}`)
+          }
+        })
+        userInput = ''
+
+        const nextStatus = await refreshOutputs(id)
+        setCurrentStage(nextStatus.current_stage || currentStage)
+        if (nextStatus.status === 'waiting_confirm') {
+          setAwaitingConfirmStage(nextStatus.current_stage)
+          setRunning(false)
+          return nextStatus
+        }
+        if (nextStatus.status === 'completed' || nextStatus.status === 'failed' || nextStatus.status === 'cancelled') {
+          setRunning(false)
+          return nextStatus
+        }
+      }
+      return refreshOutputs(id)
+    } finally {
+      streamActiveRef.current = false
+    }
   }
+
+  useEffect(() => {
+    if (!pipelineId || status?.status !== 'running' || streamActiveRef.current) return
+
+    const resumeKey = `${pipelineId}:${status.current_stage}`
+    if (autoResumeKeyRef.current === resumeKey) return
+    autoResumeKeyRef.current = resumeKey
+
+    setRunning(true)
+    appendLog(`恢复执行：${stageLabel[status.current_stage] || status.current_stage}`)
+    runUntilPause(pipelineId)
+      .catch((error: unknown) => {
+        autoResumeKeyRef.current = ''
+        message.error(error instanceof Error ? error.message : '恢复执行失败')
+        setRunning(false)
+      })
+  }, [pipelineId, status?.status, status?.current_stage])
 
   const resumePipeline = async (confirmed: boolean) => {
     if (!pipelineId) return
@@ -247,6 +287,7 @@ export default function ProductPortal() {
         },
       })
       setPipelineId(created.pipeline_id)
+      localStorage.setItem(LAST_PRODUCT_PIPELINE_ID, created.pipeline_id)
       appendLog(`流水线已创建：${created.pipeline_id}`)
       loadPipelines()
 
@@ -290,11 +331,13 @@ export default function ProductPortal() {
       message.success('已删除流水线')
       if (pipelineId === id) {
         setPipelineId('')
+        localStorage.removeItem(LAST_PRODUCT_PIPELINE_ID)
         setStatus(null)
         setArtifact(null)
         setCurrentStage('')
         setAwaitingConfirmStage('')
         setStreamOutputByStage({})
+        setSandboxPreviewUrl('')
       }
       loadPipelines()
     } catch (error: unknown) {
@@ -315,12 +358,26 @@ export default function ProductPortal() {
     }
   }
 
-  const openPreviewInNewPage = () => {
-    if (!artifact?.preview_html) return
-    const blob = new Blob([artifact.preview_html], { type: 'text/html;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    window.open(url, '_blank', 'noopener,noreferrer')
-    window.setTimeout(() => URL.revokeObjectURL(url), 60000)
+  const handleStartSandboxPreview = async () => {
+    if (!pipelineId) return
+    if (!Object.keys(artifact?.frontend_files || {}).length) {
+      message.info('前端代码还没有生成，等“前端代码”阶段完成后再启动真实预览')
+      return
+    }
+    setSandboxPreviewLoading(true)
+    try {
+      const data = await pipelineApi.startSandboxPreview(pipelineId)
+      const cookiePath = `/api/flow/pipeline/${pipelineId}/sandbox-preview/`
+      document.cookie = `sandbox_preview_token_${pipelineId}=${encodeURIComponent(data.preview_token)}; path=${cookiePath}; SameSite=Lax`
+      setSandboxPreviewUrl('')
+      setSandboxPreviewUrl(`${data.preview_url}?preview_token=${encodeURIComponent(data.preview_token)}&_preview_ts=${Date.now()}`)
+      appendLog('真实前端预览已启动')
+      message.success('真实前端预览已启动')
+    } catch (error: unknown) {
+      message.error(error instanceof Error ? error.message : '真实预览启动失败')
+    } finally {
+      setSandboxPreviewLoading(false)
+    }
   }
 
   const fileItems = Object.entries(artifact?.frontend_files || {}).map(([path, content]) => ({
@@ -560,28 +617,52 @@ export default function ProductPortal() {
           </div>
 
           <div className="workbench-card" style={{ background: '#fff', border: '1px solid #e5eaf3', borderRadius: 8, padding: 20 }}>
+            <Space style={{ marginBottom: 12 }}>
+              <CodeOutlined />
+              <Title level={4} style={{ margin: 0 }}>前端代码</Title>
+            </Space>
+            {fileItems.length ? <Collapse items={fileItems} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="等待前端预览代码生成" />}
+          </div>
+
+          <div className="workbench-card" style={{ background: '#fff', border: '1px solid #e5eaf3', borderRadius: 8, padding: 20 }}>
             <Space style={{ justifyContent: 'space-between', width: '100%', marginBottom: 12 }}>
               <Space>
                 <RocketOutlined />
-                <Title level={4} style={{ margin: 0 }}>预览</Title>
+                <Title level={4} style={{ margin: 0 }}>真实前端预览</Title>
               </Space>
-              <Button
-                size="small"
-                icon={<FullscreenOutlined />}
-                disabled={!artifact?.preview_html}
-                onClick={openPreviewInNewPage}
-              >
-                新页面预览
-              </Button>
+              <Space>
+                <Button
+                  size="small"
+                  icon={<RocketOutlined />}
+                  loading={sandboxPreviewLoading}
+                  disabled={!pipelineId || !Object.keys(artifact?.frontend_files || {}).length}
+                  onClick={handleStartSandboxPreview}
+                >
+                  启动真实预览
+                </Button>
+                {sandboxPreviewUrl && (
+                  <Button
+                    size="small"
+                    icon={<FullscreenOutlined />}
+                    onClick={() => window.open(sandboxPreviewUrl, '_blank')}
+                  >
+                    新页面打开
+                  </Button>
+                )}
+              </Space>
             </Space>
-            {artifact?.preview_html ? (
+            <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+              这里会把生成代码覆盖到匹配前端项目的沙箱副本中，并按项目脚本启动。
+            </Text>
+            {sandboxPreviewUrl ? (
               <iframe
-                title="pipeline-preview"
-                srcDoc={artifact.preview_html}
+                title="real-frontend-preview"
+                src={sandboxPreviewUrl}
+                sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
                 style={{ width: '100%', height: 520, border: '1px solid #e5eaf3', borderRadius: 6, background: '#fff' }}
               />
             ) : (
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="等待预览生成" />
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="等待前端预览代码生成后启动真实预览" />
             )}
           </div>
 
@@ -614,14 +695,6 @@ export default function ProductPortal() {
                   : '等待 code_review 阶段输出'}
               </pre>
             </div>
-          </div>
-
-          <div className="workbench-card" style={{ background: '#fff', border: '1px solid #e5eaf3', borderRadius: 8, padding: 20 }}>
-            <Space style={{ marginBottom: 12 }}>
-              <CodeOutlined />
-              <Title level={4} style={{ margin: 0 }}>前端代码</Title>
-            </Space>
-            {fileItems.length ? <Collapse items={fileItems} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="等待 frontend_dev 阶段生成代码" />}
           </div>
         </div>
       </div>

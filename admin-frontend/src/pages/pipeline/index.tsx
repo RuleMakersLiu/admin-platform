@@ -19,7 +19,6 @@ import { pipelineApi, type PipelineStatus, type PipelineStreamEvent } from '@/se
 import { generatorApi } from '@/services/api'
 import api from '@/services/api'
 import { MarkdownRenderer } from '@/utils/markdown'
-import { extractHtmlBlocks, prepareUIPreviewHtml, repairTruncatedHtml } from '@/utils/sanitize'
 import { canUsePipelineWorkbench, canUseProductPortal, saveLastPortalPath, useAuthStore } from '@/stores/auth'
 
 const { TextArea } = Input
@@ -48,7 +47,7 @@ const STAGE_ICONS: Record<string, React.ReactNode> = {
 const STAGE_NAMES: Record<string, string> = {
   requirement: '需求分析',
   page_design: '页面设计',
-  prototype: '原型预览',
+  prototype: '前端预览代码',
   delivery: '交付包',
   ui_preview: 'UI预览',
   backend_dev: '后端开发',
@@ -62,6 +61,7 @@ const STAGE_NAMES: Record<string, string> = {
 }
 
 const STAGE_KEYS = ['requirement', 'page_design', 'prototype', 'delivery', 'frontend_dev', 'backend_dev', 'code_review', 'testing', 'commit', 'deploy', 'report']
+const PRODUCT_STAGE_KEYS = ['requirement', 'page_design', 'prototype', 'delivery', 'code_review', 'report']
 
 const STATUS_COLORS: Record<string, { bg: string; color: string; text: string }> = {
   running:           { bg: 'rgba(49,92,246,0.12)', color: '#315cf6', text: '执行中' },
@@ -775,6 +775,8 @@ const PipelinePage: React.FC = () => {
   const [backendProjectId, setBackendProjectId] = useState<string | undefined>(undefined)
   const [frontendProjectId, setFrontendProjectId] = useState<string | undefined>(undefined)
   const [feedback, setFeedback] = useState('')
+  const [rollbackModalVisible, setRollbackModalVisible] = useState(false)
+  const [rollbackStage, setRollbackStage] = useState<string | undefined>(undefined)
   const [showCreate, setShowCreate] = useState(!initialId)
 
   // pipelineId 变化时同步 URL 和 localStorage
@@ -784,7 +786,6 @@ const PipelinePage: React.FC = () => {
       localStorage.setItem('lastPipelineId', pipelineId)
     }
   }, [pipelineId])
-  const [previewVisible, setPreviewVisible] = useState(false)
   const [selectedStage, setSelectedStage] = useState<string>('')
   const [defaultPrompts, setDefaultPrompts] = useState<Record<string, string>>({})
   const [editedPrompts, setEditedPrompts] = useState<Record<string, string>>({})
@@ -795,7 +796,10 @@ const PipelinePage: React.FC = () => {
   const [executionActive, setExecutionActive] = useState(false)
   const [streamingStage, setStreamingStage] = useState('')
   const [streamOutputByStage, setStreamOutputByStage] = useState<Record<string, string>>({})
+  const [sandboxPreviewUrl, setSandboxPreviewUrl] = useState('')
+  const [sandboxPreviewLoading, setSandboxPreviewLoading] = useState(false)
   const streamAbortRef = useRef<AbortController | null>(null)
+  const streamReconnectKeyRef = useRef('')
   const isProductOnlyFlow = canUseProductPortal(user) && !canUsePipelineWorkbench(user)
 
   useEffect(() => {
@@ -884,6 +888,24 @@ const PipelinePage: React.FC = () => {
         }
       },
     })
+  }
+
+  const handleStartSandboxPreview = async () => {
+    if (!pipelineId) return
+    setSandboxPreviewLoading(true)
+    try {
+      const data = await pipelineApi.startSandboxPreview(pipelineId)
+      const cookiePath = `/api/flow/pipeline/${pipelineId}/sandbox-preview/`
+      document.cookie = `sandbox_preview_token_${pipelineId}=${encodeURIComponent(data.preview_token)}; path=${cookiePath}; SameSite=Lax`
+      const url = `${data.preview_url}?preview_token=${encodeURIComponent(data.preview_token)}&_preview_ts=${Date.now()}`
+      setSandboxPreviewUrl('')
+      setSandboxPreviewUrl(url)
+      message.success('真实前端预览已启动')
+    } catch (e: any) {
+      message.error(e?.message || '真实预览启动失败')
+    } finally {
+      setSandboxPreviewLoading(false)
+    }
   }
 
   // Load default prompts on mount
@@ -991,6 +1013,7 @@ const PipelinePage: React.FC = () => {
 
     if (['waiting_confirm', 'completed', 'failed', 'done', 'error'].includes(event.type)) {
       setExecutionActive(false)
+      streamReconnectKeyRef.current = ''
     }
   }, [pipelineId, userRequest])
 
@@ -1028,6 +1051,19 @@ const PipelinePage: React.FC = () => {
       setExecutionActive(false)
     }
   }, [applyStreamEvent, refreshStatus])
+
+  useEffect(() => {
+    if (!pipelineId || !pipeline || pipeline.status !== 'running') return
+    if (streamAbortRef.current) return
+
+    const reconnectKey = `${pipelineId}:${pipeline.current_stage}`
+    if (streamReconnectKeyRef.current === reconnectKey) return
+    streamReconnectKeyRef.current = reconnectKey
+
+    runPipelineStream(pipelineId).catch(() => {
+      streamReconnectKeyRef.current = ''
+    })
+  }, [pipelineId, pipeline?.status, pipeline?.current_stage, runPipelineStream])
 
   const handleCreate = async () => {
     if (!userRequest.trim()) {
@@ -1140,15 +1176,21 @@ const PipelinePage: React.FC = () => {
     }
   }
 
-  const handleRollback = async () => {
+  const handleRollbackToStage = async (stage: string) => {
     if (!pipelineId) return
     setLoading(true)
     try {
-      await pipelineApi.rollback(pipelineId)
-      message.success('已回退')
-      await refreshStatus()
+      await pipelineApi.rollback(pipelineId, stage, feedback)
+      message.success(`已回退到${STAGE_NAMES[stage] || stage}，将按修改意见重新执行`)
+      setSelectedStage('')
+      setRollbackModalVisible(false)
+      setRollbackStage(undefined)
+      await refreshStatus(pipelineId)
+      await runPipelineStream(pipelineId, feedback)
+      setFeedback('')
     } catch (e: any) {
       message.error(e?.message || '回退失败')
+      await refreshStatus(pipelineId)
     } finally {
       setLoading(false)
     }
@@ -1181,35 +1223,6 @@ const PipelinePage: React.FC = () => {
     ? currentStage?.structured_output?.preview_quality
     : undefined
 
-  const htmlBlocks = useMemo(() => {
-    if (!liveStageOutput) return []
-    return extractHtmlBlocks(liveStageOutput)
-  }, [liveStageOutput])
-
-  // For prototype/ui_preview, also try direct HTML extraction if blocks are empty
-  const previewHtmlContent = useMemo(() => {
-    if (!['ui_preview', 'prototype'].includes(activeStageKey)) return ''
-    if (currentStage?.preview_html) return currentStage.preview_html
-    if (!liveStageOutput) return ''
-    // Try extracted blocks first
-    if (htmlBlocks.length > 0) {
-      return htmlBlocks.map((b: any) => b.code || b).join('\n')
-    }
-    // Fallback: extract between ```html and ```
-    const raw = liveStageOutput
-    const startIdx = raw.indexOf('```html')
-    if (startIdx === -1) return ''
-    const htmlStart = raw.indexOf('\n', startIdx) + 1
-    const endIdx = raw.lastIndexOf('```')
-    if (endIdx > htmlStart) {
-      return raw.substring(htmlStart, endIdx).trim()
-    }
-    // Last resort: take everything after ```html
-    return raw.substring(htmlStart).trim()
-  }, [activeStageKey, liveStageOutput, htmlBlocks, currentStage?.preview_html])
-
-  const hasHtmlPreview = previewHtmlContent.length > 0 && ['ui_preview', 'prototype'].includes(activeStageKey)
-
   // Strip markdown/prg code block wrappers for text stages
   const displayOutput = useMemo(() => {
     if (!liveStageOutput) return ''
@@ -1221,14 +1234,34 @@ const PipelinePage: React.FC = () => {
     return stripped
   }, [liveStageOutput, activeStageKey])
 
-  const inlinePreviewSrc = useMemo(() => {
-    if (!hasHtmlPreview) return ''
-    return prepareUIPreviewHtml(repairTruncatedHtml(previewHtmlContent))
-  }, [hasHtmlPreview, previewHtmlContent])
-
   const isRunning = pipeline?.status === 'running' || executionActive
   const isCompleted = pipeline?.status === 'completed'
   const isFailed = pipeline?.status === 'failed'
+  const visibleStageKeys = pipeline?.pipeline_mode === 'frontend_contract_review' ? PRODUCT_STAGE_KEYS : STAGE_KEYS
+  const canRollbackActiveStage = Boolean(
+    pipelineId &&
+    currentStage?.status === 'completed' &&
+    visibleStageKeys.includes(activeStageKey) &&
+    visibleStageKeys.indexOf(activeStageKey) <= visibleStageKeys.indexOf(pipeline?.current_stage || activeStageKey)
+  )
+  const rollbackStageOptions = useMemo(() => {
+    if (!pipeline) return []
+    const stageKeys = pipeline.pipeline_mode === 'frontend_contract_review' ? PRODUCT_STAGE_KEYS : STAGE_KEYS
+    const currentIdx = stageKeys.indexOf(pipeline.current_stage || '')
+    return stageKeys
+      .filter((key) => {
+        const stage = pipeline.stages?.[key]
+        const idx = stageKeys.indexOf(key)
+        return stage?.status === 'completed' && (currentIdx === -1 || idx <= currentIdx)
+      })
+      .map((key) => ({ label: STAGE_NAMES[key] || key, value: key }))
+  }, [pipeline])
+
+  const openRollbackModal = () => {
+    const preferred = canRollbackActiveStage ? activeStageKey : rollbackStageOptions[rollbackStageOptions.length - 1]?.value
+    setRollbackStage(preferred)
+    setRollbackModalVisible(true)
+  }
 
   // ============ Create Panel ============
   if (showCreate) {
@@ -1481,7 +1514,7 @@ const PipelinePage: React.FC = () => {
   }
 
   // ============ Main Pipeline View ============
-  const completedStages = STAGE_KEYS.filter(
+  const completedStages = visibleStageKeys.filter(
     (key) => pipeline.stages?.[key]?.status === 'completed'
   )
 
@@ -1543,28 +1576,17 @@ const PipelinePage: React.FC = () => {
           >
             查看 Prompt
           </Button>
-          {isRunning && (
-            <Button
-              size="small"
-              danger
-              onClick={handleRollback}
-              disabled={isRunning}
-              style={{ borderRadius: 6, opacity: 0.5 }}
-            >
-              回退
-            </Button>
-          )}
-          {!isRunning && (
+          <Tooltip title={isRunning ? '当前正在执行，阶段结束后可以回退重做' : '选择已完成阶段并重新执行该阶段及后续阶段'}>
             <Button
               size="small"
               icon={<RollbackOutlined />}
-              onClick={handleRollback}
-              disabled={isRunning}
+              onClick={openRollbackModal}
+              disabled={isRunning || rollbackStageOptions.length === 0}
               style={{ borderRadius: 6 }}
             >
-              回退
+              回退重做
             </Button>
-          )}
+          </Tooltip>
         </Space>
       </div>
 
@@ -1572,7 +1594,7 @@ const PipelinePage: React.FC = () => {
       <div className="pipeline-stage-layout" style={styles.stageTrackerRow}>
         {/* Sidebar: Vertical Stage Tracker */}
         <div className="pipeline-stage-sidebar" style={styles.stageTrackSidebar}>
-          {STAGE_KEYS.map((key, idx) => {
+          {visibleStageKeys.map((key, idx) => {
             const stageStatus = getStepsStatus(key)
             const stageStr = pipeline.stages?.[key]?.status || 'pending'
             const isActive = key === activeStageKey
@@ -1726,47 +1748,38 @@ const PipelinePage: React.FC = () => {
                 <PreviewQualityPanel quality={previewQuality} />
               )}
 
+              {canRollbackActiveStage && (
+                <div style={{
+                  padding: 14,
+                  marginBottom: 16,
+                  background: 'rgba(245, 158, 11, 0.08)',
+                  border: '1px solid rgba(245, 158, 11, 0.2)',
+                  borderRadius: 10,
+                }}>
+                  <TextArea
+                    rows={3}
+                    placeholder={`输入修改意见，回退到${STAGE_NAMES[activeStageKey] || activeStageKey}后会重新执行该阶段及后续阶段`}
+                    value={feedback}
+                    onChange={(e) => setFeedback(e.target.value)}
+                    style={{ marginBottom: 10, borderRadius: 8 }}
+                  />
+                  <Button
+                    icon={<RollbackOutlined />}
+                    loading={loading}
+                    onClick={() => handleRollbackToStage(activeStageKey)}
+                    style={{ borderRadius: 8 }}
+                  >
+                    回退到此阶段重做
+                  </Button>
+                </div>
+              )}
+
               {/* Output */}
               {liveStageOutput && (!loading || executionActive) && (
                 <div style={styles.outputContainer}>
                   <span style={styles.outputLabel}>OUTPUT</span>
-                  {hasHtmlPreview ? (
-                    <iframe
-                      srcDoc={inlinePreviewSrc}
-                      style={{
-                        width: '100%',
-                        minHeight: 400,
-                        border: '1px solid rgba(148, 163, 184, 0.18)',
-                        borderRadius: 8,
-                      }}
-                      sandbox="allow-same-origin allow-scripts"
-                      title="UI Preview"
-                    />
-                  ) : (
-                    <MarkdownRenderer content={displayOutput} className="pipeline-markdown" />
-                  )}
+                  <MarkdownRenderer content={displayOutput} className="pipeline-markdown" />
                 </div>
-              )}
-              {/* HTML Preview - open in new window for non-tech users */}
-              {hasHtmlPreview && (currentStage?.status === 'completed' || isWaitingConfirm) && (
-                <Button
-                  type="primary"
-                  icon={<EyeOutlined />}
-                  onClick={() => {
-                    const repaired = repairTruncatedHtml(previewHtmlContent)
-                    const blob = new Blob([repaired], { type: 'text/html' })
-                    const url = URL.createObjectURL(blob)
-                    window.open(url, '_blank')
-                  }}
-                  style={{
-                    marginBottom: 16,
-                    borderRadius: 8,
-                    background: '#16a34a',
-                    borderColor: '#16a34a',
-                  }}
-                >
-                  在新窗口打开预览
-                </Button>
               )}
 
               {/* Code Files */}
@@ -1819,6 +1832,53 @@ const PipelinePage: React.FC = () => {
                       </Text>
                     </div>
                   ))}
+                </div>
+              )}
+
+              {pipelineId && (
+                <div style={{ marginBottom: 16 }}>
+                  <Text style={{ display: 'block', marginBottom: 8, color: '#64748b', fontSize: 12 }}>
+                    真实前端预览会把生成代码写入匹配前端项目的沙箱副本，并使用该项目的 npm 脚本启动。
+                  </Text>
+                  <Space wrap>
+                    <Button
+                      type="primary"
+                      icon={<EyeOutlined />}
+                      loading={sandboxPreviewLoading}
+                      onClick={handleStartSandboxPreview}
+                      style={{
+                        borderRadius: 8,
+                        background: '#2563eb',
+                        borderColor: '#2563eb',
+                      }}
+                    >
+                      启动真实前端预览
+                    </Button>
+                    {sandboxPreviewUrl && (
+                      <Button
+                        icon={<EyeOutlined />}
+                        onClick={() => window.open(sandboxPreviewUrl, '_blank')}
+                        style={{ borderRadius: 8 }}
+                      >
+                        新窗口打开真实预览
+                      </Button>
+                    )}
+                  </Space>
+                  {sandboxPreviewUrl && (
+                    <iframe
+                      src={sandboxPreviewUrl}
+                      style={{
+                        width: '100%',
+                        minHeight: 520,
+                        marginTop: 12,
+                        border: '1px solid rgba(148, 163, 184, 0.28)',
+                        borderRadius: 8,
+                        background: '#fff',
+                      }}
+                      sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+                      title="真实前端预览"
+                    />
+                  )}
                 </div>
               )}
 
@@ -1893,10 +1953,11 @@ const PipelinePage: React.FC = () => {
                     </Button>
                     <Button
                       icon={<RollbackOutlined />}
-                      onClick={handleRollback}
+                      onClick={openRollbackModal}
+                      disabled={rollbackStageOptions.length === 0}
                       style={{ borderRadius: 8 }}
                     >
-                      回退
+                      回退重做
                     </Button>
                   </Space>
                 </div>
@@ -2009,44 +2070,42 @@ const PipelinePage: React.FC = () => {
         </div>
       </div>
 
-      {/* UI Preview Drawer */}
-      <Drawer
-        title={
-          <Space>
-            <EyeOutlined style={{ color: '#315cf6' }} />
-            <span>UI 预览</span>
-          </Space>
-        }
-        width="80%"
-        open={previewVisible}
-        onClose={() => setPreviewVisible(false)}
-        styles={{
-          header: {
-            background: '#ffffff',
-            borderBottom: '1px solid #e5eaf3',
-          },
-          body: {
-            background: '#f6f8fc',
-            padding: 16,
-          },
-        }}
+      <Modal
+        title="回退重做"
+        open={rollbackModalVisible}
+        okText="回退并重新执行"
+        cancelText="取消"
+        confirmLoading={loading}
+        okButtonProps={{ disabled: !rollbackStage }}
+        onCancel={() => setRollbackModalVisible(false)}
+        onOk={() => rollbackStage && handleRollbackToStage(rollbackStage)}
       >
-        {hasHtmlPreview && previewHtmlContent ? (
-          <iframe
-            srcDoc={prepareUIPreviewHtml(repairTruncatedHtml(previewHtmlContent))}
-            style={{
-              width: '100%',
-              height: '80vh',
-              border: '1px solid rgba(148, 163, 184, 0.16)',
-              borderRadius: 10,
-            }}
-            sandbox="allow-same-origin allow-scripts"
-            title="UI Preview"
-          />
-        ) : (
-          <Empty description="暂无预览" />
-        )}
-      </Drawer>
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <div>
+            <Text strong>回退阶段</Text>
+            <Select
+              value={rollbackStage}
+              options={rollbackStageOptions}
+              onChange={(value) => {
+                setRollbackStage(value)
+                setSelectedStage(value)
+              }}
+              placeholder="选择要回退的阶段"
+              style={{ width: '100%', marginTop: 8 }}
+            />
+          </div>
+          <div>
+            <Text strong>修改意见</Text>
+            <TextArea
+              rows={4}
+              value={feedback}
+              onChange={(e) => setFeedback(e.target.value)}
+              placeholder="填写需要调整的内容，系统会从所选阶段重新执行后续流程"
+              style={{ marginTop: 8, borderRadius: 8 }}
+            />
+          </div>
+        </Space>
+      </Modal>
 
       {/* Prompt Drawer */}
       <Drawer
@@ -2078,7 +2137,7 @@ const PipelinePage: React.FC = () => {
             <Spin tip="加载 Prompt 中..." />
           </div>
         ) : (
-          STAGE_KEYS.map((key) => {
+          visibleStageKeys.map((key) => {
             const agent = STAGE_AGENT_MAP[key]
             const agentColor = AGENT_COLORS[agent]
             const promptText = mergedPrompts[key] || ''

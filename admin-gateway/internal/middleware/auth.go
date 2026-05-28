@@ -29,6 +29,11 @@ func Auth() gin.HandlerFunc {
 			return
 		}
 
+		if isSandboxPreviewAssetRequest(c.Request.URL.Path, c.Request.Method) {
+			c.Next()
+			return
+		}
+
 		// 获取Token
 		authorization := c.GetHeader("Authorization")
 		if authorization == "" {
@@ -67,6 +72,14 @@ func Auth() gin.HandlerFunc {
 // Permission 权限校验中间件
 func Permission() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		path := c.Request.URL.Path
+		method := c.Request.Method
+
+		if isSandboxPreviewAssetRequest(path, method) {
+			c.Next()
+			return
+		}
+
 		// 获取用户信息
 		adminID, exists := c.Get(ContextKeyAdminID)
 		if !exists {
@@ -78,9 +91,6 @@ func Permission() gin.HandlerFunc {
 		_, _ = c.Get(ContextKeyTenantID)
 
 		// 生成权限标识。优先使用 module:resource:action，同时兼容旧版下划线 key。
-		path := c.Request.URL.Path
-		method := c.Request.Method
-
 		// 跳过不需要权限校验的路径
 		if skipPermissionCheck(path) {
 			c.Next()
@@ -112,6 +122,16 @@ func Permission() gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+func isSandboxPreviewAssetRequest(path, method string) bool {
+	if !strings.Contains(path, "/flow/pipeline/") || !strings.Contains(path, "/sandbox-preview/") {
+		return false
+	}
+	if method == "GET" {
+		return true
+	}
+	return (method == "POST" || method == "OPTIONS") && strings.Contains(path, "/sandbox-preview/sockjs-node/")
 }
 
 // skipPermissionCheck 跳过权限校验的路径
@@ -182,7 +202,9 @@ func buildPermissionCandidates(path, method string) []string {
 
 	if module == "flow" {
 		resource = "pipeline"
-		if method == "DELETE" && len(clean) == 2 && hadParam {
+		if contains(clean, "sandbox-preview") {
+			action = "preview"
+		} else if method == "DELETE" && len(clean) == 2 && hadParam {
 			action = "delete"
 		} else if len(clean) >= 2 {
 			action = clean[len(clean)-1]

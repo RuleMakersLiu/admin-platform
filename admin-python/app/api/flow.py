@@ -1,15 +1,20 @@
 """智能体协作流程 API"""
+import asyncio
 import json
 import logging
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response as FastAPIResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any, Set
 
 from app.ai.flow_manager import pipeline_manager, STAGE_DEFINITIONS, DEFAULT_STAGE_PROMPTS
 
 router = APIRouter(prefix="/flow", tags=["智能体流程"])
 logger = logging.getLogger(__name__)
+
+_pipeline_tasks: Dict[str, asyncio.Task] = {}
+_pipeline_subscribers: Dict[str, Set[asyncio.Queue]] = {}
+_pipeline_task_lock = asyncio.Lock()
 
 
 class CreatePipelineRequest(BaseModel):
@@ -28,6 +33,11 @@ class CreatePipelineRequest(BaseModel):
 
 class MatchProjectSkillRequest(BaseModel):
     user_request: str = Field(default="", description="产品需求描述")
+
+
+class RollbackPipelineRequest(BaseModel):
+    stage: Optional[str] = Field(default=None, description="目标回退阶段")
+    feedback: Optional[str] = Field(default="", description="回退修改意见")
 
 
 class ExecuteStageRequest(BaseModel):
@@ -66,6 +76,49 @@ def _sse_event(event: Dict) -> str:
     event_type = event.get("type") or "message"
     data = json.dumps(event, ensure_ascii=False)
     return f"event: {event_type}\ndata: {data}\n\n"
+
+
+async def _broadcast_pipeline_event(pipeline_id: str, event: Dict[str, Any]) -> None:
+    subscribers = list(_pipeline_subscribers.get(pipeline_id, set()))
+    for queue in subscribers:
+        try:
+            queue.put_nowait(event)
+        except asyncio.QueueFull:
+            logger.warning("Pipeline %s subscriber queue full, dropping event", pipeline_id)
+
+
+async def _run_pipeline_background(pipeline_id: str, user_input: str) -> None:
+    try:
+        result = await pipeline_manager.execute_stage(
+            pipeline_id,
+            user_input,
+            stream_callback=lambda event: _broadcast_pipeline_event(pipeline_id, event),
+        )
+        await _broadcast_pipeline_event(
+            pipeline_id,
+            {"type": "done", "pipeline_id": pipeline_id, "result": result},
+        )
+    except Exception as e:
+        logger.exception("Pipeline %s background execution failed", pipeline_id)
+        await _broadcast_pipeline_event(
+            pipeline_id,
+            {"type": "error", "pipeline_id": pipeline_id, "error": str(e)},
+        )
+    finally:
+        async with _pipeline_task_lock:
+            task = _pipeline_tasks.get(pipeline_id)
+            if task and task.done():
+                _pipeline_tasks.pop(pipeline_id, None)
+
+
+async def _ensure_pipeline_background_task(pipeline_id: str, user_input: str) -> None:
+    async with _pipeline_task_lock:
+        task = _pipeline_tasks.get(pipeline_id)
+        if task and not task.done():
+            return
+        _pipeline_tasks[pipeline_id] = asyncio.create_task(
+            _run_pipeline_background(pipeline_id, user_input),
+        )
 
 
 @router.post("/pipeline/create")
@@ -234,14 +287,35 @@ async def execute_stage_stream(pipeline_id: str, request: ExecuteStageRequest = 
     user_input = request.user_input if request else ""
 
     async def event_generator():
+        queue: asyncio.Queue = asyncio.Queue(maxsize=300)
+        _pipeline_subscribers.setdefault(pipeline_id, set()).add(queue)
+        await _ensure_pipeline_background_task(pipeline_id, user_input)
+        yield _sse_event({"type": "heartbeat", "pipeline_id": pipeline_id})
+
         try:
-            async for event in pipeline_manager.execute_stage_stream(pipeline_id, user_input):
+            while True:
+                task = _pipeline_tasks.get(pipeline_id)
+                if (not task or task.done()) and queue.empty():
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15)
+                except asyncio.TimeoutError:
+                    yield _sse_event({"type": "heartbeat", "pipeline_id": pipeline_id})
+                    continue
                 yield _sse_event(event)
         except ValueError as e:
             yield _sse_event({"type": "error", "pipeline_id": pipeline_id, "error": str(e)})
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logging.getLogger(__name__).exception("Pipeline stream failed")
             yield _sse_event({"type": "error", "pipeline_id": pipeline_id, "error": str(e)})
+        finally:
+            subscribers = _pipeline_subscribers.get(pipeline_id)
+            if subscribers:
+                subscribers.discard(queue)
+                if not subscribers:
+                    _pipeline_subscribers.pop(pipeline_id, None)
 
     return StreamingResponse(
         event_generator(),
@@ -286,6 +360,73 @@ async def get_preview(pipeline_id: str):
         return {"code": 200, "message": "查询成功", "data": preview}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/pipeline/{pipeline_id}/sandbox-preview/start")
+async def start_sandbox_preview(pipeline_id: str):
+    """Start a real frontend dev server for generated frontend files."""
+    from app.services.sandbox_preview_service import sandbox_preview_service
+
+    try:
+        artifact = await pipeline_manager.get_pipeline_artifact(pipeline_id)
+        status = await pipeline_manager.get_pipeline_status(pipeline_id)
+        result = await sandbox_preview_service.start(
+            pipeline_id,
+            artifact.get("frontend_files") or {},
+            status.get("project_skill") or {},
+        )
+        return {"code": 200, "message": "真实预览已启动", "data": result}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Failed to start sandbox preview")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.api_route("/pipeline/{pipeline_id}/sandbox-preview/{path:path}", methods=["GET", "POST", "OPTIONS"])
+async def proxy_sandbox_preview(pipeline_id: str, path: str = "", request: Request = None):
+    """Proxy sandbox preview assets to the per-pipeline frontend dev server."""
+    from app.services.sandbox_preview_service import sandbox_preview_service
+
+    token = request.query_params.get("preview_token") if request else ""
+    if not token and request:
+        token = request.cookies.get(f"sandbox_preview_token_{pipeline_id}", "")
+    asset_suffixes = (
+        ".js", ".css", ".map", ".json", ".png", ".jpg", ".jpeg", ".gif", ".svg",
+        ".ico", ".woff", ".woff2", ".ttf", ".eot",
+    )
+    is_asset_request = bool(path) and (
+        path.startswith(("assets/", "js/", "css/", "img/", "fonts/"))
+        or path.lower().endswith(asset_suffixes)
+    )
+    is_sockjs_request = bool(path) and path.startswith("sockjs-node/")
+    if not sandbox_preview_service.validate_token(pipeline_id, token or "") and not (
+        (is_asset_request or is_sockjs_request) and sandbox_preview_service.is_running(pipeline_id)
+    ):
+        raise HTTPException(status_code=403, detail="预览令牌无效或已过期")
+    try:
+        upstream = await sandbox_preview_service.proxy(
+            pipeline_id,
+            path,
+            request.url.query if request else "",
+            dict(request.headers) if request else {},
+            request.method if request else "GET",
+            await request.body() if request else b"",
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return FastAPIResponse(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        media_type=upstream.headers.get("content-type"),
+        headers={
+            key: value
+            for key, value in upstream.headers.items()
+            if key.lower() in {"cache-control", "etag", "last-modified"}
+        },
+    )
 
 
 @router.get("/pipeline/{pipeline_id}/artifact")
@@ -347,10 +488,14 @@ async def list_pipelines(http_request: Request):
 
 
 @router.post("/pipeline/{pipeline_id}/rollback")
-async def rollback_pipeline(pipeline_id: str):
-    """回退到上一阶段"""
+async def rollback_pipeline(pipeline_id: str, request: RollbackPipelineRequest = None):
+    """回退到指定阶段，清空该阶段之后的结果。"""
     try:
-        result = await pipeline_manager.rollback(pipeline_id)
+        result = await pipeline_manager.rollback(
+            pipeline_id,
+            target_stage=request.stage if request else None,
+            feedback=request.feedback if request else "",
+        )
         return {"code": 200, "message": "回退成功", "data": result}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
