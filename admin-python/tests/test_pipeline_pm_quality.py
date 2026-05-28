@@ -191,6 +191,32 @@ def test_page_design_prompt_requires_permission_policy_details():
     assert "ABAC" in prompt
 
 
+def test_code_review_prompt_requires_real_frontend_api_contract_alignment():
+    context = {
+        "user_request": "生成商品详情页面",
+        "pipeline_mode": "frontend_contract_review",
+        "stage_outputs": {
+            "requirement": {"output": "商品详情需要展示 productId、productName、price。"},
+            "page_design": {"output": "详情字段：productId、productName、price；接口 /product/detail。"},
+            "prototype": {
+                "output": '[{"path":"src/views/Product/Detail.vue","content":"读取 productName"}]',
+            },
+            "delivery": {"output": "GET /product/detail 响应 data.productName。"},
+        },
+    }
+
+    prompt = _build_pipeline_prompt("code_review", context)
+
+    assert "真实前端代码" in prompt
+    assert "API 契约对齐" in prompt
+    assert "字段一致性" in prompt
+    assert "frontend_field" in prompt
+    assert "contract_field" in prompt
+    assert "Mock 与真实契约一致性" in prompt
+    assert "小程序" in prompt
+    assert "前端读取的响应字段与 API 契约不一致" in prompt
+
+
 def test_preview_parser_scores_complete_admin_preview():
     raw = """```html
 <!DOCTYPE html>

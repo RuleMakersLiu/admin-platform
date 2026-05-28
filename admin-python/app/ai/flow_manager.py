@@ -13,6 +13,7 @@ import uuid
 import asyncio
 import logging
 import os
+import re
 import time
 from datetime import datetime
 from enum import Enum
@@ -32,6 +33,7 @@ from app.core.database import async_session_maker
 logger = logging.getLogger(__name__)
 
 MAX_FIX_ITERATIONS = 3
+MAX_PREVIEW_GENERATION_ATTEMPTS = 3
 MAX_LLM_RETRIES = 3
 RETRY_BASE_DELAY = 2  # seconds
 LLM_STAGE_TIMEOUT = 600  # 单阶段 LLM 调用最大超时（秒）
@@ -252,12 +254,24 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 
 ## 实现要求
 1. 根据目标技术栈生成真实项目代码，不要再输出纯静态 HTML mock。
-2. Vue 项目生成 1 个 `.vue` 页面组件和 1 个 API/mock 服务模块即可；不要生成大量文件。
-3. 第一屏必须是成熟后台工作台：搜索筛选、表格、操作按钮、新增/编辑弹窗或抽屉、删除确认、权限态、空/加载/异常状态。
+2. 根据匹配项目的真实技术栈生成文件：Vue 后台通常生成 `src/views/**/*.vue` + `src/api/*.js`；React 后台通常生成 `src/pages/**/*.tsx|jsx` + service/api 文件；uni-app/小程序项目按项目现有 `pages/**`、`*.vue` 或 `*.wxml/*.js/*.json/*.wxss` 结构生成。不要把所有项目都当 Vue 后台。
+3. 第一屏必须匹配需求页面类型：列表页要有搜索筛选、表格和批量/行操作；详情页要有分区详情、状态标签、返回/编辑/启停等操作；表单页要有校验、提交、取消和异常提示；配置/看板页要有对应业务控件和状态。
 4. 所有按钮必须有真实前端交互，不允许出现未定义函数、空 onclick、只展示不响应的控件。
-5. 可以使用 mock API 数据，但文件结构要能在真实项目中运行预览。
+5. 可以使用 mock API 数据，但文件结构要能在真实项目中运行预览；小程序项目必须同时给出浏览器 HTML/H5 等效预览文件。
 6. 代码要短而完整：页面组件控制在 260 行以内，API/mock 服务模块控制在 120 行以内。
 7. 只生成与本需求相关的新增/修改文件，不要输出说明文字。
+
+## 可预览硬约束
+1. 先判断页面类型，不要把详情页/表单页/配置页强行写成列表页；列表契约只适用于列表或表格页面。
+2. 如果使用项目 `STable` 组件，`loadData` 必须返回分页对象：`{ page, pageNo, pageSize, count, totalCount, list }`，其中 `list` 必须是数组；禁止只返回数组、`result.data` 数组或没有 `list` 的对象。
+3. API/mock 服务模块里的列表接口必须返回同一分页对象，可包在 `result` 或 `data` 中，但对象内必须同时提供 `list/page/count/pageNo/totalCount`。
+4. 详情/编辑/配置接口必须返回对象，可包在 `result` 或 `data` 中；页面读取前必须有默认空对象，禁止直接对可能为 undefined 的对象取深层字段。
+5. 接口函数必须兼容真实接口和 mock 接口，推荐写法：列表 `then(res => res.result || res.data || res)`，详情 `then(res => res.result || res.data || {})`。
+6. 小程序/uni-app 页面必须遵循项目路由和页面生命周期：原生小程序至少成对生成 `pages/.../*.wxml` 和 `pages/.../*.js`，需要样式/配置时补 `*.wxss/*.json`；uni-app 使用 `pages/.../*.vue`，不要引用 Web-only 组件。
+7. 原生小程序必须额外生成 `public/sandbox-miniapp-preview.html`，作为浏览器可打开的 H5 等效预览。该 HTML 必须自包含 CSS/JS/mock 数据，并真实呈现小程序页面的布局、状态和交互；它是验收预览，不替代小程序源码。
+8. 禁止引用项目中未确认存在的组件、指令或工具；如果不确定，直接使用目标项目基础组件和本文件内方法。
+9. 所有模板事件引用的方法必须实现；表格列的 `scopedSlots` 必须有对应 slot。
+10. 代码必须能在首屏无运行时报错：不得访问可能为 undefined 的 `.length`、`.map`、`.filter`，除非先做 `Array.isArray` 或默认空数组。
 
 ## 输出格式
 只允许输出 JSON 文件数组，不要输出 Markdown，不要输出代码块围栏，不要输出解释文字。系统会直接解析这个 JSON 并写入前端项目。
@@ -272,7 +286,8 @@ JSON 格式如下:
 - 必须是合法 JSON，最外层必须是数组
 - 每项必须包含 path 和 content
 - content 里放完整文件内容，换行用 JSON 字符串转义；必须完整闭合所有 JSON 字符串、对象和数组
-- 只输出 2 个文件：页面组件 + API/mock 服务模块
+- 后台 Web 页面通常只输出 2 个文件：页面组件 + API/mock 服务模块
+- 原生小程序必须输出小程序页面文件 + `public/sandbox-miniapp-preview.html`
 - 禁止输出 ```json 或任何 Markdown 包裹
 
 示例:
@@ -411,7 +426,19 @@ JSON 格式如下:
 ]
 ```""",
 
-    "code_review": """请审查以下前后端代码，检查代码质量、安全性和最佳实践。
+    "code_review": """请审查真实前端代码、后端/API 契约和两端字段对齐情况。不要只做泛泛的代码质量评价。
+
+## 需求文档
+{{requirement_output}}
+
+## 页面设计
+{{page_design_output}}
+
+## 交付包/API 契约
+{{delivery_output}}
+
+## 前端预览/真实前端代码
+{{prototype_output}}
 
 后端代码:
 {{backend_dev_output}}
@@ -419,14 +446,33 @@ JSON 格式如下:
 前端代码:
 {{frontend_dev_output}}
 
+## 必审清单
+1. 真实前端代码审查：只审查实际生成的前端文件、预览代码和 API/service 文件；如果没有 frontend_dev，则审查 prototype 阶段的真实前端代码。
+2. API 契约对齐：逐项核对接口路径、HTTP 方法、query/body 参数名、必填字段、分页字段、详情字段、状态码/错误结构、鉴权和权限 key。
+3. 字段一致性：逐项核对页面表格列、详情字段、表单字段、搜索条件、mock 字段、API 请求字段、API 响应字段是否同名同类型；中英文 label 不算字段名一致。
+4. 页面形态一致性：列表页核对 list/page/count 等分页契约；详情页核对对象数据和空对象兜底；表单页核对校验规则、提交参数和错误提示；小程序核对源码和 HTML 预览是否表达同一字段和交互。
+5. Mock 与真实契约一致性：mock 数据不能用一套字段、真实 API/service 读另一套字段；mock 不能掩盖字段缺失。
+6. 代码合理性：组件拆分、状态管理、加载/空/异常态、错误处理、防 undefined、权限指令/按钮态、重复代码、不可达代码、硬编码、无效 import、未实现事件方法。
+7. 可预览性：首屏是否可能运行时报错，接口失败是否可降级，预览代码是否依赖不存在的组件/插件/全局变量。
+8. 安全和稳定性：token/密钥泄露、XSS、未校验输入、危险 HTML、越权按钮、并发重复提交、接口超时和幂等性。
+
+## 输出要求
 请输出:
-1. 后端代码评分 (A/B/C/D/F)
+1. 后端/API 契约评分 (A/B/C/D/F)
 2. 前端代码评分 (A/B/C/D/F)
-3. 发现的问题列表（含严重程度: critical/major/minor，标注前后端）
-4. 改进建议（每个问题给出具体的修复方案）
-5. 是否通过审查 (PASS/FAIL)
+3. 契约对齐结论：列出接口级、字段级、权限级差异；每条必须指出“前端使用字段/接口”和“契约或后端提供字段/接口”
+4. 代码合理性问题列表（含严重程度: critical/major/minor，标注前端/后端/API/契约）
+5. 改进建议（每个问题给出具体修复方案）
+6. 是否通过审查 (PASS/FAIL)
 
 如果发现 critical 或 major 问题，标记为 FAIL 并给出详细修复指导。
+以下情况必须 FAIL：
+- 前端读取的响应字段与 API 契约不一致
+- 前端提交参数名与 API 契约不一致
+- 页面展示字段、mock 字段和 API 字段三者不一致
+- 列表/详情/表单页面形态与接口响应结构不匹配
+- 预览依赖不存在的组件、方法、权限指令或全局变量
+- 缺少必要的加载/空/异常兜底导致客户现场首屏可能报错
 
 请在输出末尾附带结构化 JSON（方便自动化解析）:
 ```json
@@ -434,6 +480,10 @@ JSON 格式如下:
   "review_passed": true/false,
   "backend_score": "A/B/C/D/F",
   "frontend_score": "A/B/C/D/F",
+  "contract_alignment": "接口和字段对齐结论摘要",
+  "field_mismatches": [
+    {"severity": "critical/major/minor", "location": "文件或接口", "frontend_field": "前端字段", "contract_field": "契约字段", "fix": "修复方式"}
+  ],
   "fix_suggestions": "修复建议摘要"
 }
 ```""",
@@ -696,6 +746,8 @@ Focus the review on:
 1. Frontend code completeness and whether it can run inside the matched frontend project sandbox.
 2. Frontend code consistency with the confirmed Project Skill.
 3. API contract completeness: endpoints, methods, params, response shape, error cases, and permissions.
+4. Field-level alignment between frontend code, mock data, API contract, and backend/project skill conventions.
+5. Code reasonableness: state handling, loading/empty/error states, undefined guards, event handlers, permissions, and maintainability.
 
 Return FAIL with actionable feedback when any of these three checks is incomplete.
 """
@@ -703,6 +755,102 @@ Return FAIL with actionable feedback when any of these three checks is incomplet
 
 
 # ==================== 输出解析 ====================
+
+def _validate_frontend_preview_code_files(files: Dict[str, str]) -> List[str]:
+    issues: List[str] = []
+    if not files:
+        return ["没有生成前端代码文件"]
+
+    normalized_paths = [str(path).replace("\\", "/").lstrip("/") for path in files]
+    vue_admin_paths = [
+        path for path in normalized_paths
+        if path.startswith(("src/views/", "src/pages/", "pages/")) and path.endswith(".vue")
+    ]
+    react_page_paths = [
+        path for path in normalized_paths
+        if path.startswith(("src/pages/", "src/views/", "src/components/")) and path.endswith((".tsx", ".jsx"))
+    ]
+    mini_wxml_paths = [path for path in normalized_paths if path.startswith("pages/") and path.endswith(".wxml")]
+    mini_js_paths = {path[:-3] for path in normalized_paths if path.startswith("pages/") and path.endswith(".js")}
+    html_preview_paths = [
+        path for path in normalized_paths
+        if path in ("public/sandbox-miniapp-preview.html", "sandbox-miniapp-preview.html")
+        or path.endswith("/sandbox-miniapp-preview.html")
+    ]
+    api_paths = [
+        path for path in normalized_paths
+        if path.startswith("src/api/") and path.endswith((".js", ".ts"))
+    ]
+    static_paths = [path for path in normalized_paths if path.endswith((".html", ".htm"))]
+
+    if static_paths and not mini_wxml_paths:
+        issues.append("预览阶段禁止生成静态 HTML 文件，必须生成真实前端项目代码")
+    if not (vue_admin_paths or react_page_paths or mini_wxml_paths):
+        issues.append("缺少可预览页面文件：Vue/uni-app .vue、React .tsx/.jsx 或小程序 pages/*.wxml")
+    for wxml_path in mini_wxml_paths:
+        if wxml_path[:-5] not in mini_js_paths:
+            issues.append(f"{wxml_path} 缺少同名小程序逻辑文件 .js")
+    if mini_wxml_paths and not html_preview_paths:
+        issues.append("原生小程序页面必须额外生成 public/sandbox-miniapp-preview.html 用于浏览器预览")
+
+    combined = "\n".join(content for content in files.values() if isinstance(content, str))
+    if "```" in combined:
+        issues.append("文件内容中包含 Markdown 代码块围栏")
+    uses_network_api = any(
+        isinstance(content, str) and ("request(" in content or "axios" in content or "Mock.mock" in content)
+        for content in files.values()
+    )
+    if uses_network_api and not api_paths and not mini_wxml_paths:
+        issues.append("使用接口请求时应提供独立 API/mock 服务模块，避免页面内散落不可复用请求逻辑")
+
+    for path, content in files.items():
+        if not isinstance(content, str):
+            issues.append(f"{path} 内容不是字符串")
+            continue
+        safe_path = str(path).replace("\\", "/").lstrip("/")
+        if safe_path.endswith((".vue", ".tsx", ".jsx", ".js")):
+            has_unsafe_array_read = re.search(r"\.(?:length|map|filter)\b", content)
+            has_array_guard = "Array.isArray" in content or "|| []" in content or "?? []" in content
+            if has_unsafe_array_read and not has_array_guard:
+                issues.append(f"{safe_path} 访问数组前缺少默认空数组兜底，容易首屏运行时报错")
+
+        if safe_path.endswith(".vue"):
+            if "<s-table" in content.lower():
+                if "loadData" not in content:
+                    issues.append(f"{safe_path} 使用 STable 但没有定义 loadData")
+                if "list" not in content:
+                    issues.append(f"{safe_path} 使用 STable 时必须处理分页对象 list 字段")
+                if re.search(r"return\s+res\.data\s*(?:[;\n}]|$)", content):
+                    issues.append(f"{safe_path} 的 loadData 不能只返回 res.data，必须返回含 list/page/count 的分页对象")
+            for handler in re.findall(r"@(?:click|change|blur|submit|confirm|pressEnter)=\"([A-Za-z_$][\w$]*)", content):
+                if f"{handler} (" not in content and f"{handler}(" not in content:
+                    issues.append(f"{safe_path} 模板事件 {handler} 未实现")
+        if safe_path.endswith(".wxml"):
+            for handler in re.findall(r"bind(?:tap|change|input|submit)=\"([A-Za-z_$][\w$]*)\"", content):
+                js_content = files.get(safe_path[:-5] + ".js", "")
+                if isinstance(js_content, str) and f"{handler}" not in js_content:
+                    issues.append(f"{safe_path} 小程序事件 {handler} 未在同名 .js 中实现")
+        if safe_path in html_preview_paths:
+            lowered = content.lower()
+            if "<html" not in lowered or "</html>" not in lowered:
+                issues.append(f"{safe_path} 必须是完整 HTML 文档")
+            if "script" not in lowered:
+                issues.append(f"{safe_path} 必须包含可交互的预览脚本")
+        if safe_path.startswith("src/api/"):
+            if "Mock.mock" in content and "/list" in content:
+                if not re.search(r"\blist\s*:", content):
+                    issues.append(f"{safe_path} 的列表 mock 缺少 list 数组字段")
+                for required in ("page", "pageNo", "pageSize", "count", "totalCount"):
+                    if required not in content:
+                        issues.append(f"{safe_path} 的列表 mock 缺少分页字段 {required}")
+                if re.search(r"result\s*:\s*\{[^{}]*data\s*:", content, re.DOTALL) and not re.search(r"\blist\s*:", content):
+                    issues.append(f"{safe_path} 的 result.data 数组不能替代 result.list")
+            if "Mock.mock" in content and re.search(r"/(?:detail|info|get)(?:/|['\"])", content):
+                has_object_payload = re.search(r"(?:result|data)\s*:\s*\{", content)
+                if not has_object_payload:
+                    issues.append(f"{safe_path} 的详情/mock 接口必须返回对象 result 或 data")
+
+    return issues
 
 def _try_parse_json_code_files(raw_output: str) -> Dict[str, str]:
     """尝试从 LLM 输出中提取 JSON 格式的代码文件映射。
@@ -2355,17 +2503,64 @@ class DevPipelineManager:
                 await emit({"type": "stage_started", "stage": current_stage})
 
                 try:
-                    raw_output, parsed = await self._run_single_stage(
-                        pipeline_id, current_stage, stages,
-                        pipe, fix_feedback, user_input, session,
-                        on_chunk=(
-                            lambda content: emit({
-                                "type": "chunk",
-                                "stage": current_stage,
-                                "content": content,
+                    preview_validation_feedback = ""
+                    max_attempts = MAX_PREVIEW_GENERATION_ATTEMPTS if current_stage == "prototype" else 1
+                    raw_output = ""
+                    parsed: Dict[str, Any] = {}
+                    for attempt in range(1, max_attempts + 1):
+                        attempt_feedback = "\n\n".join(
+                            part
+                            for part in (fix_feedback, preview_validation_feedback)
+                            if part and part.strip()
+                        )
+                        raw_output, parsed = await self._run_single_stage(
+                            pipeline_id, current_stage, stages,
+                            pipe, attempt_feedback, user_input, session,
+                            on_chunk=(
+                                lambda content: emit({
+                                    "type": "chunk",
+                                    "stage": current_stage,
+                                    "content": content,
+                                })
+                            ) if stream_callback else None,
+                        )
+
+                        if current_stage != "prototype":
+                            break
+
+                        preview_issues = []
+                        if not parsed.get("code_files"):
+                            preview_issues.append("预览生成阶段没有产出前端代码文件")
+                        else:
+                            preview_issues = _validate_frontend_preview_code_files(parsed.get("code_files", {}))
+                        if not preview_issues:
+                            break
+
+                        preview_validation_feedback = (
+                            "上一版前端预览代码未通过可运行性约束，请重新生成完整 JSON 文件数组，"
+                            "不要解释，只修代码。必须修复以下问题：\n"
+                            + "\n".join(f"- {issue}" for issue in preview_issues[:12])
+                        )
+                        await emit({
+                            "type": "stage_retry",
+                            "stage": current_stage,
+                            "attempt": attempt,
+                            "max_attempts": max_attempts,
+                            "reason": "preview_validation_failed",
+                            "issues": preview_issues[:12],
+                        })
+                        if attempt >= max_attempts:
+                            error_msg = "预览生成代码未通过可运行性约束: " + "；".join(preview_issues[:8])
+                            stages[current_stage].update({
+                                "status": "failed",
+                                "output": raw_output,
+                                "structured_output": parsed,
+                                "preview_html": parsed.get("preview_html", ""),
+                                "code_files": parsed.get("code_files", {}),
+                                "error": error_msg,
                             })
-                        ) if stream_callback else None,
-                    )
+                            raise ValueError(error_msg)
+
                     if user_input:
                         user_input = ""
 
@@ -2379,6 +2574,19 @@ class DevPipelineManager:
                             "error": "预览生成阶段没有产出前端代码文件，请重新生成",
                         })
                         raise ValueError("预览生成阶段没有产出前端代码文件，请重新生成")
+                    if current_stage == "prototype":
+                        preview_issues = _validate_frontend_preview_code_files(parsed.get("code_files", {}))
+                        if preview_issues:
+                            error_msg = "预览生成代码未通过可运行性约束: " + "；".join(preview_issues[:8])
+                            stages[current_stage].update({
+                                "status": "failed",
+                                "output": raw_output,
+                                "structured_output": parsed,
+                                "preview_html": parsed.get("preview_html", ""),
+                                "code_files": parsed.get("code_files", {}),
+                                "error": error_msg,
+                            })
+                            raise ValueError(error_msg)
                     if current_stage == "ui_preview" and not (parsed.get("preview_html") or "").strip():
                         raise ValueError("预览生成阶段没有产出可渲染 HTML，请重新生成")
 

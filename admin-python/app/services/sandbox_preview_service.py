@@ -165,6 +165,126 @@ class SandboxPreviewService:
             })
         return views
 
+    def _miniapp_html_preview_content(self, frontend_files: Dict[str, str]) -> Optional[str]:
+        has_miniapp_page = any(
+            str(path).replace("\\", "/").lstrip("/").startswith("pages/")
+            and str(path).replace("\\", "/").lstrip("/").endswith(".wxml")
+            for path in frontend_files
+        )
+        if not has_miniapp_page:
+            return None
+        html_candidates = [
+            "public/sandbox-miniapp-preview.html",
+            "sandbox-miniapp-preview.html",
+            "preview/sandbox-miniapp-preview.html",
+        ]
+        normalized = {str(path).replace("\\", "/").lstrip("/"): content for path, content in frontend_files.items()}
+        for path in html_candidates:
+            content = normalized.get(path)
+            if isinstance(content, str) and content.strip():
+                return content
+        for path, content in normalized.items():
+            if path.endswith("/sandbox-miniapp-preview.html") and isinstance(content, str) and content.strip():
+                return content
+        return None
+
+    def _install_miniapp_html_preview(self, root: Path, frontend_files: Dict[str, str]) -> Optional[str]:
+        content = self._miniapp_html_preview_content(frontend_files)
+        if not content:
+            return None
+        public_dir = root / "public"
+        public_dir.mkdir(parents=True, exist_ok=True)
+        preview_name = "sandbox-miniapp-preview.html"
+        public_dir.joinpath(preview_name).write_text(content, encoding="utf-8")
+        return preview_name
+
+    def _generated_api_probe_specs(self, frontend_files: Dict[str, str]) -> list[Dict[str, Any]]:
+        specs: Dict[str, Dict[str, Any]] = {}
+
+        def add_path(raw_path: str) -> None:
+            path = raw_path.strip("/")
+            if not path or path.startswith(("http://", "https://")):
+                return
+            if not re.search(r"(?:^|/)(?:list|page|detail|info|get)(?:/|$|-)", path):
+                return
+            probe_path = path if path.startswith("api/") else f"api/{path}"
+            expects_list = bool(re.search(r"(?:^|/)(?:list|page)(?:/|$|-)", path))
+            existing = specs.get(probe_path)
+            specs[probe_path] = {
+                "path": probe_path,
+                "expects_list": expects_list or bool(existing and existing.get("expects_list")),
+            }
+
+        for raw_path, content in frontend_files.items():
+            safe_path = str(raw_path).replace("\\", "/").lstrip("/")
+            if not safe_path.startswith("src/api/") or not safe_path.endswith((".js", ".ts")):
+                continue
+            if not isinstance(content, str):
+                continue
+
+            prefixes: Dict[str, str] = {}
+            for match in re.finditer(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*['\"]([^'\"]+)['\"]", content):
+                prefixes[match.group(1)] = match.group(2).strip("/")
+
+            for match in re.finditer(r"url\s*:\s*`?\$\{([A-Za-z_$][\w$]*)\}/([^`'\"]*list[^`'\"]*)`?", content):
+                prefix = prefixes.get(match.group(1), "").strip("/")
+                suffix = match.group(2).strip("/")
+                if prefix and suffix:
+                    add_path(f"{prefix}/{suffix}")
+
+            for match in re.finditer(r"url\s*:\s*`?\$\{([A-Za-z_$][\w$]*)\}/([^`'\"]*(?:detail|info|get)[^`'\"]*)`?", content):
+                prefix = prefixes.get(match.group(1), "").strip("/")
+                suffix = match.group(2).strip("/")
+                if prefix and suffix:
+                    add_path(f"{prefix}/{suffix}")
+
+            for match in re.finditer(r"url\s*:\s*([A-Za-z_$][\w$]*)\s*\+\s*['\"]/?([^'\"]*(?:list|page|detail|info|get)[^'\"]*)['\"]", content):
+                prefix = prefixes.get(match.group(1), "").strip("/")
+                suffix = match.group(2).strip("/")
+                if prefix and suffix:
+                    add_path(f"{prefix}/{suffix}")
+
+            for match in re.finditer(r"url\s*:\s*['\"]([^'\"]*(?:list|page|detail|info|get)[^'\"]*)['\"]", content):
+                add_path(match.group(1))
+        return [specs[path] for path in sorted(specs)]
+
+    def _generated_list_api_paths(self, frontend_files: Dict[str, str]) -> list[str]:
+        return [
+            spec["path"]
+            for spec in self._generated_api_probe_specs(frontend_files)
+            if spec.get("expects_list")
+        ]
+
+    async def _smoke_test_generated_apis(self, pipeline_id: str, frontend_files: Dict[str, str]) -> None:
+        specs = self._generated_api_probe_specs(frontend_files)
+        if not specs:
+            return
+        for spec in specs[:5]:
+            path = spec["path"]
+            response = await self.proxy(
+                pipeline_id,
+                path,
+                "id=1&tracebackId=sandbox-smoke&p=1&page=1&pageNo=1&pageSize=1&page_size=1",
+                {},
+                "GET",
+                b"",
+            )
+            if response.status_code >= 400:
+                raise RuntimeError(f"预览接口预检失败: {path} 返回 HTTP {response.status_code}")
+            content_type = response.headers.get("content-type", "")
+            if "application/json" not in content_type:
+                raise RuntimeError(f"预览接口预检失败: {path} 未返回 JSON")
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                raise RuntimeError(f"预览接口预检失败: {path} JSON 无法解析") from exc
+            result = payload.get("result") if isinstance(payload, dict) else None
+            data = payload.get("data") if isinstance(payload, dict) else None
+            if spec.get("expects_list") and (not isinstance(result, dict) or not isinstance(result.get("list"), list)):
+                raise RuntimeError(f"预览接口预检失败: {path} 未返回 result.list 数组")
+            if not spec.get("expects_list") and not isinstance(result or data or payload, dict):
+                raise RuntimeError(f"预览接口预检失败: {path} 未返回详情对象")
+
     def _detect_first_component(self, root: Path, suffixes: tuple[str, ...]) -> Optional[str]:
         for path in sorted((root / "src").rglob("*")) if (root / "src").exists() else []:
             if path.suffix.lower() in suffixes and path.name.lower() not in ("main.tsx", "main.jsx", "main.ts", "main.js"):
@@ -249,9 +369,9 @@ class SandboxPreviewService:
                 encoding="utf-8",
             )
 
-    async def _wait_ready(self, pipeline_id: str, port: int, timeout: int = 120) -> None:
+    async def _wait_ready(self, pipeline_id: str, port: int, timeout: int = 120, preview_path: str = "") -> None:
         deadline = time.time() + timeout
-        url = f"http://{settings.pipeline_preview_host}:{port}{self._preview_base(pipeline_id)}"
+        url = f"http://{settings.pipeline_preview_host}:{port}{self._preview_base(pipeline_id)}{preview_path}"
         async with httpx.AsyncClient(timeout=2.0) as client:
             while time.time() < deadline:
                 try:
@@ -607,6 +727,7 @@ class SandboxPreviewService:
                 try:
                     await self._prepare_project_root(root, project_info)
                     self._safe_write_files(root, frontend_files)
+                    html_preview_path = self._install_miniapp_html_preview(root, frontend_files)
                     self._patch_vue_cli_preview_base(root)
                     self._patch_vue2_sandbox_preview_entry(root, frontend_files)
 
@@ -667,6 +788,7 @@ class SandboxPreviewService:
                         "ready": False,
                         "files_hash": files_hash,
                         "tokens": {},
+                        "html_preview_path": html_preview_path or "",
                     }
                     self._issue_token(entry)
                     entry["output_task"] = asyncio.create_task(self._drain_process_output(pipeline_id, process))
@@ -680,7 +802,8 @@ class SandboxPreviewService:
                     raise
 
             try:
-                await self._wait_ready(pipeline_id, port)
+                await self._wait_ready(pipeline_id, port, preview_path=entry.get("html_preview_path") or "")
+                await self._smoke_test_generated_apis(pipeline_id, frontend_files)
             except Exception:
                 if entry["process"].returncode is None:
                     entry["process"].terminate()
@@ -814,6 +937,90 @@ class SandboxPreviewService:
         body = {"code": 200, "message": "sandbox mock", "data": payload}
         return httpx.Response(200, headers={"content-type": "application/json"}, content=json.dumps(body, ensure_ascii=False).encode("utf-8"))
 
+    def _table_payload(self, value: Any, fallback: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        fallback = fallback or {}
+        if isinstance(value, list):
+            items = value
+            source = fallback
+        elif isinstance(value, dict):
+            if isinstance(value.get("list"), list):
+                items = value["list"]
+            elif isinstance(value.get("data"), list):
+                items = value["data"]
+            elif isinstance(value.get("records"), list):
+                items = value["records"]
+            elif isinstance(value.get("rows"), list):
+                items = value["rows"]
+            else:
+                return None
+            source = {**fallback, **value}
+        else:
+            return None
+
+        page = source.get("page") or source.get("pageNo") or source.get("current") or source.get("currentPage") or 1
+        page_size = source.get("pageSize") or source.get("page_size") or source.get("size") or len(items)
+        total_count = (
+            source.get("count")
+            if source.get("count") is not None
+            else source.get("totalCount")
+            if source.get("totalCount") is not None
+            else source.get("total")
+            if source.get("total") is not None
+            else len(items)
+        )
+        return {
+            **source,
+            "data": items,
+            "list": items,
+            "page": page,
+            "pageNo": source.get("pageNo") or page,
+            "pageSize": page_size,
+            "count": total_count,
+            "totalCount": source.get("totalCount") if source.get("totalCount") is not None else total_count,
+        }
+
+    def _normalize_api_response(self, path: str, response: httpx.Response) -> httpx.Response:
+        if not path.startswith("api/"):
+            return response
+        content_type = response.headers.get("content-type", "")
+        if "application/json" not in content_type or response.status_code >= 400:
+            return response
+        try:
+            payload = response.json()
+        except ValueError:
+            return response
+        if not isinstance(payload, dict):
+            return response
+
+        table_payload = None
+        if "result" in payload:
+            table_payload = self._table_payload(payload.get("result"), payload)
+        if table_payload is None and "data" in payload:
+            table_payload = self._table_payload(payload.get("data"), payload)
+        if table_payload is None:
+            table_payload = self._table_payload(payload)
+        if table_payload is None:
+            return response
+
+        normalized = dict(payload)
+        normalized["result"] = {**table_payload, **(payload.get("result") if isinstance(payload.get("result"), dict) else {})}
+        if isinstance(normalized.get("data"), dict):
+            normalized["data"] = {**normalized["result"], **normalized["data"]}
+        elif isinstance(normalized.get("data"), list):
+            normalized["data"] = normalized["result"]
+
+        headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
+        try:
+            request = response.request
+        except RuntimeError:
+            request = None
+        return httpx.Response(
+            status_code=response.status_code,
+            headers=headers,
+            content=json.dumps(normalized, ensure_ascii=False).encode("utf-8"),
+            request=request,
+        )
+
     async def proxy(
         self,
         pipeline_id: str,
@@ -832,12 +1039,14 @@ class SandboxPreviewService:
         if path.startswith(("api/", "javaApi/", "logApi/", "socket.io/")):
             target = f"http://{settings.pipeline_preview_host}:{entry['port']}/{path}"
         else:
-            target = f"http://{settings.pipeline_preview_host}:{entry['port']}{self._preview_base(pipeline_id)}{path or ''}"
+            preview_path = entry.get("html_preview_path") if not path else ""
+            target = f"http://{settings.pipeline_preview_host}:{entry['port']}{self._preview_base(pipeline_id)}{path or preview_path or ''}"
         if query_string:
             target = f"{target}?{query_string}"
         headers = {k: v for k, v in request_headers.items() if k.lower() not in {"host", "connection", "content-length"}}
         async with httpx.AsyncClient(follow_redirects=False, timeout=30.0) as client:
             response = await client.request(method, target, headers=headers, content=body)
+        response = self._normalize_api_response(path, response)
         content_type = response.headers.get("content-type", "")
         if "text/html" in content_type:
             prefix = f"/api/flow/pipeline/{pipeline_id}/sandbox-preview/"
