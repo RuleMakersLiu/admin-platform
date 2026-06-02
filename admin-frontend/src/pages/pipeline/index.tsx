@@ -1162,6 +1162,11 @@ const PipelinePage: React.FC = () => {
     }
   }
 
+  const handleRejectAndRerunCurrentStage = async () => {
+    setSelectedStage('')
+    await handleConfirm(false)
+  }
+
   const handleRerun = async () => {
     if (!pipelineId) return
     setLoading(true)
@@ -1557,6 +1562,21 @@ const PipelinePage: React.FC = () => {
           )}
         </div>
         <Space size={8}>
+          {isWaitingConfirm && (
+            <Tooltip title={`驳回当前${STAGE_NAMES[pipeline.current_stage] || pipeline.current_stage || '阶段'}并重新生成，可先在当前阶段下方填写修改意见`}>
+              <Button
+                size="small"
+                type="primary"
+                danger
+                icon={<ReloadOutlined />}
+                onClick={handleRejectAndRerunCurrentStage}
+                loading={loading}
+                style={{ borderRadius: 6 }}
+              >
+                重新生成当前阶段
+              </Button>
+            </Tooltip>
+          )}
           <Button
             size="small"
             icon={<SettingOutlined />}
@@ -1917,11 +1937,11 @@ const PipelinePage: React.FC = () => {
                     <Button
                       danger
                       icon={<CloseCircleOutlined />}
-                      onClick={() => handleConfirm(false)}
+                      onClick={handleRejectAndRerunCurrentStage}
                       loading={loading}
                       style={{ borderRadius: 8 }}
                     >
-                      退回修订
+                      驳回修改并重新生成
                     </Button>
                   </div>
                 </div>

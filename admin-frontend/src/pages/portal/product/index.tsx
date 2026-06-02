@@ -8,6 +8,7 @@ import {
   FileTextOutlined,
   FullscreenOutlined,
   PlayCircleOutlined,
+  ReloadOutlined,
   RocketOutlined,
 } from '@ant-design/icons'
 import { pipelineApi, type PipelineArtifact, type PipelineListItem, type PipelineStatus, type ProjectSkillMatch } from '@/services/pipeline'
@@ -496,7 +497,9 @@ export default function ProductPortal() {
                   />
                   <Space>
                     <Button type="primary" loading={running} onClick={() => resumePipeline(true)}>确认继续</Button>
-                    <Button danger loading={running} onClick={() => resumePipeline(false)}>按反馈重做本阶段</Button>
+                    <Button danger icon={<ReloadOutlined />} loading={running} onClick={() => resumePipeline(false)}>
+                      驳回修改并重新生成
+                    </Button>
                   </Space>
                 </Space>
               }
@@ -526,6 +529,18 @@ export default function ProductPortal() {
                     >
                       继续
                     </Button>,
+                    item.status === 'waiting_confirm' && pipelineId === item.pipeline_id ? (
+                      <Button
+                        key="reject"
+                        size="small"
+                        danger
+                        type="link"
+                        loading={running}
+                        onClick={() => resumePipeline(false)}
+                      >
+                        重新生成
+                      </Button>
+                    ) : null,
                     <Button
                       key="delete"
                       size="small"
@@ -581,6 +596,16 @@ export default function ProductPortal() {
               <Space>
                 {status && <Tag color={status.status === 'completed' ? 'success' : status.status === 'failed' ? 'error' : 'processing'}>{status.status}</Tag>}
                 {activeStage && <Tag color="blue">{stageLabel[activeStage] || activeStage}</Tag>}
+                {status?.status === 'waiting_confirm' && (
+                  <Button
+                    danger
+                    icon={<ReloadOutlined />}
+                    loading={running}
+                    onClick={() => resumePipeline(false)}
+                  >
+                    重新生成当前阶段
+                  </Button>
+                )}
                 <Button
                   icon={<DownloadOutlined />}
                   disabled={!pipelineId || !Object.keys(artifact?.frontend_files || {}).length}

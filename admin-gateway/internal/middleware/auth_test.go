@@ -86,6 +86,23 @@ func TestAuth_SandboxPreviewPostStart_RequiresToken(t *testing.T) {
 	}
 }
 
+func TestAuth_SandboxPreviewRuntimeApi_PassesThrough(t *testing.T) {
+	setupTestViper()
+	r := setupTestRouter()
+	r.Use(Auth())
+	r.POST("/api/flow/pipeline/test-pipeline/sandbox-preview/api/product/admins/login", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/api/flow/pipeline/test-pipeline/sandbox-preview/api/product/admins/login", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("sandbox preview runtime API status = %d, want %d", w.Code, http.StatusOK)
+	}
+}
+
 // ---------- Auth middleware: missing Authorization header ----------
 
 func TestAuth_MissingAuthorization_Returns401(t *testing.T) {

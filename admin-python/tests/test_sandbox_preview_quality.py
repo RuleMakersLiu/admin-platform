@@ -1,4 +1,3 @@
-import httpx
 from pathlib import Path
 
 from app.ai.flow_manager import _validate_frontend_preview_code_files
@@ -39,6 +38,70 @@ if (process.env.NODE_ENV === 'development') {
     assert any("必须处理分页对象 list 字段" in issue for issue in issues)
     assert any("列表 mock 缺少 list 数组字段" in issue for issue in issues)
     assert any("列表 mock 缺少分页字段 count" in issue for issue in issues)
+
+
+def test_sandbox_preview_patches_stable_response_contract():
+    service = SandboxPreviewService()
+    content = """
+<template><s-table :data="loadData" /></template>
+<script>
+export default {
+  data () {
+    return {
+      loadData: parameter => getRetailList(parameter).then(res => {
+        const result = res.result || res.data || res
+        return {
+          pageNo: result.pageNo || result.page || 1,
+          pageSize: result.pageSize || 10,
+          totalCount: result.totalCount || result.count || 0,
+          totalPage: result.totalPage || Math.ceil((result.totalCount || 0) / (result.pageSize || 10)),
+          data: Array.isArray(result.list) ? result.list : []
+        }
+      })
+    }
+  }
+}
+</script>
+"""
+
+    patched = service._patch_generated_vue_content(content)
+
+    assert "const list =" in patched
+    assert "page: pageNo" in patched
+    assert "count: totalCount" in patched
+    assert "list," in patched
+    assert "data: list" in patched
+
+
+def test_sandbox_preview_patches_stable_response_contract_without_page_field():
+    service = SandboxPreviewService()
+    content = """
+<template><s-table :data="loadData" /></template>
+<script>
+export default {
+  data () {
+    return {
+      loadData: parameter => getRetailList(parameter).then(res => {
+        const result = res.result || res.data || res
+        return {
+          pageNo: result.pageNo || result.page || 1,
+          pageSize: result.pageSize || 10,
+          totalCount: result.totalCount || result.count || 0,
+          count: result.totalCount || result.count || 0,
+          list: Array.isArray(result.list || result.data) ? (result.list || result.data) : []
+        }
+      })
+    }
+  }
+}
+</script>
+"""
+
+    patched = service._patch_generated_vue_content(content)
+
+    assert "page: pageNo" in patched
+    assert "count: totalCount" in patched
+    assert "list," in patched
 
 
 def test_preview_validator_accepts_stable_with_consistent_list_contract():
@@ -177,25 +240,6 @@ def test_sandbox_preview_installs_miniprogram_html_preview(tmp_path: Path):
     assert (tmp_path / "public" / "sandbox-miniapp-preview.html").exists()
 
 
-def test_sandbox_proxy_normalizes_common_table_response_shapes():
-    service = SandboxPreviewService()
-    response = httpx.Response(
-        200,
-        headers={"content-type": "application/json"},
-        json={"data": [{"id": 1}], "pageNo": 2, "pageSize": 10, "totalCount": 86},
-    )
-
-    normalized = service._normalize_api_response("api/product/retail/list", response)
-    payload = normalized.json()
-
-    assert payload["result"]["list"] == [{"id": 1}]
-    assert payload["result"]["page"] == 2
-    assert payload["result"]["pageNo"] == 2
-    assert payload["result"]["pageSize"] == 10
-    assert payload["result"]["count"] == 86
-    assert payload["data"]["list"] == [{"id": 1}]
-
-
 def test_sandbox_preview_extracts_generated_list_api_paths():
     service = SandboxPreviewService()
     files = {
@@ -216,14 +260,119 @@ export function byDetail (parameter) {
 """
     }
 
-    assert service._generated_list_api_paths(files) == [
-        "api/product/retail/list",
-        "api/product/retail/stock/list",
-        "api/promotion/list",
-    ]
     assert service._generated_api_probe_specs(files) == [
         {"path": "api/product/retail/detail", "expects_list": False},
         {"path": "api/product/retail/list", "expects_list": True},
         {"path": "api/product/retail/stock/list", "expects_list": True},
         {"path": "api/promotion/list", "expects_list": True},
     ]
+
+
+def test_sandbox_preview_ignores_commented_api_paths():
+    service = SandboxPreviewService()
+    files = {
+        "src/api/product.js": """
+import request from '@/utils/request'
+
+export function getRetailList (parameter) {
+  // return request({ url: '/product/retail/list', method: 'get', params: parameter })
+  return Promise.resolve({ result: { list: [], pageNo: 1, pageSize: 10, totalCount: 0 } })
+}
+
+/*
+export function oldApi () {
+  return request({ url: '/legacy/list', method: 'get' })
+}
+*/
+"""
+    }
+
+    assert service._generated_api_probe_specs(files) == []
+
+
+def test_vue_cli_preview_keeps_original_dev_server_and_routes_wds_resources(tmp_path: Path):
+    service = SandboxPreviewService()
+    root = tmp_path / "web-product-agent"
+    root.mkdir()
+    (root / "package.json").write_text(
+        '{"scripts":{"serve":"vue-cli-service serve"}}',
+        encoding="utf-8",
+    )
+    (root / "vue.config.js").write_text("const vueConfig = {}\nmodule.exports = vueConfig\n", encoding="utf-8")
+
+    command = service._dev_command(root, 43000)
+    service._patch_vue_cli_preview_base(root)
+    vue_config = (root / "vue.config.js").read_text(encoding="utf-8")
+
+    assert "--no-inline" not in command
+    assert "--no-hot" not in command
+    assert "historyApiFallback" in vue_config
+    assert "disableDotRule" in vue_config
+    assert "SANDBOX_PREVIEW_PUBLIC_PATH_PATCH_V4" in vue_config
+    assert "vueConfig.devServer.public = process.env.VUE_APP_SANDBOX_PREVIEW_PUBLIC || 'localhost'" in vue_config
+    assert "vueConfig.devServer.sockPath = process.env.VUE_APP_SANDBOX_PREVIEW_BASE + 'sockjs-node'" in vue_config
+    assert "delete vueConfig.devServer.proxy['sockjs-node']" in vue_config
+    assert "delete vueConfig.devServer.proxy['/api'].pathRewrite" in vue_config
+    assert "vueConfig.devServer.inline = false" in vue_config
+
+
+def test_vue_cli_service_patch_disables_wds_client_in_sandbox(tmp_path: Path):
+    service = SandboxPreviewService()
+    root = tmp_path / "web-product-agent"
+    serve_js = root / "node_modules" / "@vue" / "cli-service" / "lib" / "commands" / "serve.js"
+    serve_js.parent.mkdir(parents=True)
+    serve_js.write_text(
+        """
+function serve () {
+    // inject dev & hot-reload middleware entries
+    if (!isProduction) {
+      addDevClientToEntry(webpackConfig, devClients)
+    }
+}
+""",
+        encoding="utf-8",
+    )
+
+    service._patch_vue_cli_service_no_hmr(root)
+
+    patched = serve_js.read_text(encoding="utf-8")
+    assert "SANDBOX_PREVIEW_DISABLE_WDS_CLIENT_PATCH" in patched
+    assert "if (!isProduction && !process.env.VUE_APP_SANDBOX_PREVIEW_DISABLE_WDS_CLIENT)" in patched
+
+
+def test_preview_api_base_does_not_double_api_prefix_for_original_project(tmp_path: Path):
+    service = SandboxPreviewService()
+    root = tmp_path / "web-product-agent"
+    api_dir = root / "src" / "api"
+    api_dir.mkdir(parents=True)
+    (api_dir / "index.js").write_text("export default { login: '/api/product/admins/login' }\n", encoding="utf-8")
+
+    assert (
+        service._api_base_url_for_preview(root, {"VUE_APP_API_BASE_URL": "/api"}, "pipe_demo")
+        == "/api/flow/pipeline/pipe_demo/sandbox-preview"
+    )
+
+
+def test_preview_proxy_targets_require_explicit_api_proxy(monkeypatch):
+    service = SandboxPreviewService()
+    monkeypatch.setattr("app.services.sandbox_preview_service.settings.pipeline_preview_api_proxy", "")
+
+    try:
+        service._preview_proxy_targets({"VUE_APP_SOCKET_HOST": "http://dzg-dev_wma.gemantic.com"})
+    except RuntimeError as exc:
+        assert "VUE_APP_PROXY" in str(exc)
+    else:
+        raise AssertionError("VUE_APP_SOCKET_HOST must not be used as API proxy fallback")
+
+
+def test_preview_proxy_targets_use_configured_test_api_proxy(monkeypatch):
+    service = SandboxPreviewService()
+    monkeypatch.setattr("app.services.sandbox_preview_service.settings.pipeline_preview_api_proxy", "https://malladmin-jdagent.hctest.tech/")
+
+    targets = service._preview_proxy_targets({"VUE_APP_SOCKET_HOST": "http://dzg-dev_wma.gemantic.com"})
+
+    assert targets == {
+        "api": "https://malladmin-jdagent.hctest.tech",
+        "java": "https://malladmin-jdagent.hctest.tech",
+        "log": "https://malladmin-jdagent.hctest.tech",
+    }

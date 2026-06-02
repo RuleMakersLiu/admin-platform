@@ -72,6 +72,7 @@ class Settings(BaseSettings):
     pipeline_preview_host: str = "127.0.0.1"
     pipeline_preview_port_start: int = 43000
     pipeline_preview_port_end: int = 43100
+    pipeline_preview_api_proxy: str = ""
     deploy_service_url: str = "http://admin-deploy:8083"
 
     # ==================== 埋点数据配置 ====================

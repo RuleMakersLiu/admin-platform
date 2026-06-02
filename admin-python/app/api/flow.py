@@ -369,11 +369,11 @@ async def start_sandbox_preview(pipeline_id: str):
 
     try:
         artifact = await pipeline_manager.get_pipeline_artifact(pipeline_id)
-        status = await pipeline_manager.get_pipeline_status(pipeline_id)
+        project_info = await pipeline_manager.get_pipeline_frontend_project_snapshot(pipeline_id)
         result = await sandbox_preview_service.start(
             pipeline_id,
             artifact.get("frontend_files") or {},
-            status.get("project_skill") or {},
+            project_info,
         )
         return {"code": 200, "message": "真实预览已启动", "data": result}
     except ValueError as e:
@@ -390,7 +390,8 @@ async def proxy_sandbox_preview(pipeline_id: str, path: str = "", request: Reque
     """Proxy sandbox preview assets to the per-pipeline frontend dev server."""
     from app.services.sandbox_preview_service import sandbox_preview_service
 
-    token = request.query_params.get("preview_token") if request else ""
+    query_token = request.query_params.get("preview_token") if request else ""
+    token = query_token
     if not token and request:
         token = request.cookies.get(f"sandbox_preview_token_{pipeline_id}", "")
     asset_suffixes = (
@@ -401,9 +402,15 @@ async def proxy_sandbox_preview(pipeline_id: str, path: str = "", request: Reque
         path.startswith(("assets/", "js/", "css/", "img/", "fonts/"))
         or path.lower().endswith(asset_suffixes)
     )
-    is_sockjs_request = bool(path) and path.startswith("sockjs-node/")
+    is_dev_server_request = bool(path) and path.startswith(("sockjs-node/", "__webpack_dev_server__/"))
+    referer = request.headers.get("referer", "") if request else ""
+    preview_path_prefix = f"/api/flow/pipeline/{pipeline_id}/sandbox-preview/"
+    is_preview_runtime_api_request = bool(path) and path.startswith(("api/", "javaApi/", "logApi/", "socket.io/")) and (
+        preview_path_prefix in referer
+    )
     if not sandbox_preview_service.validate_token(pipeline_id, token or "") and not (
-        (is_asset_request or is_sockjs_request) and sandbox_preview_service.is_running(pipeline_id)
+        (is_asset_request or is_dev_server_request or is_preview_runtime_api_request)
+        and sandbox_preview_service.is_running(pipeline_id)
     ):
         raise HTTPException(status_code=403, detail="预览令牌无效或已过期")
     try:
@@ -417,7 +424,7 @@ async def proxy_sandbox_preview(pipeline_id: str, path: str = "", request: Reque
         )
     except RuntimeError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    return FastAPIResponse(
+    response = FastAPIResponse(
         content=upstream.content,
         status_code=upstream.status_code,
         media_type=upstream.headers.get("content-type"),
@@ -427,6 +434,16 @@ async def proxy_sandbox_preview(pipeline_id: str, path: str = "", request: Reque
             if key.lower() in {"cache-control", "etag", "last-modified"}
         },
     )
+    if query_token and sandbox_preview_service.validate_token(pipeline_id, query_token):
+        response.set_cookie(
+            key=f"sandbox_preview_token_{pipeline_id}",
+            value=query_token,
+            path=f"/api/flow/pipeline/{pipeline_id}/sandbox-preview/",
+            max_age=8 * 60 * 60,
+            httponly=False,
+            samesite="lax",
+        )
+    return response
 
 
 @router.get("/pipeline/{pipeline_id}/artifact")

@@ -98,8 +98,9 @@ class SandboxPreviewService:
             target.write_text(text_content, encoding="utf-8")
 
     def _patch_generated_vue_content(self, content: str) -> str:
-        if "JDictSelectTag" not in content:
-            return content
+        patched = self._patch_stable_contract(content)
+        if "JDictSelectTag" not in patched:
+            return patched
         replacements = {
             "import { STable, JDictSelectTag } from '@/components'": (
                 "import { STable } from '@/components'\n"
@@ -113,57 +114,67 @@ class SandboxPreviewService:
                 "import JDictSelectTag from '@/components/dict/JDictSelectTag.vue'"
             ),
         }
-        patched = content
         for source, target in replacements.items():
             patched = patched.replace(source, target)
+        return patched
+
+    def _patch_stable_contract(self, content: str) -> str:
+        if "<s-table" not in content.lower():
+            return content
+
+        list_expr = (
+            "Array.isArray(result.list)\n"
+            "          ? result.list\n"
+            "          : (Array.isArray(result.data) ? result.data : [])"
+        )
+        replacement = (
+            "const list = " + list_expr + "\n"
+            "        const pageNo = Number(result.page || result.pageNo || 1)\n"
+            "        const pageSize = Number(result.pageSize || 10)\n"
+            "        const totalCount = Number(result.count || result.totalCount || list.length)\n"
+            "        return {\n"
+            "          page: pageNo,\n"
+            "          pageNo,\n"
+            "          pageSize,\n"
+            "          count: totalCount,\n"
+            "          totalCount,\n"
+            "          totalPage: result.totalPage || Math.ceil(totalCount / pageSize),\n"
+            "          list,\n"
+            "          data: list\n"
+            "        }"
+        )
+
+        patterns = [
+            r"return\s*\{\s*"
+            r"pageNo\s*:\s*result\.pageNo\s*\|\|\s*result\.page\s*\|\|\s*1\s*,\s*"
+            r"pageSize\s*:\s*result\.pageSize\s*\|\|\s*10\s*,\s*"
+            r"totalCount\s*:\s*result\.totalCount\s*\|\|\s*result\.count\s*\|\|\s*0\s*,\s*"
+            r"totalPage\s*:\s*result\.totalPage\s*\|\|\s*Math\.ceil\(\(result\.totalCount\s*\|\|\s*0\)\s*/\s*\(result\.pageSize\s*\|\|\s*10\)\)\s*,\s*"
+            r"data\s*:\s*Array\.isArray\(result\.(?:list|data)\)\s*\?\s*result\.(?:list|data)\s*:\s*\[\]\s*"
+            r"\}",
+            r"return\s*\{\s*"
+            r"pageNo\s*:\s*result\.pageNo\s*\|\|\s*1\s*,\s*"
+            r"pageSize\s*:\s*result\.pageSize\s*\|\|\s*10\s*,\s*"
+            r"totalCount\s*:\s*result\.totalCount\s*\|\|\s*0\s*,\s*"
+            r"data\s*:\s*Array\.isArray\(result\.(?:list|data)\)\s*\?\s*result\.(?:list|data)\s*:\s*\[\]\s*"
+            r"\}",
+            r"return\s*\{\s*"
+            r"pageNo\s*:\s*result\.pageNo\s*\|\|\s*result\.page\s*\|\|\s*1\s*,\s*"
+            r"pageSize\s*:\s*result\.pageSize\s*\|\|\s*10\s*,\s*"
+            r"totalCount\s*:\s*result\.totalCount\s*\|\|\s*result\.count\s*\|\|\s*0\s*,\s*"
+            r"count\s*:\s*result\.totalCount\s*\|\|\s*result\.count\s*\|\|\s*0\s*,\s*"
+            r"list\s*:\s*Array\.isArray\(result\.list\s*\|\|\s*result\.data\)\s*\?\s*\(result\.list\s*\|\|\s*result\.data\)\s*:\s*\[\]\s*"
+            r"\}",
+        ]
+        patched = content
+        for pattern in patterns:
+            patched = re.sub(pattern, replacement, patched, flags=re.S)
+
         return patched
 
     def _files_hash(self, frontend_files: Dict[str, str]) -> str:
         payload = json.dumps(frontend_files, ensure_ascii=False, sort_keys=True)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-    def _route_segment(self, component_path: str) -> str:
-        stem = Path(component_path).stem
-        words = re.sub(r"([a-z0-9])([A-Z])", r"\1-\2", stem).replace("_", "-")
-        return re.sub(r"[^a-zA-Z0-9-]+", "-", words).strip("-").lower() or "page"
-
-    def _page_title(self, component_path: str, content: str) -> str:
-        if "getFlashSaleList" in content or "flash_sale" in content or "秒杀" in content:
-            return "秒杀活动"
-        if "getGroupBuyingRecordList" in content or "group_record" in content or "拼团详情" in content:
-            return "拼团记录"
-        if "getGroupBuyingList" in content or "group_buying_status" in content or "新增拼团" in content:
-            return "拼团活动"
-        explicit_title = re.search(r"meta\s*:\s*\{[^}]*title\s*:\s*['\"]([^'\"]*[\u4e00-\u9fff][^'\"]*)['\"]", content)
-        if explicit_title:
-            return explicit_title.group(1)
-
-        name_match = re.search(r"name\s*:\s*['\"]([^'\"]+)['\"]", content)
-        name = name_match.group(1) if name_match else Path(component_path).stem
-        return re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", name).strip()
-
-    def _generated_vue_views(self, frontend_files: Dict[str, str]) -> list[Dict[str, str]]:
-        views: list[Dict[str, str]] = []
-        used_routes: set[str] = set()
-        for raw_path, content in sorted(frontend_files.items()):
-            safe_path = str(raw_path).replace("\\", "/").lstrip("/")
-            if not safe_path.startswith("src/views/") or not safe_path.endswith(".vue"):
-                continue
-            component_path = safe_path[len("src/views/"):-len(".vue")]
-            route = self._route_segment(component_path)
-            base_route = route
-            index = 2
-            while route in used_routes:
-                route = f"{base_route}-{index}"
-                index += 1
-            used_routes.add(route)
-            views.append({
-                "component_path": component_path,
-                "route": route,
-                "name": re.sub(r"[^a-zA-Z0-9_]", "", Path(component_path).stem) or "SandboxPage",
-                "title": self._page_title(component_path, content if isinstance(content, str) else ""),
-            })
-        return views
 
     def _miniapp_html_preview_content(self, frontend_files: Dict[str, str]) -> Optional[str]:
         has_miniapp_page = any(
@@ -201,6 +212,13 @@ class SandboxPreviewService:
     def _generated_api_probe_specs(self, frontend_files: Dict[str, str]) -> list[Dict[str, Any]]:
         specs: Dict[str, Dict[str, Any]] = {}
 
+        def strip_js_comments(content: str) -> str:
+            content = re.sub(r"/\*.*?\*/", "", content, flags=re.S)
+            return "\n".join(
+                line for line in content.splitlines()
+                if not line.lstrip().startswith("//")
+            )
+
         def add_path(raw_path: str) -> None:
             path = raw_path.strip("/")
             if not path or path.startswith(("http://", "https://")):
@@ -221,6 +239,7 @@ class SandboxPreviewService:
                 continue
             if not isinstance(content, str):
                 continue
+            content = strip_js_comments(content)
 
             prefixes: Dict[str, str] = {}
             for match in re.finditer(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*['\"]([^'\"]+)['\"]", content):
@@ -247,13 +266,6 @@ class SandboxPreviewService:
             for match in re.finditer(r"url\s*:\s*['\"]([^'\"]*(?:list|page|detail|info|get)[^'\"]*)['\"]", content):
                 add_path(match.group(1))
         return [specs[path] for path in sorted(specs)]
-
-    def _generated_list_api_paths(self, frontend_files: Dict[str, str]) -> list[str]:
-        return [
-            spec["path"]
-            for spec in self._generated_api_probe_specs(frontend_files)
-            if spec.get("expects_list")
-        ]
 
     async def _smoke_test_generated_apis(self, pipeline_id: str, frontend_files: Dict[str, str]) -> None:
         specs = self._generated_api_probe_specs(frontend_files)
@@ -493,6 +505,12 @@ class SandboxPreviewService:
             clone_url = repo_url.replace("https://", f"https://oauth2:{token}@", 1)
         return {"repo_url": repo_url, "clone_url": clone_url, "branch": branch}
 
+    def _canonical_git_url(self, url: str) -> str:
+        url = (url or "").strip()
+        url = re.sub(r"^(https?://)[^/@]+@", r"\1", url)
+        url = url.removesuffix(".git").rstrip("/")
+        return url
+
     async def _clone_project(self, root: Path, project_info: Dict[str, Any]) -> None:
         git_info = await self._project_git_info(
             str(project_info.get("project_id") or ""),
@@ -508,15 +526,60 @@ class SandboxPreviewService:
             code, output = await self._run(args, root.parent, timeout=180)
         if code != 0:
             raise RuntimeError(f"克隆前端项目失败: {output[-500:]}")
+        (root / ".sandbox-preview-project.json").write_text(
+            json.dumps({
+                "project_id": project_info.get("project_id") or "",
+                "project_name": project_info.get("project_name") or "",
+                "repo_url": git_info["repo_url"],
+                "branch": git_info["branch"],
+            }, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     async def _prepare_project_root(self, root: Path, project_info: Dict[str, Any]) -> None:
+        if not project_info.get("project_id") and not project_info.get("repo_url"):
+            raise RuntimeError("流水线没有匹配到前端项目快照，无法启动真实前端项目预览")
+        git_info = await self._project_git_info(
+            str(project_info.get("project_id") or ""),
+            str(project_info.get("repo_url") or ""),
+        )
         if root.exists() and (root / ".git").exists() and (root / "package.json").exists():
+            code, remote_output = await self._run(["git", "remote", "get-url", "origin"], root, timeout=20)
+            current_repo = remote_output.strip() if code == 0 else ""
+            expected_repo = git_info.get("repo_url") or project_info.get("repo_url") or ""
+            if expected_repo and self._canonical_git_url(current_repo) != self._canonical_git_url(expected_repo):
+                shutil.rmtree(root)
+                root.parent.mkdir(parents=True, exist_ok=True)
+                await self._clone_project(root, project_info)
+                return
             code, output = await self._run(["git", "reset", "--hard", "HEAD"], root, timeout=60)
             if code != 0:
                 raise RuntimeError(f"重置前端项目失败: {output[-500:]}")
             code, output = await self._run(["git", "clean", "-fd", "-e", "node_modules"], root, timeout=60)
             if code != 0:
                 raise RuntimeError(f"清理前端项目失败: {output[-500:]}")
+            marker = root / ".sandbox-preview-project.json"
+            if marker.exists():
+                try:
+                    previous = json.loads(marker.read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    previous = {}
+                expected_project_id = str(project_info.get("project_id") or "")
+                if expected_project_id and str(previous.get("project_id") or "") != expected_project_id:
+                    shutil.rmtree(root)
+                    root.parent.mkdir(parents=True, exist_ok=True)
+                    await self._clone_project(root, project_info)
+                    return
+            else:
+                marker.write_text(
+                    json.dumps({
+                        "project_id": project_info.get("project_id") or "",
+                        "project_name": project_info.get("project_name") or "",
+                        "repo_url": expected_repo,
+                        "branch": git_info.get("branch") or "",
+                    }, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
             return
 
         if root.exists():
@@ -541,8 +604,9 @@ class SandboxPreviewService:
         else:
             raise RuntimeError("前端项目没有 dev/serve/start/preview 启动脚本")
 
+        script_command = str(scripts.get(script, ""))
         args = ["npm", "run", script, "--", "--host", settings.pipeline_preview_host, "--port", str(port)]
-        if (root / "vite.config.js").exists() or "vite" in str(scripts.get(script, "")):
+        if (root / "vite.config.js").exists() or "vite" in script_command:
             args.extend(["--strictPort", "--base", f"/api/flow/pipeline/{root.parent.name}/sandbox-preview/"])
         return args
 
@@ -554,7 +618,7 @@ class SandboxPreviewService:
         if not vue_config.exists():
             return
 
-        marker = "SANDBOX_PREVIEW_PUBLIC_PATH_PATCH"
+        marker = "SANDBOX_PREVIEW_PUBLIC_PATH_PATCH_V4"
         content = vue_config.read_text(encoding="utf-8")
         if marker in content:
             return
@@ -562,7 +626,7 @@ class SandboxPreviewService:
         vue_config.write_text(
             content.rstrip()
             + "\n\n"
-            + "// SANDBOX_PREVIEW_PUBLIC_PATH_PATCH\n"
+            + "// SANDBOX_PREVIEW_PUBLIC_PATH_PATCH_V4\n"
             + "if (process.env.VUE_APP_SANDBOX_PREVIEW_BASE) {\n"
             + "  vueConfig.publicPath = process.env.VUE_APP_SANDBOX_PREVIEW_BASE\n"
             + "  vueConfig.configureWebpack = vueConfig.configureWebpack || {}\n"
@@ -571,7 +635,15 @@ class SandboxPreviewService:
             + "  vueConfig.devServer = vueConfig.devServer || {}\n"
             + "  vueConfig.devServer.public = process.env.VUE_APP_SANDBOX_PREVIEW_PUBLIC || 'localhost'\n"
             + "  vueConfig.devServer.sockPath = process.env.VUE_APP_SANDBOX_PREVIEW_BASE + 'sockjs-node'\n"
+            + "  if (vueConfig.devServer.proxy) {\n"
+            + "    delete vueConfig.devServer.proxy['sockjs-node']\n"
+            + "    delete vueConfig.devServer.proxy['/sockjs-node']\n"
+            + "    if (vueConfig.devServer.proxy['/api']) {\n"
+            + "      delete vueConfig.devServer.proxy['/api'].pathRewrite\n"
+            + "    }\n"
+            + "  }\n"
             + "  vueConfig.devServer.disableHostCheck = true\n"
+            + "  vueConfig.devServer.historyApiFallback = vueConfig.devServer.historyApiFallback || { disableDotRule: true }\n"
             + "  vueConfig.devServer.hot = false\n"
             + "  vueConfig.devServer.liveReload = false\n"
             + "  vueConfig.devServer.inline = false\n"
@@ -586,111 +658,54 @@ class SandboxPreviewService:
             encoding="utf-8",
         )
 
-    def _patch_vue2_sandbox_preview_entry(self, root: Path, frontend_files: Dict[str, str]) -> None:
-        pages = self._generated_vue_views(frontend_files)
-        router_config = root / "src" / "config" / "router.config.js"
-        permission_file = root / "src" / "permission.js"
-        if not pages or not router_config.exists() or not permission_file.exists():
+    def _patch_vue_cli_service_no_hmr(self, root: Path) -> None:
+        serve_js = root / "node_modules" / "@vue" / "cli-service" / "lib" / "commands" / "serve.js"
+        if not serve_js.exists():
             return
 
-        layout_dir = root / "src" / "views" / "SandboxPreview"
-        layout_dir.mkdir(parents=True, exist_ok=True)
-        layout_dir.joinpath("SandboxPreviewLayout.vue").write_text(
-            "<template>\n"
-            "  <a-layout class=\"sandbox-preview-layout\">\n"
-            "    <a-layout-sider width=\"220\" theme=\"light\" class=\"sandbox-preview-sider\">\n"
-            "      <div class=\"sandbox-preview-title\">生成页面</div>\n"
-            "      <a-menu mode=\"inline\" :selectedKeys=\"[selectedKey]\">\n"
-            "        <a-menu-item v-for=\"item in pages\" :key=\"item.path\" @click=\"go(item.path)\">\n"
-            "          {{ item.title }}\n"
-            "        </a-menu-item>\n"
-            "      </a-menu>\n"
-            "    </a-layout-sider>\n"
-            "    <a-layout-content class=\"sandbox-preview-content\">\n"
-            "      <router-view />\n"
-            "    </a-layout-content>\n"
-            "  </a-layout>\n"
-            "</template>\n"
-            "<script>\n"
-            f"const pages = {json.dumps([{'title': page['title'], 'path': '/sandbox-generated-preview/' + page['route']} for page in pages], ensure_ascii=False)}\n"
-            "export default {\n"
-            "  name: 'SandboxPreviewLayout',\n"
-            "  data () { return { pages } },\n"
-            "  computed: {\n"
-            "    selectedKey () {\n"
-            "      const active = this.pages.find(item => this.$route.path === item.path)\n"
-            "      return active ? active.path : this.pages[0].path\n"
-            "    }\n"
-            "  },\n"
-            "  methods: {\n"
-            "    go (path) { if (this.$route.path !== path) this.$router.push(path) }\n"
-            "  }\n"
-            "}\n"
-            "</script>\n"
-            "<style scoped>\n"
-            ".sandbox-preview-layout { min-height: 100vh; background: #f0f2f5; }\n"
-            ".sandbox-preview-sider { border-right: 1px solid #e8e8e8; }\n"
-            ".sandbox-preview-title { height: 48px; line-height: 48px; padding: 0 16px; font-weight: 600; color: #1f2329; }\n"
-            ".sandbox-preview-content { padding: 16px; overflow: auto; }\n"
-            "</style>\n",
-            encoding="utf-8",
-        )
-
-        route_marker = "SANDBOX_PREVIEW_ROUTE_PATCH"
-        router_content = router_config.read_text(encoding="utf-8")
-        if route_marker not in router_content:
-            children = []
-            for page in pages:
-                children.append(
-                    "      {\n"
-                    f"        path: '{page['route']}',\n"
-                    f"        name: 'SandboxGenerated{page['name']}',\n"
-                    f"        component: () => import(/* webpackChunkName: \"sandbox-preview\" */ '@/views/{page['component_path']}'),\n"
-                    f"        meta: {{ title: {json.dumps(page['title'], ensure_ascii=False)}, keepAlive: false }}\n"
-                    "      }"
-                )
-            route_block = (
-                "  // SANDBOX_PREVIEW_ROUTE_PATCH\n"
-                "  {\n"
-                "    path: '/sandbox-generated-preview',\n"
-                "    name: 'SandboxGeneratedPreview',\n"
-                "    component: () => import(/* webpackChunkName: \"sandbox-preview\" */ '@/views/SandboxPreview/SandboxPreviewLayout'),\n"
-                f"    redirect: '/sandbox-generated-preview/{pages[0]['route']}',\n"
-                "    meta: { title: '预览页面', keepAlive: false },\n"
-                "    children: [\n"
-                + ",\n".join(children)
-                + "\n"
-                "    ]\n"
-                "  },\n"
-            )
-            anchor = "export const constantRouterMap = ["
-            if anchor in router_content:
-                router_content = router_content.replace(anchor, anchor + "\n" + route_block, 1)
-                router_config.write_text(router_content, encoding="utf-8")
-
-        permission_marker = "SANDBOX_PREVIEW_AUTH_PATCH"
-        permission_content = permission_file.read_text(encoding="utf-8")
-        if permission_marker in permission_content:
+        marker = "SANDBOX_PREVIEW_DISABLE_WDS_CLIENT_PATCH"
+        content = serve_js.read_text(encoding="utf-8")
+        if marker in content:
             return
 
-        guard_anchor = "router.beforeEach(async (to, from, next) => {"
-        guard_patch = (
-            "router.beforeEach(async (to, from, next) => {\n"
-            "  // SANDBOX_PREVIEW_AUTH_PATCH\n"
-            "  if (process.env.VUE_APP_SANDBOX_PREVIEW_BASE) {\n"
-            "    if (to.path === '/' || to.path === '/user/login') {\n"
-            "      next({ path: '/sandbox-generated-preview', replace: true })\n"
-            "      return\n"
-            "    }\n"
-            "    if (to.path === '/sandbox-generated-preview' || to.path.indexOf('/sandbox-generated-preview/') === 0) {\n"
-            "      next()\n"
-            "      return\n"
-            "    }\n"
-            "  }\n"
+        patched = content.replace(
+            "// inject dev & hot-reload middleware entries\n    if (!isProduction) {",
+            "// SANDBOX_PREVIEW_DISABLE_WDS_CLIENT_PATCH\n"
+            "    // inject dev & hot-reload middleware entries\n"
+            "    if (!isProduction && !process.env.VUE_APP_SANDBOX_PREVIEW_DISABLE_WDS_CLIENT) {",
+            1,
         )
-        if guard_anchor in permission_content:
-            permission_content = permission_content.replace(guard_anchor, guard_patch, 1)
-            permission_file.write_text(permission_content, encoding="utf-8")
+        if patched == content:
+            logger.warning("Failed to patch Vue CLI dev client injection in %s", serve_js)
+            return
+        serve_js.write_text(patched, encoding="utf-8")
+
+    def _api_base_url_for_preview(self, root: Path, project_env: Dict[str, str], pipeline_id: str) -> str:
+        configured = project_env.get("VUE_APP_API_BASE_URL") or ""
+        if configured.rstrip("/") != "/api":
+            return configured
+
+        api_dir = root / "src" / "api"
+        if not api_dir.exists():
+            return configured
+        for api_file in api_dir.rglob("*.js"):
+            try:
+                content = api_file.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            if re.search(r"['\"]\/api\/", content):
+                return self._preview_base(pipeline_id).rstrip("/")
+        return configured
+
+    def _preview_proxy_targets(self, project_env: Dict[str, str]) -> Dict[str, str]:
+        test_proxy = (settings.pipeline_preview_api_proxy or project_env.get("VUE_APP_PROXY") or "").rstrip("/")
+        if not test_proxy:
+            raise RuntimeError("前端项目缺少 VUE_APP_PROXY，且系统未配置 PIPELINE_PREVIEW_API_PROXY，无法确定真实 API 测试域名")
+        return {
+            "api": test_proxy,
+            "java": project_env.get("VUE_APP_JAVA_PROXY") or test_proxy,
+            "log": project_env.get("VUE_APP_PROXY_LOG") or test_proxy,
+        }
 
     async def start(self, pipeline_id: str, frontend_files: Dict[str, str], project_info: Dict[str, Any]) -> Dict[str, Any]:
         if not frontend_files:
@@ -729,7 +744,6 @@ class SandboxPreviewService:
                     self._safe_write_files(root, frontend_files)
                     html_preview_path = self._install_miniapp_html_preview(root, frontend_files)
                     self._patch_vue_cli_preview_base(root)
-                    self._patch_vue2_sandbox_preview_entry(root, frontend_files)
 
                     port = await self._allocate_port()
                     node_version = await self._node_version()
@@ -755,24 +769,20 @@ class SandboxPreviewService:
                             raise RuntimeError(f"npm install 失败: {output[-500:]}")
                         node_marker.write_text(node_version, encoding="utf-8")
 
+                    self._patch_vue_cli_service_no_hmr(root)
                     dev_cmd = self._dev_command(root, port)
                     env = os.environ.copy()
                     project_env = self._load_env_file(root, ".env.development")
-                    test_proxy = (
-                        env.get("VUE_APP_SANDBOX_TEST_PROXY")
-                        or project_env.get("VUE_APP_PROXY")
-                        or project_env.get("VUE_APP_SOCKET_HOST")
-                        or "http://dzg-dev_wma.gemantic.com"
-                    )
-                    java_proxy = env.get("VUE_APP_SANDBOX_TEST_JAVA_PROXY") or project_env.get("VUE_APP_JAVA_PROXY") or test_proxy
-                    log_proxy = env.get("VUE_APP_SANDBOX_TEST_LOG_PROXY") or project_env.get("VUE_APP_PROXY_LOG") or test_proxy
+                    proxy_targets = self._preview_proxy_targets(project_env)
+                    api_base_url = self._api_base_url_for_preview(root, project_env, pipeline_id)
                     env.update({
-                        "VUE_APP_PROXY": test_proxy,
-                        "VUE_APP_JAVA_PROXY": java_proxy,
-                        "VUE_APP_PROXY_LOG": log_proxy,
-                        "VUE_APP_API_BASE_URL": self._preview_base(pipeline_id).rstrip("/") + "/api",
+                        "VUE_APP_PROXY": proxy_targets["api"],
+                        "VUE_APP_JAVA_PROXY": proxy_targets["java"],
+                        "VUE_APP_PROXY_LOG": proxy_targets["log"],
+                        "VUE_APP_API_BASE_URL": api_base_url,
                         "VUE_APP_SANDBOX_PREVIEW_BASE": self._preview_base(pipeline_id),
                         "VUE_APP_SANDBOX_PREVIEW_PUBLIC": env.get("VUE_APP_SANDBOX_PREVIEW_PUBLIC") or "localhost",
+                        "VUE_APP_SANDBOX_PREVIEW_DISABLE_WDS_CLIENT": "1",
                     })
                     process = await asyncio.create_subprocess_exec(
                         *dev_cmd,
@@ -789,6 +799,8 @@ class SandboxPreviewService:
                         "files_hash": files_hash,
                         "tokens": {},
                         "html_preview_path": html_preview_path or "",
+                        "project_info": project_info,
+                        "proxy_targets": proxy_targets,
                     }
                     self._issue_token(entry)
                     entry["output_task"] = asyncio.create_task(self._drain_process_output(pipeline_id, process))
@@ -803,7 +815,6 @@ class SandboxPreviewService:
 
             try:
                 await self._wait_ready(pipeline_id, port, preview_path=entry.get("html_preview_path") or "")
-                await self._smoke_test_generated_apis(pipeline_id, frontend_files)
             except Exception:
                 if entry["process"].returncode is None:
                     entry["process"].terminate()
@@ -815,6 +826,14 @@ class SandboxPreviewService:
             return self._response(pipeline_id, entry)
 
     def _response(self, pipeline_id: str, entry: Dict[str, Any]) -> Dict[str, Any]:
+        project_info = entry.get("project_info") or {}
+        marker_info: Dict[str, Any] = {}
+        marker = Path(str(entry.get("root") or "")) / ".sandbox-preview-project.json"
+        if marker.exists():
+            try:
+                marker_info = json.loads(marker.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                marker_info = {}
         return {
             "pipeline_id": pipeline_id,
             "status": "running",
@@ -823,6 +842,13 @@ class SandboxPreviewService:
             "preview_url": self._preview_base(pipeline_id),
             "preview_token": entry["token"],
             "started_at": entry["started_at"],
+            "project": {
+                "project_id": project_info.get("project_id") or marker_info.get("project_id") or "",
+                "project_name": project_info.get("project_name") or marker_info.get("project_name") or "",
+                "repo_url": project_info.get("repo_url") or marker_info.get("repo_url") or "",
+                "branch": project_info.get("branch") or project_info.get("git_branch") or marker_info.get("branch") or "",
+            },
+            "proxy_targets": entry.get("proxy_targets") or {},
         }
 
     def validate_token(self, pipeline_id: str, token: str) -> bool:
@@ -836,191 +862,6 @@ class SandboxPreviewService:
         entry = self._processes.get(pipeline_id)
         return bool(entry and entry["process"].returncode is None)
 
-    def _mock_marketing_response(self, path: str, query_string: str) -> Optional[httpx.Response]:
-        if not path.startswith("api/marketing/"):
-            return None
-
-        params = dict(item.split("=", 1) for item in query_string.split("&") if "=" in item)
-        page = int(params.get("p") or params.get("pageNo") or params.get("page") or 1)
-        page_size = int(params.get("pageSize") or params.get("page_size") or 10)
-
-        if path == "api/marketing/flash-sale/list":
-            items = [
-                {
-                    "id": 10001,
-                    "activityName": "夏季会员秒杀",
-                    "status": 1,
-                    "timeRange": "2026-05-28 10:00 - 2026-05-31 22:00",
-                    "skuCount": 12,
-                    "stockInfo": "326/1000",
-                    "creatorName": "运营部",
-                },
-                {
-                    "id": 10002,
-                    "activityName": "周末限时特惠",
-                    "status": 0,
-                    "timeRange": "2026-06-01 09:00 - 2026-06-03 23:00",
-                    "skuCount": 8,
-                    "stockInfo": "0/600",
-                    "creatorName": "市场部",
-                },
-            ]
-        elif path == "api/marketing/group-buying/list":
-            items = [
-                {
-                    "id": 20001,
-                    "activityName": "亲子酒店拼团",
-                    "status": 1,
-                    "timeRange": "2026-05-28 08:00 - 2026-06-05 23:59",
-                    "groupSize": 3,
-                    "groupInfo": "42/31",
-                    "creatorName": "增长运营",
-                },
-                {
-                    "id": 20002,
-                    "activityName": "端午套餐拼团",
-                    "status": 0,
-                    "timeRange": "2026-06-02 08:00 - 2026-06-10 23:59",
-                    "groupSize": 5,
-                    "groupInfo": "0/0",
-                    "creatorName": "市场部",
-                },
-            ]
-        elif path == "api/marketing/group-buying/record/list":
-            items = [
-                {
-                    "id": 30001,
-                    "activityName": "亲子酒店拼团",
-                    "leaderName": "张女士",
-                    "groupProgress": "3/3",
-                    "status": 1,
-                    "createTime": "2026-05-28 09:32:18",
-                },
-                {
-                    "id": 30002,
-                    "activityName": "亲子酒店拼团",
-                    "leaderName": "李先生",
-                    "groupProgress": "2/3",
-                    "status": 0,
-                    "createTime": "2026-05-28 10:11:06",
-                },
-            ]
-        elif path.startswith("api/marketing/group-buying/record/detail/"):
-            items = []
-            payload = {
-                "activityName": "亲子酒店拼团",
-                "leaderName": "张女士",
-                "groupSize": 3,
-                "currentSize": 3,
-                "status": 1,
-                "createTime": "2026-05-28 09:32:18",
-                "endTime": "2026-05-28 12:20:03",
-                "members": [
-                    {"userId": 1, "nickName": "张女士", "joinTime": "2026-05-28 09:32:18", "statusText": "已参团"},
-                    {"userId": 2, "nickName": "王同学", "joinTime": "2026-05-28 10:01:44", "statusText": "已参团"},
-                    {"userId": 3, "nickName": "陈先生", "joinTime": "2026-05-28 12:20:03", "statusText": "已参团"},
-                ],
-            }
-            body = {"code": 200, "message": "sandbox mock", "data": payload}
-            return httpx.Response(200, headers={"content-type": "application/json"}, content=json.dumps(body, ensure_ascii=False).encode("utf-8"))
-        else:
-            return None
-
-        payload = {
-            "page": page,
-            "pageNo": page,
-            "pageSize": page_size,
-            "count": len(items),
-            "totalCount": len(items),
-            "list": items,
-        }
-        body = {"code": 200, "message": "sandbox mock", "data": payload}
-        return httpx.Response(200, headers={"content-type": "application/json"}, content=json.dumps(body, ensure_ascii=False).encode("utf-8"))
-
-    def _table_payload(self, value: Any, fallback: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
-        fallback = fallback or {}
-        if isinstance(value, list):
-            items = value
-            source = fallback
-        elif isinstance(value, dict):
-            if isinstance(value.get("list"), list):
-                items = value["list"]
-            elif isinstance(value.get("data"), list):
-                items = value["data"]
-            elif isinstance(value.get("records"), list):
-                items = value["records"]
-            elif isinstance(value.get("rows"), list):
-                items = value["rows"]
-            else:
-                return None
-            source = {**fallback, **value}
-        else:
-            return None
-
-        page = source.get("page") or source.get("pageNo") or source.get("current") or source.get("currentPage") or 1
-        page_size = source.get("pageSize") or source.get("page_size") or source.get("size") or len(items)
-        total_count = (
-            source.get("count")
-            if source.get("count") is not None
-            else source.get("totalCount")
-            if source.get("totalCount") is not None
-            else source.get("total")
-            if source.get("total") is not None
-            else len(items)
-        )
-        return {
-            **source,
-            "data": items,
-            "list": items,
-            "page": page,
-            "pageNo": source.get("pageNo") or page,
-            "pageSize": page_size,
-            "count": total_count,
-            "totalCount": source.get("totalCount") if source.get("totalCount") is not None else total_count,
-        }
-
-    def _normalize_api_response(self, path: str, response: httpx.Response) -> httpx.Response:
-        if not path.startswith("api/"):
-            return response
-        content_type = response.headers.get("content-type", "")
-        if "application/json" not in content_type or response.status_code >= 400:
-            return response
-        try:
-            payload = response.json()
-        except ValueError:
-            return response
-        if not isinstance(payload, dict):
-            return response
-
-        table_payload = None
-        if "result" in payload:
-            table_payload = self._table_payload(payload.get("result"), payload)
-        if table_payload is None and "data" in payload:
-            table_payload = self._table_payload(payload.get("data"), payload)
-        if table_payload is None:
-            table_payload = self._table_payload(payload)
-        if table_payload is None:
-            return response
-
-        normalized = dict(payload)
-        normalized["result"] = {**table_payload, **(payload.get("result") if isinstance(payload.get("result"), dict) else {})}
-        if isinstance(normalized.get("data"), dict):
-            normalized["data"] = {**normalized["result"], **normalized["data"]}
-        elif isinstance(normalized.get("data"), list):
-            normalized["data"] = normalized["result"]
-
-        headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
-        try:
-            request = response.request
-        except RuntimeError:
-            request = None
-        return httpx.Response(
-            status_code=response.status_code,
-            headers=headers,
-            content=json.dumps(normalized, ensure_ascii=False).encode("utf-8"),
-            request=request,
-        )
-
     async def proxy(
         self,
         pipeline_id: str,
@@ -1033,10 +874,11 @@ class SandboxPreviewService:
         entry = self._processes.get(pipeline_id)
         if not entry or entry["process"].returncode is not None:
             raise RuntimeError("真实预览服务未启动")
-        mock_response = self._mock_marketing_response(path, query_string)
-        if mock_response is not None:
-            return mock_response
-        if path.startswith(("api/", "javaApi/", "logApi/", "socket.io/")):
+        if path.startswith("sockjs-node/"):
+            target = f"http://{settings.pipeline_preview_host}:{entry['port']}{self._preview_base(pipeline_id)}{path}"
+        elif path.startswith("__webpack_dev_server__/"):
+            target = f"http://{settings.pipeline_preview_host}:{entry['port']}/{path}"
+        elif path.startswith(("api/", "javaApi/", "logApi/", "socket.io/")):
             target = f"http://{settings.pipeline_preview_host}:{entry['port']}/{path}"
         else:
             preview_path = entry.get("html_preview_path") if not path else ""
@@ -1046,7 +888,6 @@ class SandboxPreviewService:
         headers = {k: v for k, v in request_headers.items() if k.lower() not in {"host", "connection", "content-length"}}
         async with httpx.AsyncClient(follow_redirects=False, timeout=30.0) as client:
             response = await client.request(method, target, headers=headers, content=body)
-        response = self._normalize_api_response(path, response)
         content_type = response.headers.get("content-type", "")
         if "text/html" in content_type:
             prefix = f"/api/flow/pipeline/{pipeline_id}/sandbox-preview/"

@@ -49,6 +49,7 @@ services:
       - REDIS_URL=redis://redis:6379/5
       - JWT_SECRET=admin-platform-jwt-secret-key-2026-dev-only
       - DEBUG=false
+      - PIPELINE_PREVIEW_API_PROXY=https://malladmin-jdagent.hctest.tech
     depends_on:
       - postgres
       - redis

@@ -818,8 +818,11 @@ def _validate_frontend_preview_code_files(files: Dict[str, str]) -> List[str]:
             if "<s-table" in content.lower():
                 if "loadData" not in content:
                     issues.append(f"{safe_path} 使用 STable 但没有定义 loadData")
-                if "list" not in content:
+                if not re.search(r"\blist\s*:", content) and not re.search(r"\blist\b", content):
                     issues.append(f"{safe_path} 使用 STable 时必须处理分页对象 list 字段")
+                for required in ("page", "count"):
+                    if not re.search(rf"\b{required}\s*:", content):
+                        issues.append(f"{safe_path} 使用 STable 时必须处理分页字段 {required}")
                 if re.search(r"return\s+res\.data\s*(?:[;\n}]|$)", content):
                     issues.append(f"{safe_path} 的 loadData 不能只返回 res.data，必须返回含 list/page/count 的分页对象")
             for handler in re.findall(r"@(?:click|change|blur|submit|confirm|pressEnter)=\"([A-Za-z_$][\w$]*)", content):
@@ -2941,6 +2944,15 @@ class DevPipelineManager:
                 "pipeline_mode": pipe_config.get("pipeline_mode", "full"),
             })
             return artifact
+
+    async def get_pipeline_frontend_project_snapshot(self, pipeline_id: str) -> Dict[str, Any]:
+        async with async_session_maker() as session:
+            pipe = await self._load_pipeline(session, pipeline_id)
+            pipe_config = json.loads(pipe.skill_config or "{}")
+            snapshot = pipe_config.get("project_skill_snapshot") or {}
+            if not snapshot:
+                return {}
+            return dict(snapshot)
 
     async def get_stage_output(self, pipeline_id: str, stage: str = "") -> Dict[str, Any]:
         async with async_session_maker() as session:

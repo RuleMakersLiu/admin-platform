@@ -131,6 +131,17 @@ func isSandboxPreviewAssetRequest(path, method string) bool {
 	if method == "GET" {
 		return true
 	}
+	runtimePrefixes := []string{
+		"/sandbox-preview/api/",
+		"/sandbox-preview/javaApi/",
+		"/sandbox-preview/logApi/",
+		"/sandbox-preview/socket.io/",
+	}
+	for _, prefix := range runtimePrefixes {
+		if strings.Contains(path, prefix) {
+			return true
+		}
+	}
 	return (method == "POST" || method == "OPTIONS") && strings.Contains(path, "/sandbox-preview/sockjs-node/")
 }
 
