@@ -30,7 +30,25 @@ const stageLabel: Record<string, string> = {
 const stageOrder = ['requirement', 'page_design', 'prototype', 'delivery', 'code_review', 'report']
 const LAST_PRODUCT_PIPELINE_ID = 'lastProductPipelineId'
 
-const formatMatchSource = (source: string) => (source === 'llm' ? '大模型分析' : '规则兜底')
+const formatMatchSource = (source: string) => {
+  const sourceLabels: Record<string, string> = {
+    llm: '大模型分析',
+    rule: '规则匹配',
+    backend_role_rule: '后端角色匹配',
+    backend_project_group: '后端项目组',
+  }
+  return sourceLabels[source] || '项目规则匹配'
+}
+
+const getMatchSourceColor = (source: string) => {
+  const sourceColors: Record<string, string> = {
+    llm: 'blue',
+    rule: 'gold',
+    backend_role_rule: 'cyan',
+    backend_project_group: 'purple',
+  }
+  return sourceColors[source] || 'geekblue'
+}
 
 export default function ProductPortal() {
   const { user } = useAuthStore()
@@ -448,7 +466,7 @@ export default function ProductPortal() {
                     前端：{matchedSkill.skill.project_name || matchedSkill.skill.project_id} · {' '}
                     {matchedSkill.skill.language || 'unknown'} / {matchedSkill.skill.framework || 'unknown'}
                     <Tag style={{ marginLeft: 8 }}>v{matchedSkill.skill.skill_version}</Tag>
-                    <Tag color={matchedSkill.match_source === 'llm' ? 'blue' : 'gold'}>{formatMatchSource(matchedSkill.match_source)}</Tag>
+                    <Tag color={getMatchSourceColor(matchedSkill.match_source)}>{formatMatchSource(matchedSkill.match_source)}</Tag>
                     <Tag color="green">{Math.round(matchedSkill.confidence * 100)}%</Tag>
                   </Text>
                   <Text>{matchedSkill.match_reason}</Text>
@@ -458,7 +476,7 @@ export default function ProductPortal() {
                         后端：{backendMatch.skill.project_name || backendMatch.skill.project_id} · {' '}
                         {backendMatch.skill.language || 'unknown'} / {backendMatch.skill.framework || 'unknown'}
                         <Tag style={{ marginLeft: 8 }}>v{backendMatch.skill.skill_version}</Tag>
-                        <Tag color={backendMatch.match_source === 'llm' ? 'blue' : 'gold'}>{formatMatchSource(backendMatch.match_source)}</Tag>
+                        <Tag color={getMatchSourceColor(backendMatch.match_source)}>{formatMatchSource(backendMatch.match_source)}</Tag>
                         <Tag color="green">{Math.round(backendMatch.confidence * 100)}%</Tag>
                       </Text>
                       <Text>{backendMatch.match_reason}</Text>

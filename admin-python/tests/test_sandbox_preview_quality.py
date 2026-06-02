@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from app.ai.flow_manager import _validate_frontend_preview_code_files
+from app.ai.flow_manager import _auto_fix_frontend_preview_code_files, _validate_frontend_preview_code_files
 from app.services.sandbox_preview_service import SandboxPreviewService
 
 
@@ -104,6 +104,54 @@ export default {
     assert "list," in patched
 
 
+def test_preview_auto_fix_repairs_stable_missing_page_and_count_fields():
+    files = {
+        "src/views/Product/RetailList.vue": """
+<template><s-table :data="loadData" /></template>
+<script>
+export default {
+  data () {
+    return {
+      loadData: parameter => getRetailList(parameter).then(res => {
+        const result = res.result || res.data || res
+        return {
+          pageNo: result.pageNo || result.page || 1,
+          pageSize: result.pageSize || 10,
+          totalCount: result.totalCount || result.count || 0,
+          list: Array.isArray(result.list) ? result.list : []
+        }
+      })
+    }
+  }
+}
+</script>
+""",
+        "src/api/product.js": """
+import request from '@/utils/request'
+export function getRetailList (parameter) {
+  return request({ url: '/product/retail/list', method: 'get', params: parameter })
+}
+if (process.env.NODE_ENV === 'development') {
+  const Mock = require('mockjs2')
+  Mock.mock(/\\/product\\/retail\\/list/, 'get', () => ({
+    code: 200,
+    result: { page: 1, pageNo: 1, pageSize: 10, count: 1, totalCount: 1, list: [] }
+  }))
+}
+""",
+    }
+
+    assert any("分页字段 page" in issue for issue in _validate_frontend_preview_code_files(files))
+    assert any("分页字段 count" in issue for issue in _validate_frontend_preview_code_files(files))
+
+    fixed, fixes = _auto_fix_frontend_preview_code_files(files)
+
+    assert fixes
+    assert "page: pageNo" in fixed["src/views/Product/RetailList.vue"]
+    assert "count: totalCount" in fixed["src/views/Product/RetailList.vue"]
+    assert _validate_frontend_preview_code_files(fixed) == []
+
+
 def test_preview_validator_accepts_stable_with_consistent_list_contract():
     files = {
         "src/views/Product/RetailList.vue": """
@@ -141,6 +189,82 @@ if (process.env.NODE_ENV === 'development') {
     }
 
     assert _validate_frontend_preview_code_files(files) == []
+
+
+def test_preview_validator_does_not_flag_api_module_array_helpers_as_first_screen_risk():
+    files = {
+        "src/views/Product/RetailList.vue": """
+<template><s-table :data="loadData" /></template>
+<script>
+import { list } from '@/api/product'
+export default {
+  data () {
+    return {
+      loadData: parameter => list(parameter).then(res => {
+        const payload = res.result || res.data || res
+        const rows = Array.isArray(payload.list) ? payload.list : []
+        return { page: 1, pageNo: 1, pageSize: 10, count: rows.length, totalCount: rows.length, list: rows }
+      })
+    }
+  }
+}
+</script>
+""",
+        "src/api/product.js": """
+import request from '@/utils/request'
+export function list (parameter = {}) {
+  const pairs = Object.keys(parameter).filter(key => parameter[key] !== '').map(key => [key, parameter[key]])
+  return request({ url: '/product/retail/list', method: 'get', params: Object.fromEntries(pairs) })
+}
+if (process.env.NODE_ENV === 'development') {
+  const Mock = require('mockjs2')
+  Mock.mock(/\\/product\\/retail\\/list/, 'get', () => ({
+    code: 200,
+    result: { page: 1, pageNo: 1, pageSize: 10, count: 1, totalCount: 1, list: [] }
+  }))
+}
+""",
+    }
+
+    assert _validate_frontend_preview_code_files(files) == []
+
+
+def test_preview_validator_still_flags_page_array_reads_without_guard():
+    files = {
+        "src/views/Product/RetailList.vue": """
+<template><div>{{ rows.length }}</div></template>
+<script>
+export default {
+  data () {
+    return { rows: null }
+  },
+  computed: {
+    names () { return this.rows.map(item => item.name) }
+  }
+}
+</script>
+""",
+    }
+
+    assert any("访问数组前缺少默认空数组兜底" in issue for issue in _validate_frontend_preview_code_files(files))
+
+
+def test_preview_validator_rejects_standalone_demo_preview_files():
+    files = {
+        "src/views/SandboxPreview/GeneratedPage.vue": """
+<template><div>独立演示页面</div></template>
+<script>
+export default { name: 'StandalonePreview' }
+</script>
+""",
+        "package.json": '{"scripts":{"dev":"vite"}}',
+    }
+
+    issues = _validate_frontend_preview_code_files(files)
+
+    assert any("独立 demo/preview 页面" in issue for issue in issues)
+    assert any("独立应用入口文件" in issue for issue in issues)
+    assert any("独立预览组件命名" in issue for issue in issues)
 
 
 def test_preview_validator_accepts_detail_page_without_table_contract():

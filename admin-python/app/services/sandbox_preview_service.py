@@ -119,58 +119,9 @@ class SandboxPreviewService:
         return patched
 
     def _patch_stable_contract(self, content: str) -> str:
-        if "<s-table" not in content.lower():
-            return content
+        from app.ai.flow_manager import _patch_stable_table_contract_content
 
-        list_expr = (
-            "Array.isArray(result.list)\n"
-            "          ? result.list\n"
-            "          : (Array.isArray(result.data) ? result.data : [])"
-        )
-        replacement = (
-            "const list = " + list_expr + "\n"
-            "        const pageNo = Number(result.page || result.pageNo || 1)\n"
-            "        const pageSize = Number(result.pageSize || 10)\n"
-            "        const totalCount = Number(result.count || result.totalCount || list.length)\n"
-            "        return {\n"
-            "          page: pageNo,\n"
-            "          pageNo,\n"
-            "          pageSize,\n"
-            "          count: totalCount,\n"
-            "          totalCount,\n"
-            "          totalPage: result.totalPage || Math.ceil(totalCount / pageSize),\n"
-            "          list,\n"
-            "          data: list\n"
-            "        }"
-        )
-
-        patterns = [
-            r"return\s*\{\s*"
-            r"pageNo\s*:\s*result\.pageNo\s*\|\|\s*result\.page\s*\|\|\s*1\s*,\s*"
-            r"pageSize\s*:\s*result\.pageSize\s*\|\|\s*10\s*,\s*"
-            r"totalCount\s*:\s*result\.totalCount\s*\|\|\s*result\.count\s*\|\|\s*0\s*,\s*"
-            r"totalPage\s*:\s*result\.totalPage\s*\|\|\s*Math\.ceil\(\(result\.totalCount\s*\|\|\s*0\)\s*/\s*\(result\.pageSize\s*\|\|\s*10\)\)\s*,\s*"
-            r"data\s*:\s*Array\.isArray\(result\.(?:list|data)\)\s*\?\s*result\.(?:list|data)\s*:\s*\[\]\s*"
-            r"\}",
-            r"return\s*\{\s*"
-            r"pageNo\s*:\s*result\.pageNo\s*\|\|\s*1\s*,\s*"
-            r"pageSize\s*:\s*result\.pageSize\s*\|\|\s*10\s*,\s*"
-            r"totalCount\s*:\s*result\.totalCount\s*\|\|\s*0\s*,\s*"
-            r"data\s*:\s*Array\.isArray\(result\.(?:list|data)\)\s*\?\s*result\.(?:list|data)\s*:\s*\[\]\s*"
-            r"\}",
-            r"return\s*\{\s*"
-            r"pageNo\s*:\s*result\.pageNo\s*\|\|\s*result\.page\s*\|\|\s*1\s*,\s*"
-            r"pageSize\s*:\s*result\.pageSize\s*\|\|\s*10\s*,\s*"
-            r"totalCount\s*:\s*result\.totalCount\s*\|\|\s*result\.count\s*\|\|\s*0\s*,\s*"
-            r"count\s*:\s*result\.totalCount\s*\|\|\s*result\.count\s*\|\|\s*0\s*,\s*"
-            r"list\s*:\s*Array\.isArray\(result\.list\s*\|\|\s*result\.data\)\s*\?\s*\(result\.list\s*\|\|\s*result\.data\)\s*:\s*\[\]\s*"
-            r"\}",
-        ]
-        patched = content
-        for pattern in patterns:
-            patched = re.sub(pattern, replacement, patched, flags=re.S)
-
-        return patched
+        return _patch_stable_table_contract_content(content)
 
     def _files_hash(self, frontend_files: Dict[str, str]) -> str:
         payload = json.dumps(frontend_files, ensure_ascii=False, sort_keys=True)

@@ -189,8 +189,21 @@ def _knowledge_to_project_skill_dict(project_skill: ProjectKnowledge) -> Dict[st
     }
 
 
+PIPELINE_GLOBAL_PROMPT_CONTRACT = """
+
+## 全局执行契约（所有阶段必须遵守）
+1. 事实边界：只能基于用户需求、已匹配 Project Skill、项目代码参考、上游阶段产物和明确修复反馈推理；不确定的信息必须写入“假设/待确认”，禁止伪造接口、字段、组件、权限或外部事实。
+2. 范围边界：只处理当前阶段职责，不提前替代后续阶段，也不遗漏当前阶段必须交付的内容；如果当前阶段输出格式有特殊要求，以当前阶段“输出格式/输出要求”为最高优先级。
+3. 逻辑边界：每个结论都要能追溯到业务目标、页面行为、数据字段、权限策略或接口契约；前端字段、mock 字段、API 字段、后端字段必须保持同名同义同类型。
+4. 异常边界：必须覆盖空数据、加载中、无权限、接口失败、重复提交、并发操作、数据越权、输入非法、分页越界、状态流转非法等边界。
+5. 项目边界：优先复用匹配项目的目录结构、组件、API 封装、权限约定、响应模型和命名风格；不知道是否存在的组件/工具不要引用。
+6. 输出边界：不要寒暄，不要解释自己如何工作；不要输出与当前阶段无关的散文。Markdown 阶段直接输出文档；JSON 阶段必须输出可解析 JSON；代码阶段必须给完整文件内容。
+7. 自检要求：输出前检查是否满足当前阶段清单、是否存在字段不一致、是否遗漏权限/异常/验收标准、是否有不可执行或不可验证内容。
+"""
+
+
 DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
-    "requirement": """请根据以下用户需求，生成一份完整的需求文档(PRD)。
+    "requirement": """请根据以下用户需求，生成一份完整、可交付、可评审的需求文档(PRD)。
 
 用户需求:
 {{user_request}}
@@ -204,14 +217,23 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 ## 参考项目
 如果上方有「Confirmed Frontend Project Skill Snapshot」「Confirmed Backend/API Project Skill Snapshot」「前端项目代码参考」或「后端项目代码参考」，请同时结合前端和后端项目的现有架构、字段、组件、接口规范来撰写需求，保持与项目一致的技术风格。
 
-直接输出 Markdown 格式的 PRD 文档（不要用代码块包裹），不要写任何寒暄、开场白或解释，直接从标题开始。包含:
-1. 项目概述（必须分别写明前端参考项目和后端参考项目）
-2. 功能需求列表（含优先级 P0/P1/P2/P3）
-3. 用户故事
-4. 非功能需求
-5. 验收标准""",
+## PRD 输出边界
+- 只描述本需求相关范围；明确“不做范围”和“暂不支持范围”。
+- 不把技术实现细节写成业务事实；不确定内容进入“假设与待确认问题”。
+- 需求必须能被页面设计、API 契约和 QA 测试直接消费。
 
-    "page_design": """基于以下需求文档，进行详细的页面设计。
+直接输出 Markdown 格式的 PRD 文档（不要用代码块包裹），不要写任何寒暄、开场白或解释，直接从标题开始。必须包含:
+1. 项目概述：业务目标、目标用户、使用场景；必须分别写明前端参考项目和后端参考项目。
+2. 范围边界：本次做什么、不做什么、依赖什么、有哪些外部系统或上游数据。
+3. 功能需求列表：按 P0/P1/P2/P3 标注优先级，每项写清触发条件、输入、处理规则、输出结果。
+4. 用户故事与业务流程：主流程、异常流程、状态流转、失败重试和取消/回退。
+5. 数据对象与字段：字段名、类型、是否必填、默认值、枚举、校验、脱敏/审计要求。
+6. 权限与数据范围：角色、页面权限、按钮权限、API 权限、数据范围、越权处理。
+7. 非功能需求：性能、并发、可用性、安全、兼容性、可观测性。
+8. 验收标准：每条都必须可测试，覆盖正常路径、边界路径、权限路径和异常路径。
+9. 假设与待确认问题：列出需要产品/前后端/测试确认的事项。""",
+
+    "page_design": """基于以下需求文档，进行详细、边界清晰、可直接开发的页面设计。
 
 ## 已识别项目
 - 前端项目: {{frontend_project_name}}
@@ -222,15 +244,22 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 ## 需求文档
 {{requirement_output}}
 
-请直接输出 Markdown 格式的页面设计文档（不要用代码块包裹），包含:
-1. 页面列表及层级关系
-2. 每个页面的字段定义（字段名、类型、是否必填、校验规则）
-3. 每个页面的按钮和操作（新增、编辑、删除、导出等）
-4. 搜索/筛选条件
-5. 弹窗交互说明（新增弹窗、编辑弹窗、确认弹窗）
-6. 页面状态（空数据、加载中、无权限、搜索无结果、异常）
-7. 权限控制点（页面级权限 + 按钮/操作级权限）
-8. 开发确认要点（需要开发团队确认的技术问题）""",
+## 页面设计边界
+- 页面设计必须忠实承接 PRD，不新增无来源功能，不遗漏 P0/P1 功能。
+- 每个页面都要写清入口、路由、默认状态、退出/返回路径。
+- 所有字段必须与数据对象/API 契约候选保持一致；如果命名待定，显式标注待确认。
+
+请直接输出 Markdown 格式的页面设计文档（不要用代码块包裹），必须包含:
+1. 页面清单及层级关系：菜单入口、路由、默认落点、面包屑、跨页面跳转。
+2. 页面布局：区域划分、首屏信息优先级、表格/详情/表单/看板/配置页形态。
+3. 字段定义：字段名、展示名、类型、是否必填、默认值、枚举、校验规则、格式化方式。
+4. 查询与筛选：搜索项、默认筛选、重置逻辑、分页、排序、导出边界。
+5. 按钮和操作：新增、编辑、删除、批量、导入导出、启停、审批、回退等操作的启用条件和二次确认。
+6. 弹窗/抽屉/表单交互：打开来源、字段、校验、提交参数、成功/失败反馈、关闭策略。
+7. 页面状态矩阵：空数据、加载中、无权限、搜索无结果、接口异常、提交中、重复提交、脏数据确认。
+8. 权限控制点：菜单/页面/按钮/API/数据范围 permission key、展示策略、禁用/隐藏/无权限提示、审计点。
+9. API 契约草案：每个页面列出需要的接口、方法、参数、响应字段和错误场景。
+10. 开发确认要点：前端组件、后端接口、权限 key、字段命名、数据范围和性能边界。""",
 
     "prototype": """根据需求文档和页面设计，直接生成可写入匹配前端项目的前端预览代码。
 
@@ -248,18 +277,30 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 
 ## 重要：参考项目
 结合 Frontend Project Skill，优先复用现有项目的目录、组件库、路由、API 封装、权限判断、表格/表单模式和样式规范。不要展开解释。
+如果没有匹配到前端项目或 Project Skill 信息不足，不要生成独立 demo 页面，应该让本阶段失败并说明缺少匹配项目依据。
 
 ## 生成目标
 本阶段就是前端代码生成阶段，不再有后续单独的“前端开发”阶段。产物会直接覆盖到匹配前端项目的沙箱副本中，并通过该项目自己的 npm 脚本启动预览。
+你生成的是“对匹配前端项目的增量文件修改”，不是创建一个新项目、独立页面、独立演示系统或脱离项目的 demo。
+
+## 产品经理验收目标
+产品经理不关心代码结构细节，只关心一个结果：点击“启动真实前端预览”后，能打开一个与需求匹配、首屏不报错、按钮能点、列表/详情/表单状态完整的可用页面。
+如果需求可以落成多个页面，也优先交付 1 个最核心、最能验收业务价值的完整页面；不要为了覆盖过多页面导致每个页面都不可用。
 
 ## 实现要求
 1. 根据目标技术栈生成真实项目代码，不要再输出纯静态 HTML mock。
 2. 根据匹配项目的真实技术栈生成文件：Vue 后台通常生成 `src/views/**/*.vue` + `src/api/*.js`；React 后台通常生成 `src/pages/**/*.tsx|jsx` + service/api 文件；uni-app/小程序项目按项目现有 `pages/**`、`*.vue` 或 `*.wxml/*.js/*.json/*.wxss` 结构生成。不要把所有项目都当 Vue 后台。
+   - 文件路径必须像目标项目里的真实业务模块路径，优先沿用 Project Skill 或代码参考里的目录命名。
+   - 禁止生成 `Demo`、`Example`、`Standalone`、`SandboxPreview`、`PreviewOnly`、`MockPage`、`GeneratedPage` 这类独立演示路径或组件名。
+   - 禁止生成新的 `package.json`、`vite.config.*`、`main.*`、`App.*`、`index.html` 来伪造一个独立应用。
 3. 第一屏必须匹配需求页面类型：列表页要有搜索筛选、表格和批量/行操作；详情页要有分区详情、状态标签、返回/编辑/启停等操作；表单页要有校验、提交、取消和异常提示；配置/看板页要有对应业务控件和状态。
 4. 所有按钮必须有真实前端交互，不允许出现未定义函数、空 onclick、只展示不响应的控件。
 5. 可以使用 mock API 数据，但文件结构要能在真实项目中运行预览；小程序项目必须同时给出浏览器 HTML/H5 等效预览文件。
 6. 代码要短而完整：页面组件控制在 260 行以内，API/mock 服务模块控制在 120 行以内。
 7. 只生成与本需求相关的新增/修改文件，不要输出说明文字。
+8. 代码必须体现页面设计中的权限、状态和边界；不要只做 happy path。
+9. API/service 文件中的 mock 数据必须与页面字段、交付 API 契约候选字段完全一致。
+10. 不允许用“占位按钮”“待实现方法”“console.log 替代业务逻辑”来冒充完成。
 
 ## 可预览硬约束
 1. 先判断页面类型，不要把详情页/表单页/配置页强行写成列表页；列表契约只适用于列表或表格页面。
@@ -272,6 +313,7 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 8. 禁止引用项目中未确认存在的组件、指令或工具；如果不确定，直接使用目标项目基础组件和本文件内方法。
 9. 所有模板事件引用的方法必须实现；表格列的 `scopedSlots` 必须有对应 slot。
 10. 代码必须能在首屏无运行时报错：不得访问可能为 undefined 的 `.length`、`.map`、`.filter`，除非先做 `Array.isArray` 或默认空数组。
+11. 数组兜底重点在页面组件里完成：例如 `const rows = Array.isArray(payload.list) ? payload.list : []`，模板和渲染逻辑只读取 `rows`；API/mock 服务模块只要返回契约正确的列表对象，不要因为参数处理中的 `.map/.filter/.length` 影响页面可用性。
 
 ## 输出格式
 只允许输出 JSON 文件数组，不要输出 Markdown，不要输出代码块围栏，不要输出解释文字。系统会直接解析这个 JSON 并写入前端项目。
@@ -289,6 +331,7 @@ JSON 格式如下:
 - 后台 Web 页面通常只输出 2 个文件：页面组件 + API/mock 服务模块
 - 原生小程序必须输出小程序页面文件 + `public/sandbox-miniapp-preview.html`
 - 禁止输出 ```json 或任何 Markdown 包裹
+- 输出前必须自检 JSON 合法性、文件路径合理性、方法完整性、字段一致性和首屏运行安全性
 
 示例:
 [
@@ -296,7 +339,7 @@ JSON 格式如下:
   {"path": "src/api/marketing.js", "content": "完整文件内容"}
 ]""",
 
-    "delivery": """基于需求分析、页面设计和前端预览代码，整理一份完整的交付文档包。
+    "delivery": """基于需求分析、页面设计和前端预览代码，整理一份完整、边界清晰、可进入开发和测试的交付文档包。
 
 ## 后端项目规范来源
 - 后端项目: {{backend_project_name}}
@@ -312,16 +355,19 @@ JSON 格式如下:
 1. PRD 摘要（功能清单、优先级、验收标准）
 2. 页面设计规格（字段、按钮、交互、状态、权限）
 3. 交互流程说明（主流程 + 异常流程）
-4. 前端实现要点（组件选择、状态管理、路由规划）
-5. API 接口草案（接口路径、请求方法、请求参数、响应格式）
+4. 边界与异常清单（空数据、无权限、失败重试、重复提交、并发操作、状态非法、分页越界）
+5. 前端实现要点（组件选择、状态管理、路由规划、权限展示、字段兜底）
+6. API 接口草案（接口路径、请求方法、请求参数、响应格式）
    - 必须单独写明“参考后端项目：{{backend_project_name}}”
    - 必须按后端 Project Skill 的 API Contract Patterns 生成，不能凭空创造另一套规范
    - 必须体现后端鉴权、权限校验、错误响应、Swagger/接口文档规则
    - 响应格式必须逐字遵循后端 Project Skill 中的统一响应模型；如果后端 Skill 定义了 ApiResult/traceId/message/data 结构，所有接口响应示例都必须使用该结构，不允许改成扁平的 {code,message,data}
    - 如果后端项目是 BFF/API 转发层，要明确哪些接口是本层接收、鉴权和转发
-6. Mock 数据示例（至少包含列表和详情的 mock 数据）
-7. 权限规则表（角色 × 操作权限矩阵）
-8. 测试验收标准（功能测试用例清单、边界条件、兼容性要求）""",
+   - 每个接口必须列出字段映射表：页面字段、请求字段、响应字段、后端字段、类型、是否必填
+7. Mock 数据示例（至少包含列表、详情、异常、无权限数据）
+8. 权限规则表（角色 × 操作权限矩阵 + 数据范围条件）
+9. 测试验收标准（功能测试用例清单、边界条件、兼容性要求）
+10. 开发风险与待确认问题（按前端/后端/API/权限/数据分组）""",
 
     "ui_preview": """根据需求文档，生成一个静态管理后台页面预览。
 
@@ -353,7 +399,7 @@ JSON 格式如下:
 6. 视觉风格要像成熟管理后台：信息密度适中、对齐清晰、颜色克制，避免大面积霓虹、渐变球、营销 hero 和占位文案
 7. 所有文字使用中文""",
 
-    "backend_dev": """基于以下需求文档和交付包，生成完整的后端代码。
+    "backend_dev": """基于以下需求文档和交付包，生成完整、可维护、边界清晰的后端代码。
 
 需求文档:
 {{requirement_output}}
@@ -366,16 +412,33 @@ JSON 格式如下:
 
 请根据以上技术栈生成对应的后端代码。如果未指定技术栈，默认使用 Java Spring Boot + MyBatis-Plus。
 
+## 后端实现边界
+- 必须严格遵循交付包 API 契约，不得擅自改接口路径、请求字段、响应字段和统一响应模型。
+- 必须复用目标后端项目的分层、命名、异常、鉴权、权限、日志和数据访问模式。
+- 只实现本需求相关文件；不输出无关框架脚手架和泛化示例。
+- 如果交付包信息不足，必须在代码后“待确认问题”列出，不要用虚构字段补齐。
+
 **注意**: 如果前端层是 PHP 转发层（BFF），则后端需要提供完整的 RESTful API 供 PHP 层调用，接口需要考虑：
 - 统一的响应格式（code/msg/data）
 - 认证 token 的传递和校验
 - 分页、排序等通用参数的标准化
+
+## 必须覆盖
+1. Controller/API 层：参数接收、校验、鉴权、权限 key、错误响应、幂等/重复提交处理。
+2. Service 层：业务规则、状态流转、边界判断、事务边界、并发冲突处理。
+3. DAO/Mapper/Repository：查询条件、分页排序、数据范围、索引友好查询。
+4. Model/DTO/VO：字段命名、类型、必填、枚举、时间/金额格式、脱敏字段。
+5. 数据库：表结构、索引、唯一约束、软删/租户字段、审计字段。
+6. 异常和日志：参数错误、无权限、数据不存在、状态非法、外部服务失败。
+7. 测试友好性：关键逻辑应可单元测试，避免把所有逻辑塞进 Controller。
 
 输出要求:
 - 每个代码块前用 `### 文件: 路径/文件名` 标注
 - 用对应语言的代码块包裹（```java, ```php, ```go, ```python, ```sql 等）
 - 包含 Controller、Service、Model/Entity、数据库建表 SQL
 - 遵循该技术栈的最佳实践和常见分层架构
+- 每个文件内容必须完整，不要用“省略”“同上”“TODO 实现”代替
+- 代码后附“契约对齐说明”和“待确认问题”，说明接口/字段/权限如何对应交付包
 
 在所有代码之后，请用以下 JSON 格式汇总文件列表（方便自动化解析）:
 ```json
@@ -385,7 +448,7 @@ JSON 格式如下:
 ]
 ```""",
 
-    "frontend_dev": """基于以下需求文档、页面设计和原型预览，生成完整的前端代码。
+    "frontend_dev": """基于以下需求文档、页面设计、原型预览和 API 契约，生成完整、可运行、边界清晰的前端代码。
 
 需求文档:
 {{requirement_output}}
@@ -404,6 +467,12 @@ JSON 格式如下:
 
 请根据以上技术栈生成对应的前端代码。
 
+## 前端实现边界
+- 必须严格遵循页面设计和交付包 API 契约，不得擅自改字段、接口、权限 key 和页面形态。
+- 必须复用目标前端项目的目录、路由、API 封装、组件库、权限指令和样式规范。
+- 不确定是否存在的组件/工具不要引用；优先使用基础组件和本文件内可维护方法。
+- 只输出本需求相关文件；不输出静态演示页或与真实项目脱节的 mock wrapper。
+
 **技术栈判断规则**:
 - 如果技术栈包含 `vue`、`react`、`javascript`、`typescript` 等 → 生成对应前端框架代码
 - 如果技术栈包含 `php` → 这通常是 BFF/API 转发层，生成 PHP 控制器代码：
@@ -417,6 +486,10 @@ JSON 格式如下:
 - 用对应语言的代码块包裹（```vue, ```js, ```ts, ```php, ```jsx, ```tsx 等）
 - 前端框架项目：包含列表页、表单/弹窗组件、API 服务、路由配置
 - PHP 转发层项目：包含 Controller（接收+转发）、Service（业务逻辑）、Middleware（鉴权/日志）、路由配置
+- 必须实现加载、空数据、搜索无结果、无权限、接口异常、重复提交、删除二次确认等状态
+- 所有事件方法、表单校验、API 调用、字段兜底都必须完整实现
+- 列表页必须保证分页字段一致；详情/表单页必须保证对象字段默认值安全
+- mock 数据、页面字段、API service 字段和交付包字段必须一致
 
 在所有代码之后，请用以下 JSON 格式汇总文件列表:
 ```json
@@ -455,6 +528,8 @@ JSON 格式如下:
 6. 代码合理性：组件拆分、状态管理、加载/空/异常态、错误处理、防 undefined、权限指令/按钮态、重复代码、不可达代码、硬编码、无效 import、未实现事件方法。
 7. 可预览性：首屏是否可能运行时报错，接口失败是否可降级，预览代码是否依赖不存在的组件/插件/全局变量。
 8. 安全和稳定性：token/密钥泄露、XSS、未校验输入、危险 HTML、越权按钮、并发重复提交、接口超时和幂等性。
+9. 逻辑正确性：核对业务规则、状态流转、权限条件、数据范围、默认值、枚举映射和边界判断是否前后一致。
+10. 可维护性：核对重复代码、命名不清、职责混乱、不可测试逻辑、过度硬编码和与项目规范不一致的实现。
 
 ## 输出要求
 请输出:
@@ -488,7 +563,7 @@ JSON 格式如下:
 }
 ```""",
 
-    "testing": """基于以下需求和前后端代码，设计测试用例并生成可执行的测试脚本。
+    "testing": """基于以下需求、页面设计、API 契约和前后端代码，设计测试用例并生成可执行的测试脚本。
 
 需求文档:
 {{requirement_output}}
@@ -507,9 +582,13 @@ JSON 格式如下:
 请完成以下两部分输出:
 
 ### 第一部分：测试用例分析
-1. 测试用例列表（含优先级、预期结果）
-2. 覆盖率评估
-3. 发现的 Bug 列表（标注严重程度: critical/major/minor）
+1. 测试范围和不测范围：明确本次验证边界。
+2. 测试用例列表：含优先级、前置条件、步骤、输入、预期结果。
+3. 边界用例：空数据、无权限、非法输入、重复提交、分页越界、状态非法、接口超时。
+4. 权限用例：菜单/页面/按钮/API/数据范围分别验证。
+5. 契约用例：请求字段、响应字段、分页字段、错误结构、mock 与真实字段一致性。
+6. 覆盖率评估：说明已覆盖和未覆盖风险。
+7. 发现的 Bug 列表（标注严重程度: critical/major/minor）
 
 ### 第二部分：可执行测试脚本
 请根据后端技术栈生成对应的自动化测试代码:
@@ -524,6 +603,8 @@ JSON 格式如下:
 - 参数校验测试（400 响应）
 - 权限测试（401/403 响应）
 - 边界条件测试
+- 并发/幂等测试（重复点击、重复提交、同一资源并发修改）
+- 数据范围测试（不同租户/角色/部门只能访问授权数据）
 
 每个代码块前用 `### 文件: 路径/文件名` 标注。
 
@@ -539,7 +620,7 @@ JSON 格式如下:
 }
 ```""",
 
-    "commit": """请整理以下前后端代码，生成提交信息并准备提交。
+    "commit": """请整理以下前后端代码和测试结果，生成准确、边界清晰的提交方案。
 
 后端代码:
 {{backend_dev_output}}
@@ -551,23 +632,29 @@ JSON 格式如下:
 {{testing_output}}
 
 请输出:
-1. 后端 Git commit message（Conventional Commits 格式）
-2. 前端 Git commit message（Conventional Commits 格式）
-3. 后端变更文件列表
-4. 前端变更文件列表""",
+1. 变更摘要：按后端、前端、API 契约、测试、配置分组。
+2. 后端 Git commit message（Conventional Commits 格式，说明 scope 和主要行为变化）
+3. 前端 Git commit message（Conventional Commits 格式，说明 scope 和主要行为变化）
+4. 后端变更文件列表：路径、用途、是否新增/修改/删除。
+5. 前端变更文件列表：路径、用途、是否新增/修改/删除。
+6. 风险与回滚提示：哪些变更影响权限、接口、数据结构或兼容性。
+7. 提交前检查清单：测试、lint、构建、迁移、权限配置。""",
 
-    "deploy": """请根据以下信息，生成部署方案。
+    "deploy": """请根据以下信息，生成可执行、可回滚、边界清晰的部署方案。
 
 提交信息:
 {{commit_output}}
 
 请输出:
-1. 部署环境配置
-2. 部署步骤
-3. 健康检查方案
-4. 回滚方案""",
+1. 部署范围：涉及服务、前端资源、数据库、配置、权限、缓存。
+2. 前置条件：依赖版本、环境变量、数据库迁移、权限菜单、第三方服务。
+3. 部署步骤：按顺序写命令/操作、负责人、预计耗时和观察点。
+4. 健康检查方案：接口、页面、日志、队列、数据库、Redis、关键业务路径。
+5. 灰度和验证：小流量验证、功能验证、权限验证、异常回归。
+6. 回滚方案：代码回滚、配置回滚、数据库回滚/补偿、缓存清理。
+7. 风险清单：兼容性、数据一致性、权限遗漏、接口超时、并发压力。""",
 
-    "report": """请生成整个项目的总结报告。
+    "report": """请生成整个项目的总结报告，要求事实清楚、边界明确、结论可追踪。
 
 需求:
 {{requirement_output_short}}
@@ -579,11 +666,13 @@ JSON 格式如下:
 {{testing_output_short}}
 
 请输出:
-1. 项目概况
-2. 完成功能列表
-3. 技术栈总结
-4. 已知问题
-5. 后续计划""",
+1. 项目概况：需求目标、范围边界、参考项目、执行模式。
+2. 完成功能列表：按阶段说明已完成内容和关键产物。
+3. 技术栈总结：前端、后端/API、权限、测试、部署相关信息。
+4. 契约与字段对齐结论：接口、字段、权限、mock 与真实数据的一致性。
+5. 验证结果：测试、构建、审查、预览或部署验证的结论。
+6. 已知问题和风险：按严重程度列出影响、原因、规避或修复建议。
+7. 后续计划：按优先级列出下一步动作、责任角色和验收标准。""",
 }
 
 
@@ -751,7 +840,7 @@ Focus the review on:
 
 Return FAIL with actionable feedback when any of these three checks is incomplete.
 """
-    return memory_section + fix_section + prompt
+    return memory_section + fix_section + PIPELINE_GLOBAL_PROMPT_CONTRACT + prompt
 
 
 # ==================== 输出解析 ====================
@@ -777,6 +866,10 @@ def _validate_frontend_preview_code_files(files: Dict[str, str]) -> List[str]:
         if path in ("public/sandbox-miniapp-preview.html", "sandbox-miniapp-preview.html")
         or path.endswith("/sandbox-miniapp-preview.html")
     ]
+    standalone_path_pattern = re.compile(
+        r"(?:^|/)(?:demo|example|standalone|sandboxpreview|previewonly|mockpage|generatedpage)(?:/|\.|-|$)",
+        re.I,
+    )
     api_paths = [
         path for path in normalized_paths
         if path.startswith("src/api/") and path.endswith((".js", ".ts"))
@@ -808,7 +901,22 @@ def _validate_frontend_preview_code_files(files: Dict[str, str]) -> List[str]:
             issues.append(f"{path} 内容不是字符串")
             continue
         safe_path = str(path).replace("\\", "/").lstrip("/")
-        if safe_path.endswith((".vue", ".tsx", ".jsx", ".js")):
+        path_lower = safe_path.lower()
+        if standalone_path_pattern.search(path_lower):
+            issues.append(f"{safe_path} 像独立 demo/preview 页面，必须基于匹配前端项目的真实业务目录生成")
+        if safe_path in {"package.json", "vite.config.js", "vite.config.ts", "src/main.js", "src/main.ts", "src/main.tsx", "src/App.vue", "src/App.tsx", "index.html"}:
+            issues.append(f"{safe_path} 像独立应用入口文件，预览生成必须是匹配项目的增量业务文件")
+        if re.search(r"(?:Standalone|SandboxPreview|PreviewOnly|MockPage|GeneratedPage)", content):
+            issues.append(f"{safe_path} 包含独立预览组件命名，必须改成匹配项目业务页面命名")
+        is_api_module = safe_path.startswith("src/api/")
+        is_page_or_component = (
+            safe_path.endswith((".vue", ".tsx", ".jsx"))
+            or (
+                safe_path.endswith(".js")
+                and safe_path.startswith(("pages/", "src/views/", "src/pages/", "src/components/"))
+            )
+        )
+        if is_page_or_component and not is_api_module:
             has_unsafe_array_read = re.search(r"\.(?:length|map|filter)\b", content)
             has_array_guard = "Array.isArray" in content or "|| []" in content or "?? []" in content
             if has_unsafe_array_read and not has_array_guard:
@@ -854,6 +962,86 @@ def _validate_frontend_preview_code_files(files: Dict[str, str]) -> List[str]:
                     issues.append(f"{safe_path} 的详情/mock 接口必须返回对象 result 或 data")
 
     return issues
+
+
+def _patch_stable_table_contract_content(content: str) -> str:
+    """Normalize common STable loadData return shapes before validation/writing."""
+    if "<s-table" not in (content or "").lower():
+        return content
+
+    list_expr = (
+        "Array.isArray(result.list)\n"
+        "          ? result.list\n"
+        "          : (Array.isArray(result.data) ? result.data : [])"
+    )
+    replacement = (
+        "const list = " + list_expr + "\n"
+        "        const pageNo = Number(result.page || result.pageNo || 1)\n"
+        "        const pageSize = Number(result.pageSize || 10)\n"
+        "        const totalCount = Number(result.count || result.totalCount || list.length)\n"
+        "        return {\n"
+        "          page: pageNo,\n"
+        "          pageNo,\n"
+        "          pageSize,\n"
+        "          count: totalCount,\n"
+        "          totalCount,\n"
+        "          totalPage: result.totalPage || Math.ceil(totalCount / pageSize),\n"
+        "          list,\n"
+        "          data: list\n"
+        "        }"
+    )
+
+    patterns = [
+        r"return\s*\{\s*"
+        r"pageNo\s*:\s*result\.pageNo\s*\|\|\s*result\.page\s*\|\|\s*1\s*,\s*"
+        r"pageSize\s*:\s*result\.pageSize\s*\|\|\s*10\s*,\s*"
+        r"totalCount\s*:\s*result\.totalCount\s*\|\|\s*result\.count\s*\|\|\s*0\s*,\s*"
+        r"totalPage\s*:\s*result\.totalPage\s*\|\|\s*Math\.ceil\(\(result\.totalCount\s*\|\|\s*0\)\s*/\s*\(result\.pageSize\s*\|\|\s*10\)\)\s*,\s*"
+        r"(?:data|list)\s*:\s*Array\.isArray\(result\.(?:list|data)\)\s*\?\s*result\.(?:list|data)\s*:\s*\[\]\s*"
+        r"\}",
+        r"return\s*\{\s*"
+        r"pageNo\s*:\s*result\.pageNo\s*\|\|\s*1\s*,\s*"
+        r"pageSize\s*:\s*result\.pageSize\s*\|\|\s*10\s*,\s*"
+        r"totalCount\s*:\s*result\.totalCount\s*\|\|\s*0\s*,\s*"
+        r"(?:data|list)\s*:\s*Array\.isArray\(result\.(?:list|data)\)\s*\?\s*result\.(?:list|data)\s*:\s*\[\]\s*"
+        r"\}",
+        r"return\s*\{\s*"
+        r"pageNo\s*:\s*result\.pageNo\s*\|\|\s*result\.page\s*\|\|\s*1\s*,\s*"
+        r"pageSize\s*:\s*result\.pageSize\s*\|\|\s*10\s*,\s*"
+        r"totalCount\s*:\s*result\.totalCount\s*\|\|\s*result\.count\s*\|\|\s*0\s*,\s*"
+        r"count\s*:\s*result\.totalCount\s*\|\|\s*result\.count\s*\|\|\s*0\s*,\s*"
+        r"list\s*:\s*Array\.isArray\(result\.list\s*\|\|\s*result\.data\)\s*\?\s*\(result\.list\s*\|\|\s*result\.data\)\s*:\s*\[\]\s*"
+        r"\}",
+        r"return\s*\{\s*"
+        r"pageNo\s*:\s*[^,\n}]+,\s*"
+        r"pageSize\s*:\s*[^,\n}]+,\s*"
+        r"totalCount\s*:\s*[^,\n}]+,\s*"
+        r"(?:totalPage\s*:\s*[^,\n}]+,\s*)?"
+        r"(?:data|list)\s*:\s*Array\.isArray\([^}]+?\)\s*\?\s*[^:}]+?\s*:\s*\[\]\s*"
+        r"\}",
+    ]
+    patched = content
+    for pattern in patterns:
+        patched = re.sub(pattern, replacement, patched, flags=re.S)
+    return patched
+
+
+def _auto_fix_frontend_preview_code_files(files: Dict[str, str]) -> Tuple[Dict[str, str], List[str]]:
+    fixed: Dict[str, str] = {}
+    fixes: List[str] = []
+    for path, content in files.items():
+        if not isinstance(content, str):
+            fixed[path] = content
+            continue
+        safe_path = str(path).replace("\\", "/").lstrip("/")
+        patched = content
+        if safe_path.startswith(("src/views/", "src/pages/")) and safe_path.endswith(".vue"):
+            patched = _patch_stable_table_contract_content(patched)
+        if patched != content:
+            fixes.append(f"{safe_path}: 自动补齐 STable 分页返回字段 page/count/list")
+        fixed[path] = patched
+    return fixed, fixes
+
 
 def _try_parse_json_code_files(raw_output: str) -> Dict[str, str]:
     """尝试从 LLM 输出中提取 JSON 格式的代码文件映射。
@@ -2535,6 +2723,16 @@ class DevPipelineManager:
                         if not parsed.get("code_files"):
                             preview_issues.append("预览生成阶段没有产出前端代码文件")
                         else:
+                            fixed_files, auto_fixes = _auto_fix_frontend_preview_code_files(parsed.get("code_files", {}))
+                            if auto_fixes:
+                                parsed["code_files"] = fixed_files
+                                parsed["auto_fixes"] = auto_fixes
+                                raw_output += "\n\n--- 自动修复 ---\n" + "\n".join(auto_fixes)
+                                await emit({
+                                    "type": "stage_auto_fixed",
+                                    "stage": current_stage,
+                                    "fixes": auto_fixes,
+                                })
                             preview_issues = _validate_frontend_preview_code_files(parsed.get("code_files", {}))
                         if not preview_issues:
                             break
@@ -2578,6 +2776,16 @@ class DevPipelineManager:
                         })
                         raise ValueError("预览生成阶段没有产出前端代码文件，请重新生成")
                     if current_stage == "prototype":
+                        fixed_files, auto_fixes = _auto_fix_frontend_preview_code_files(parsed.get("code_files", {}))
+                        if auto_fixes:
+                            parsed["code_files"] = fixed_files
+                            parsed["auto_fixes"] = auto_fixes
+                            raw_output += "\n\n--- 自动修复 ---\n" + "\n".join(auto_fixes)
+                            await emit({
+                                "type": "stage_auto_fixed",
+                                "stage": current_stage,
+                                "fixes": auto_fixes,
+                            })
                         preview_issues = _validate_frontend_preview_code_files(parsed.get("code_files", {}))
                         if preview_issues:
                             error_msg = "预览生成代码未通过可运行性约束: " + "；".join(preview_issues[:8])

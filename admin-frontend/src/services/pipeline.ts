@@ -75,6 +75,7 @@ export interface ProjectSkillMatch {
   confidence: number
   match_reason: string
   match_source: 'llm' | 'rule' | string
+  match_tags?: string[]
   candidates_considered: number
 }
 

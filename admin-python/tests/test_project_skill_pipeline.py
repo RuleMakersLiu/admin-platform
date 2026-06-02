@@ -73,7 +73,6 @@ def test_frontend_contract_review_mode_skips_backend_and_deploy_steps():
         "page_design",
         "prototype",
         "delivery",
-        "frontend_dev",
         "code_review",
         "report",
     ]
@@ -100,6 +99,7 @@ def test_pipeline_skill_snapshot_is_stable_and_minimal():
     assert snapshot == {
         "project_id": "42",
         "project_name": "Admin Portal",
+        "repo_url": "",
         "skill_content": "confirmed content",
         "skill_version": 3,
         "confirmed_at": 1710000000000,
@@ -109,8 +109,8 @@ def test_pipeline_skill_snapshot_is_stable_and_minimal():
 def test_pipeline_artifact_collects_preview_frontend_contract_and_review():
     stages = _init_stages_for_mode("frontend_contract_review")
     stages["prototype"].update({"preview_html": "<html>preview</html>", "output": "preview raw"})
+    stages["prototype"].update({"code_files": {"src/pages/users.tsx": "export default function Users() {}"}})
     stages["delivery"].update({"output": "# API Contract\nGET /api/users"})
-    stages["frontend_dev"].update({"code_files": {"src/pages/users.tsx": "export default function Users() {}"}})
     stages["code_review"].update(
         {
             "status": "completed",
@@ -214,7 +214,9 @@ def test_backend_match_prefers_service_layer_over_core_models():
     )
 
     assert match["skill"]["project_id"] == 6
+    assert match["match_source"] == "backend_role_rule"
     assert "后端实现层信号" in match["match_reason"]
+    assert "兜底" not in match["match_reason"]
 
 
 def test_backend_match_returns_dubbo_related_project_group():
@@ -257,4 +259,8 @@ def test_backend_match_returns_dubbo_related_project_group():
     )
 
     assert [item["skill"]["project_id"] for item in match["matches"]] == [2, 6, 7]
+    assert match["match_source"] == "backend_project_group"
     assert "Dubbo 分层后端项目组" in match["match_reason"]
+    assert all(item["match_source"] == "backend_project_group" for item in match["matches"])
+    assert [item["match_tags"][1] for item in match["matches"]] == ["controller/API层", "service层", "core/model层"]
+    assert all("兜底" not in item["match_reason"] for item in match["matches"])

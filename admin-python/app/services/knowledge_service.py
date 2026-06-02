@@ -379,13 +379,13 @@ def select_backend_project_skill_match(requirement: str, candidates: List[Any]) 
         reason_parts.append(f"后端实现层信号：{', '.join(service_hits[:4])}")
     if core_hits:
         reason_parts.append("已降低 core/model-only 项目优先级")
-    match_reason = "；".join(reason_parts) or "后端兜底选择最相关的已确认 Project Skill"
+    match_reason = "；".join(reason_parts) or "按后端项目角色和业务上下文选择最相关的已确认 Project Skill"
 
     return {
         "skill": best_skill,
         "confidence": confidence,
         "match_reason": match_reason,
-        "match_source": "rule",
+        "match_source": "backend_role_rule",
         "candidates_considered": len(skills),
     }
 
@@ -449,23 +449,26 @@ def select_backend_project_skill_matches(requirement: str, candidates: List[Any]
         seen.add(project_id)
         unique.append(skill)
 
-    matches = [
-        {
-            "skill": skill,
-            "confidence": base_match["confidence"],
-            "match_reason": (
-                f"关联后端项目组：{skill.get('project_name')} "
-                f"({['controller/API层', 'service层', 'core/model层', '后端项目'][_backend_layer_rank(skill)]})"
-            ),
-            "match_source": base_match["match_source"],
-            "candidates_considered": base_match["candidates_considered"],
-        }
-        for skill in unique
-    ]
+    layer_labels = ["controller/API层", "service层", "core/model层", "后端项目"]
+    matches = []
+    for skill in unique:
+        layer_label = layer_labels[_backend_layer_rank(skill)]
+        matches.append(
+            {
+                "skill": skill,
+                "confidence": base_match["confidence"],
+                "match_reason": f"后端项目组匹配：{skill.get('project_name')}（{layer_label}）",
+                "match_source": "backend_project_group",
+                "match_tags": ["Dubbo分层项目组", layer_label],
+                "candidates_considered": base_match["candidates_considered"],
+            }
+        )
     return {
         **base_match,
         "skill": matches[0]["skill"],
         "match_reason": "识别到 Dubbo 分层后端项目组，已同时匹配 controller/API、service 和 core/model 关联项目。",
+        "match_source": "backend_project_group",
+        "match_tags": ["Dubbo分层项目组"],
         "matches": matches,
     }
 
