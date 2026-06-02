@@ -679,28 +679,6 @@ export default function ProductPortal() {
             {matchedSkill && matchedRequirement === requirement.trim() ? '确认页面功能并执行' : '分析需求并匹配页面功能'}
           </Button>
 
-          {awaitingConfirmStage && !pendingPageSelection && (
-            <Alert
-              type="warning"
-              showIcon
-              style={{ marginTop: 12 }}
-              message={`等待处理：${stageLabel[awaitingConfirmStage] || awaitingConfirmStage}`}
-              description={
-                <Space direction="vertical" style={{ width: '100%' }}>
-                  <TextArea
-                    rows={4}
-                    value={feedback}
-                    onChange={(event) => setFeedback(event.target.value)}
-                    placeholder="告诉系统哪里不对，例如：我要的是零售商品列表，不是商品池；不要新建页面；只增加商品ID筛选项。"
-                  />
-                  <Button danger icon={<ReloadOutlined />} loading={running} onClick={submitFeedbackAndRegenerate}>
-                    提交反馈并重新生成
-                  </Button>
-                </Space>
-              }
-            />
-          )}
-
           <div style={{ marginTop: 18 }}>
             <Space style={{ justifyContent: 'space-between', width: '100%', marginBottom: 8 }}>
               <Title level={5} style={{ margin: 0 }}>流水线</Title>
