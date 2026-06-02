@@ -423,6 +423,33 @@ def test_existing_page_candidates_include_confidence_and_reason():
     ]
 
 
+def test_existing_page_candidates_map_retail_goods_menu_to_commodity_list_source():
+    files = {
+        "src/views/commodityList/ProductList.vue": """
+<template>
+  <a-form>
+    <a-form-item label="商品名称"><a-input v-model="queryParam.productName" /></a-form-item>
+    <a-form-item label="商品ID"><a-input v-model="queryParam.productCode" /></a-form-item>
+  </a-form>
+  <s-table ref="table" :columns="columns" :data="loadData" />
+</template>
+""",
+        "src/views/commodityCenter/commodityPool/CommodityPoolList.vue": "商品池列表，零售商品，商品ID，商品名称",
+        "src/views/orderList/modules/detailContent/retail.vue": "零售订单详情，商品名称，商品ID",
+    }
+
+    candidates = _frontend_existing_page_candidates(
+        files,
+        "我想给商城管理平台现有的零售商品列表增加一个商品ID的筛选项",
+    )
+
+    assert candidates
+    assert candidates[0]["path"] == "src/views/commodityList/ProductList.vue"
+    assert "src/views/commodityCenter/commodityPool/CommodityPoolList.vue" not in [
+        candidate["path"] for candidate in candidates
+    ]
+
+
 def test_fallback_page_candidates_offer_uncertain_options_when_no_strong_match():
     files = {
         "src/views/activityManage/ActivityManageList.vue": "活动管理列表，活动名称，活动状态，投放渠道",

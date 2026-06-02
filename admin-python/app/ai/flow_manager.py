@@ -1826,7 +1826,7 @@ def _requirement_match_terms(requirement: str) -> List[str]:
 def _business_synonyms_for_terms(terms: List[str]) -> List[str]:
     synonyms = set(terms)
     mapping = {
-        "商品": ["product", "goods", "sku", "spu"],
+        "商品": ["product", "goods", "commodity", "commdity", "sku", "spu"],
         "零售": ["retail"],
         "商城": ["mall", "shop", "store"],
         "列表": ["list"],
@@ -1908,15 +1908,45 @@ def _requirement_anchor_groups(requirement: str) -> List[List[str]]:
     return anchor_groups
 
 
+def _is_product_pool_context(path: str, content: str) -> bool:
+    text = f"{path}\n{content or ''}".lower()
+    return "pool" in text or "商品池" in (content or "") or "池" in path
+
+
+def _is_primary_product_list_context(path: str, content: str) -> bool:
+    normalized = str(path).replace("\\", "/").lstrip("/")
+    lower_path = normalized.lower()
+    text = f"{lower_path}\n{content or ''}".lower()
+    if _is_product_pool_context(normalized, content):
+        return False
+    if any(segment in lower_path for segment in ("/orderlist/", "refundorderlist", "/modules/", "/detail")):
+        return False
+    if "commoditylist" in lower_path or "commodity/list" in lower_path:
+        return True
+    if ("productlist" in lower_path or lower_path.endswith("/list.vue")) and (
+        "商品名称" in (content or "") or "productname" in text
+    ):
+        return True
+    return False
+
+
 def _matches_requirement_anchor_groups(path: str, content: str, requirement: str) -> bool:
     anchor_groups = _requirement_anchor_groups(requirement)
     if not anchor_groups:
         return True
+    if "商品" in (requirement or "") and _is_product_pool_context(path, content) and "池" not in (requirement or ""):
+        return False
+    primary_product_list = _is_primary_product_list_context(path, content)
     combined_text = f"{path}\n{content or ''}".lower()
-    return all(
-        any(anchor.lower() in combined_text for anchor in group)
-        for group in anchor_groups
-    )
+    for group in anchor_groups:
+        if any(anchor.lower() in combined_text for anchor in group):
+            continue
+        # Some admin systems expose "零售商品列表" in the menu/URL, while the
+        # source file is named as a generic commodity/product list.
+        if "零售" in group and primary_product_list and "商品" in (requirement or ""):
+            continue
+        return False
+    return True
 
 
 def _frontend_existing_page_candidates(files: Dict[str, str], requirement: str, limit: int = 12) -> List[Dict[str, Any]]:
@@ -1938,6 +1968,8 @@ def _frontend_existing_page_candidates(files: Dict[str, str], requirement: str, 
         if not path_hits and len(content_hits) < 2:
             continue
         score = len(path_hits) * 4 + len(content_hits)
+        if _is_primary_product_list_context(normalized, content or "") and "商品" in (requirement or ""):
+            score += 12
         scored.append((score, normalized, path_hits, content_hits))
 
     scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
