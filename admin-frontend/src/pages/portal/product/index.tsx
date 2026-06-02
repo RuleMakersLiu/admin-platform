@@ -213,12 +213,23 @@ export default function ProductPortal() {
     setRunning(true)
     try {
       const note = feedback.trim()
-      await pipelineApi.confirm(
+      const confirmResult = await pipelineApi.confirm(
         pipelineId,
         confirmed,
         note || (confirmed ? '人工确认通过，继续执行。' : '请按人工反馈调整后重新生成。'),
       )
+      if (confirmResult?.error) {
+        throw new Error(confirmResult.error)
+      }
+      const targetStage = awaitingConfirmStage || status?.current_stage || currentStage
       appendLog(`${confirmed ? '确认通过' : '退回调整'}：${stageLabel[awaitingConfirmStage] || awaitingConfirmStage}`)
+      if (!confirmed) {
+        appendLog(`本次修改意见：${note || '请按人工反馈调整后重新生成。'}`)
+        if (targetStage) {
+          setStreamOutputByStage((prev) => ({ ...prev, [targetStage]: '' }))
+        }
+        setArtifact((prev) => prev ? { ...prev, frontend_files: {}, preview_html: '', preview_url: '' } : prev)
+      }
       setAwaitingConfirmStage('')
       setFeedback('')
       const finalStatus = await runUntilPause(pipelineId, confirmed ? '' : note)

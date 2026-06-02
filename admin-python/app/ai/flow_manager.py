@@ -3047,6 +3047,8 @@ class DevPipelineManager:
                                 })
                             ) if stream_callback else None,
                         )
+                        if attempt_feedback.strip():
+                            parsed["applied_feedback"] = attempt_feedback.strip()
 
                         if current_stage != "prototype":
                             break
