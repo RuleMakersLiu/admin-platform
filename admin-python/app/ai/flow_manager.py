@@ -1896,32 +1896,43 @@ def _frontend_relevant_existing_page_paths(files: Dict[str, str], requirement: s
     return [item["path"] for item in _frontend_existing_page_candidates(files, requirement, limit)]
 
 
-def _frontend_existing_page_candidates(files: Dict[str, str], requirement: str, limit: int = 12) -> List[Dict[str, Any]]:
-    strong_terms = _requirement_strong_business_terms(requirement)
-    if not strong_terms:
-        return []
-    anchor_groups: List[List[str]] = []
+def _requirement_anchor_groups(requirement: str) -> List[List[str]]:
     requirement_text = requirement or ""
+    anchor_groups: List[List[str]] = []
     if "零售" in requirement_text:
         anchor_groups.append(["零售", "retail"])
     if "商品" in requirement_text:
         anchor_groups.append(["商品", "product", "goods", "sku", "spu"])
     if "活动" in requirement_text:
         anchor_groups.append(["活动", "activity"])
+    return anchor_groups
+
+
+def _matches_requirement_anchor_groups(path: str, content: str, requirement: str) -> bool:
+    anchor_groups = _requirement_anchor_groups(requirement)
+    if not anchor_groups:
+        return True
+    combined_text = f"{path}\n{content or ''}".lower()
+    return all(
+        any(anchor.lower() in combined_text for anchor in group)
+        for group in anchor_groups
+    )
+
+
+def _frontend_existing_page_candidates(files: Dict[str, str], requirement: str, limit: int = 12) -> List[Dict[str, Any]]:
+    strong_terms = _requirement_strong_business_terms(requirement)
+    if not strong_terms:
+        return []
 
     scored: List[Tuple[int, str, List[str], List[str]]] = []
     for path, content in files.items():
         normalized = str(path).replace("\\", "/").lstrip("/")
         if not _is_frontend_page_path(normalized):
             continue
+        if not _matches_requirement_anchor_groups(normalized, content or "", requirement):
+            continue
         path_text = normalized.lower()
         content_text = (content or "").lower()
-        combined_text = f"{path_text}\n{content_text}"
-        if anchor_groups and not all(
-            any(anchor.lower() in combined_text for anchor in group)
-            for group in anchor_groups
-        ):
-            continue
         path_hits = [term for term in strong_terms if term.lower() in path_text]
         content_hits = [term for term in strong_terms if term.lower() in content_text]
         if not path_hits and len(content_hits) < 2:
@@ -1952,6 +1963,8 @@ def _frontend_fallback_page_candidates(files: Dict[str, str], requirement: str, 
     for path, content in files.items():
         normalized = str(path).replace("\\", "/").lstrip("/")
         if not _is_frontend_page_path(normalized):
+            continue
+        if not _matches_requirement_anchor_groups(normalized, content or "", requirement):
             continue
         haystack = f"{normalized}\n{content or ''}".lower()
         hits = [term for term in terms if term.lower() in haystack]
@@ -3017,6 +3030,58 @@ class DevPipelineManager:
                         }
 
                 # ====== 单阶段顺序执行 ======
+                if (
+                    current_stage == "prototype"
+                    and pipe_config.get("pipeline_mode") == "frontend_contract_review"
+                    and _is_existing_feature_change_request(pipe.user_request or "")
+                    and not str(pipe_config.get("selected_frontend_page_path") or "").strip()
+                ):
+                    frontend_project_id = str(pipe_config.get("frontend_project_id") or pipe.project_id or "").strip()
+                    page_candidates: Dict[str, Any] = {
+                        "project_id": frontend_project_id,
+                        "requires_selection": True,
+                        "candidates": [],
+                        "uncertain": True,
+                    }
+                    if frontend_project_id:
+                        page_candidates = await get_frontend_page_candidates_for_requirement(
+                            frontend_project_id,
+                            pipe.user_request or "",
+                        )
+                    stages[current_stage].update({
+                        "status": "waiting_confirm",
+                        "output": (
+                            "这是对现有功能的改造，但流水线还没有确认要修改的现有前端页面。"
+                            "请先从候选页面中选择目标页面，系统会基于该页面重新生成，不会新建替代页面。"
+                        ),
+                        "structured_output": {
+                            "needs_frontend_page_selection": True,
+                            "frontend_page_candidates": page_candidates,
+                        },
+                        "preview_html": "",
+                        "code_files": {},
+                        "error": "",
+                    })
+                    pipe.status = PipelineStatus.WAITING_CONFIRM.value
+                    pipe.stages_data = json.dumps(stages, ensure_ascii=False)
+                    pipe.update_time = int(time.time() * 1000)
+                    await session.commit()
+                    await emit({
+                        "type": "waiting_confirm",
+                        "stage": current_stage,
+                        "need_confirm": True,
+                        "reason": "needs_frontend_page_selection",
+                        "result": stages[current_stage]["structured_output"],
+                    })
+                    return {
+                        "pipeline_id": pipeline_id,
+                        "stage": current_stage,
+                        "status": "waiting_confirm",
+                        "need_confirm": True,
+                        "reason": "needs_frontend_page_selection",
+                        "frontend_page_candidates": page_candidates,
+                    }
+
                 stages[current_stage]["status"] = "running"
                 stages[current_stage]["started_at"] = datetime.now().isoformat()
                 pipe.status = PipelineStatus.RUNNING.value
@@ -3408,6 +3473,18 @@ class DevPipelineManager:
 
             stages = self._parse_stages(pipe)
             current_stage = pipe.current_stage
+            current_structured = stages.get(current_stage, {}).get("structured_output") or {}
+            if (
+                confirmed
+                and current_structured.get("needs_frontend_page_selection")
+                and not str((json.loads(pipe.skill_config or "{}")).get("selected_frontend_page_path") or "").strip()
+            ):
+                return {
+                    "pipeline_id": pipeline_id,
+                    "stage": current_stage,
+                    "status": "waiting_confirm",
+                    "error": "请先选择要修改的现有前端页面，不能直接确认跳过。",
+                }
 
             if not confirmed:
                 # 用户拒绝，退回该阶段

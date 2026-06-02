@@ -11,7 +11,7 @@ export interface StageDef {
 export interface StageResult {
   stage: string
   agent_type: string
-  status: 'pending' | 'running' | 'completed' | 'failed'
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'waiting_confirm'
   output: string
   structured_output: Record<string, any>
   preview_html: string
@@ -91,6 +91,21 @@ export interface ProjectSkillMatch {
   candidates_considered: number
 }
 
+export interface FrontendPageCandidate {
+  path: string
+  confidence: number
+  matched_terms?: string[]
+  reason?: string
+  uncertain?: boolean
+}
+
+export interface FrontendPageCandidates {
+  requires_selection?: boolean
+  uncertain?: boolean
+  candidates?: FrontendPageCandidate[]
+  error?: string
+}
+
 export interface PipelineArtifact {
   pipeline_id: string
   status: string
@@ -162,6 +177,9 @@ export const pipelineApi = {
 
   matchProjectSkill: (data: { user_request: string }) =>
     api.post(`${BASE}/match`, data) as any as Promise<ProjectSkillMatch>,
+
+  updateSkillConfig: (id: string, skill_config: Record<string, unknown>) =>
+    api.put(`${BASE}/${id}/skill-config`, { skill_config }) as any as Promise<{ message?: string }>,
 
   execute: (id: string, user_input?: string) =>
     api.post(`${BASE}/${id}/execute`, { user_input: user_input || '' }, { timeout: 300000 }) as any,

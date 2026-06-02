@@ -11,7 +11,7 @@ import {
   ReloadOutlined,
   RocketOutlined,
 } from '@ant-design/icons'
-import { pipelineApi, type PipelineArtifact, type PipelineListItem, type PipelineStatus, type ProjectSkillMatch } from '@/services/pipeline'
+import { pipelineApi, type FrontendPageCandidate, type FrontendPageCandidates, type PipelineArtifact, type PipelineListItem, type PipelineStatus, type ProjectSkillMatch } from '@/services/pipeline'
 import { saveLastPortalPath, useAuthStore } from '@/stores/auth'
 
 const { Title, Text, Paragraph } = Typography
@@ -48,6 +48,26 @@ const getMatchSourceColor = (source: string) => {
     backend_project_group: 'purple',
   }
   return sourceColors[source] || 'geekblue'
+}
+
+const pageFunctionName = (path: string) => {
+  const normalized = path.replace(/\\/g, '/')
+  const fileName = normalized.split('/').pop()?.replace(/\.(vue|tsx|jsx|ts|js)$/i, '') || normalized
+  const text = `${normalized}/${fileName}`.toLowerCase()
+  const parts: string[] = []
+  if (/retail|零售/.test(text)) parts.push('零售')
+  if (/goods|product|sku|spu|商品/.test(text)) parts.push('商品')
+  if (/pool|池/.test(text)) parts.push('池')
+  if (/activity|活动/.test(text)) parts.push('活动')
+  if (/order|订单/.test(text)) parts.push('订单')
+  if (/list|列表/.test(text)) parts.push('列表')
+  if (!parts.length) return fileName.replace(/([a-z])([A-Z])/g, '$1 $2')
+  return parts.join('')
+}
+
+const candidateLabel = (candidate: FrontendPageCandidate) => {
+  const name = pageFunctionName(candidate.path)
+  return name.endsWith('页') ? name : `${name}页`
 }
 
 export default function ProductPortal() {
@@ -102,6 +122,12 @@ export default function ProductPortal() {
       ...prev,
       [stage]: `${prev[stage] || ''}${content}`.slice(-20000),
     }))
+  }
+
+  const getPendingPageSelection = (): FrontendPageCandidates | null => {
+    const structured = status?.stages?.[status.current_stage || '']?.structured_output || {}
+    if (!structured.needs_frontend_page_selection) return null
+    return (structured.frontend_page_candidates || null) as FrontendPageCandidates | null
   }
 
   const refreshOutputs = async (id: string) => {
@@ -208,6 +234,13 @@ export default function ProductPortal() {
       })
   }, [pipelineId, status?.status, status?.current_stage])
 
+  useEffect(() => {
+    const candidates = getPendingPageSelection()?.candidates || []
+    if (!selectedPagePath && candidates[0]?.path) {
+      setSelectedPagePath(candidates[0].path)
+    }
+  }, [status?.pipeline_id, status?.status, status?.current_stage])
+
   const resumePipeline = async (confirmed: boolean) => {
     if (!pipelineId) return
     setRunning(true)
@@ -240,6 +273,49 @@ export default function ProductPortal() {
       }
     } catch (error: unknown) {
       message.error(error instanceof Error ? error.message : '继续执行失败')
+      setRunning(false)
+    }
+  }
+
+  const submitFeedbackAndRegenerate = async () => {
+    const note = feedback.trim()
+    if (!note) {
+      message.warning('请先填写要调整的页面功能问题')
+      return
+    }
+    await resumePipeline(false)
+  }
+
+  const selectExistingPageAndRegenerate = async () => {
+    if (!pipelineId) return
+    const candidates = getPendingPageSelection()?.candidates || []
+    const selectedCandidate = candidates.find((item) => item.path === selectedPagePath)
+    if (!selectedPagePath) {
+      message.warning('请先选择要修改的页面功能')
+      return
+    }
+    setRunning(true)
+    try {
+      await pipelineApi.updateSkillConfig(pipelineId, {
+        selected_frontend_page_path: selectedPagePath,
+        selected_frontend_page_confidence: selectedCandidate?.confidence,
+      })
+      const label = selectedCandidate ? candidateLabel(selectedCandidate) : pageFunctionName(selectedPagePath)
+      const confirmResult = await pipelineApi.confirm(
+        pipelineId,
+        false,
+        `已人工选择要修改的页面功能：${label}。必须基于该现有页面重新生成，不允许改成商品池或新建页面。`,
+      )
+      if (confirmResult?.error) {
+        throw new Error(confirmResult.error)
+      }
+      appendLog(`已选择页面功能：${label}`)
+      setAwaitingConfirmStage('')
+      setFeedback('')
+      setArtifact((prev) => prev ? { ...prev, frontend_files: {}, preview_html: '', preview_url: '' } : prev)
+      await runUntilPause(pipelineId)
+    } catch (error: unknown) {
+      message.error(error instanceof Error ? error.message : '选择页面后重新生成失败')
       setRunning(false)
     }
   }
@@ -455,6 +531,8 @@ export default function ProductPortal() {
   }))
 
   const activeStage = currentStage || status?.current_stage || ''
+  const pendingPageSelection = getPendingPageSelection()
+  const pendingPageCandidates = pendingPageSelection?.candidates || []
   const stageItems = stageOrder.map((stage) => {
     const stageStatus = status?.stages?.[stage]?.status
     return {
@@ -542,18 +620,23 @@ export default function ProductPortal() {
                             <Space direction="vertical" style={{ width: '100%' }}>
                               {(matchedSkill.frontend_page_candidates.candidates || []).slice(0, 5).map((candidate) => (
                                 <Radio key={candidate.path} value={candidate.path}>
-                                  <Space wrap size={6}>
-                                    <Text code>{candidate.path}</Text>
-                                    <Tag color={candidate.confidence >= 0.75 ? 'green' : candidate.confidence >= 0.55 ? 'gold' : 'orange'}>
-                                      {Math.round(candidate.confidence * 100)}%
-                                    </Tag>
-                                    {(candidate.uncertain || matchedSkill.frontend_page_candidates?.uncertain) && (
-                                      <Tag color="orange">低置信</Tag>
-                                    )}
-                                    {candidate.matched_terms?.slice(0, 4).map((term) => (
-                                      <Tag key={term}>{term}</Tag>
-                                    ))}
-                                    <Text type="secondary">{candidate.reason}</Text>
+                                  <Space direction="vertical" size={2}>
+                                    <Space wrap size={6}>
+                                      <Text strong>{candidateLabel(candidate)}</Text>
+                                      <Tag color={candidate.confidence >= 0.75 ? 'green' : candidate.confidence >= 0.55 ? 'gold' : 'orange'}>
+                                        {Math.round(candidate.confidence * 100)}%
+                                      </Tag>
+                                      {(candidate.uncertain || matchedSkill.frontend_page_candidates?.uncertain) && (
+                                        <Tag color="orange">需确认</Tag>
+                                      )}
+                                      {candidate.matched_terms?.slice(0, 4).map((term) => (
+                                        <Tag key={term}>{term}</Tag>
+                                      ))}
+                                    </Space>
+                                    <Space wrap size={6}>
+                                      <Text type="secondary">{candidate.reason}</Text>
+                                      <Text type="secondary" style={{ fontSize: 12 }}>{candidate.path}</Text>
+                                    </Space>
                                   </Space>
                                 </Radio>
                               ))}
@@ -593,29 +676,26 @@ export default function ProductPortal() {
             style={{ marginTop: 16 }}
             onClick={handleCreatePipeline}
           >
-            {matchedSkill && matchedRequirement === requirement.trim() ? '确认页面并执行流水线' : '分析需求并匹配页面'}
+            {matchedSkill && matchedRequirement === requirement.trim() ? '确认页面功能并执行' : '分析需求并匹配页面功能'}
           </Button>
 
-          {awaitingConfirmStage && (
+          {awaitingConfirmStage && !pendingPageSelection && (
             <Alert
               type="warning"
               showIcon
               style={{ marginTop: 12 }}
-              message={`等待人工确认：${stageLabel[awaitingConfirmStage] || awaitingConfirmStage}`}
+              message={`等待处理：${stageLabel[awaitingConfirmStage] || awaitingConfirmStage}`}
               description={
                 <Space direction="vertical" style={{ width: '100%' }}>
                   <TextArea
                     rows={4}
                     value={feedback}
                     onChange={(event) => setFeedback(event.target.value)}
-                    placeholder="填写调整方向，例如：列表字段减少到 8 个、弹窗改为抽屉、导出权限只给财务角色。留空则直接确认继续。"
+                    placeholder="告诉系统哪里不对，例如：我要的是零售商品列表，不是商品池；不要新建页面；只增加商品ID筛选项。"
                   />
-                  <Space>
-                    <Button type="primary" loading={running} onClick={() => resumePipeline(true)}>确认继续</Button>
-                    <Button danger icon={<ReloadOutlined />} loading={running} onClick={() => resumePipeline(false)}>
-                      驳回修改并重新生成
-                    </Button>
-                  </Space>
+                  <Button danger icon={<ReloadOutlined />} loading={running} onClick={submitFeedbackAndRegenerate}>
+                    提交反馈并重新生成
+                  </Button>
                 </Space>
               }
             />
@@ -644,27 +724,6 @@ export default function ProductPortal() {
                     >
                       {item.status === 'failed' ? '重新生成' : '继续'}
                     </Button>,
-                    item.status === 'waiting_confirm' && pipelineId === item.pipeline_id ? (
-                      <Space key="confirm-actions" size={0}>
-                        <Button
-                          size="small"
-                          type="link"
-                          loading={running}
-                          onClick={() => resumePipeline(true)}
-                        >
-                          确认
-                        </Button>
-                        <Button
-                          size="small"
-                          danger
-                          type="link"
-                          loading={running}
-                          onClick={() => resumePipeline(false)}
-                        >
-                          重新生成
-                        </Button>
-                      </Space>
-                    ) : null,
                     <Button
                       key="delete"
                       size="small"
@@ -725,26 +784,6 @@ export default function ProductPortal() {
               <Space>
                 {status && <Tag color={status.status === 'completed' ? 'success' : status.status === 'failed' ? 'error' : 'processing'}>{status.status}</Tag>}
                 {activeStage && <Tag color="blue">{stageLabel[activeStage] || activeStage}</Tag>}
-                {status?.status === 'waiting_confirm' && (
-                  <Button
-                    type="primary"
-                    icon={<CheckCircleOutlined />}
-                    loading={running}
-                    onClick={() => resumePipeline(true)}
-                  >
-                    确认继续
-                  </Button>
-                )}
-                {status?.status === 'waiting_confirm' && (
-                  <Button
-                    danger
-                    icon={<ReloadOutlined />}
-                    loading={running}
-                    onClick={() => resumePipeline(false)}
-                  >
-                    重新生成当前阶段
-                  </Button>
-                )}
                 {status?.status === 'failed' && (
                   <Button
                     danger
@@ -785,26 +824,57 @@ export default function ProductPortal() {
                 type="warning"
                 showIcon
                 style={{ marginTop: 16 }}
-                message={`当前阶段等待确认：${stageLabel[status.current_stage] || status.current_stage}`}
+                message={pendingPageSelection ? '请选择要修改的页面功能' : `需要补充反馈：${stageLabel[status.current_stage] || status.current_stage}`}
                 description={
                   <Space direction="vertical" style={{ width: '100%' }}>
-                    <Text>
-                      如果右侧输出和前端代码方向正确，点击“确认继续”；如果预览没正常生成或页面不对，填写修改意见后点击“重新生成当前阶段”。
-                    </Text>
-                    <TextArea
-                      rows={3}
-                      value={feedback}
-                      onChange={(event) => setFeedback(event.target.value)}
-                      placeholder="例如：预览未生成；页面路径不对；不要新建 mock 数据；请改现有零售商品列表页。"
-                    />
-                    <Space>
-                      <Button type="primary" icon={<CheckCircleOutlined />} loading={running} onClick={() => resumePipeline(true)}>
-                        确认继续
+                    {pendingPageSelection ? (
+                      pendingPageCandidates.length ? (
+                        <Radio.Group
+                          value={selectedPagePath}
+                          onChange={(event) => setSelectedPagePath(event.target.value)}
+                          style={{ width: '100%' }}
+                        >
+                          <Space direction="vertical" style={{ width: '100%' }}>
+                            {pendingPageCandidates.slice(0, 6).map((candidate) => (
+                              <Radio key={candidate.path} value={candidate.path}>
+                                <Space direction="vertical" size={2}>
+                                  <Space wrap size={6}>
+                                    <Text strong>{candidateLabel(candidate)}</Text>
+                                    <Tag color={candidate.confidence >= 0.75 ? 'green' : candidate.confidence >= 0.55 ? 'gold' : 'orange'}>
+                                      {Math.round(candidate.confidence * 100)}%
+                                    </Tag>
+                                    {(candidate.uncertain || pendingPageSelection.uncertain) && <Tag color="orange">需确认</Tag>}
+                                    {candidate.matched_terms?.slice(0, 4).map((term) => <Tag key={term}>{term}</Tag>)}
+                                  </Space>
+                                  <Space wrap size={6}>
+                                    <Text type="secondary">{candidate.reason}</Text>
+                                    <Text type="secondary" style={{ fontSize: 12 }}>{candidate.path}</Text>
+                                  </Space>
+                                </Space>
+                              </Radio>
+                            ))}
+                          </Space>
+                        </Radio.Group>
+                      ) : (
+                        <Text type="warning">没有找到像“零售商品列表”这样的现有页面候选，系统不会新建页面冒充现有功能。</Text>
+                      )
+                    ) : (
+                      <TextArea
+                        rows={3}
+                        value={feedback}
+                        onChange={(event) => setFeedback(event.target.value)}
+                        placeholder="例如：我要的是零售商品列表，不是商品池；不要新建页面；只增加商品ID筛选项。"
+                      />
+                    )}
+                    {pendingPageSelection ? (
+                      <Button type="primary" loading={running} disabled={!pendingPageCandidates.length} onClick={selectExistingPageAndRegenerate}>
+                        选定此页面功能并重新生成
                       </Button>
-                      <Button danger icon={<ReloadOutlined />} loading={running} onClick={() => resumePipeline(false)}>
-                        重新生成当前阶段
+                    ) : (
+                      <Button danger icon={<ReloadOutlined />} loading={running} onClick={submitFeedbackAndRegenerate}>
+                        提交反馈并重新生成
                       </Button>
-                    </Space>
+                    )}
                   </Space>
                 }
               />

@@ -662,7 +662,7 @@ async def update_skill_config(pipeline_id: str, request: Request):
     from app.models.agent_models import DevPipeline
 
     body = await request.json()
-    skill_config = body.get("skill_config", {})
+    incoming_skill_config = body.get("skill_config", {})
     async with async_session_maker() as session:
         result = await session.execute(
             select(DevPipeline).where(
@@ -673,6 +673,8 @@ async def update_skill_config(pipeline_id: str, request: Request):
         pipe = result.scalar_one_or_none()
         if not pipe:
             raise HTTPException(status_code=404, detail="流水线不存在")
+        skill_config = json_mod.loads(pipe.skill_config or "{}")
+        skill_config.update(incoming_skill_config or {})
         pipe.skill_config = json_mod.dumps(skill_config, ensure_ascii=False)
         await session.commit()
     return {"code": 200, "message": "配置更新成功"}
