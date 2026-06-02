@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
-import { Alert, Button, Collapse, Empty, Input, List, Modal, Space, Steps, Tag, Typography, message } from 'antd'
+import { Alert, Button, Collapse, Empty, Input, List, Modal, Radio, Space, Steps, Tag, Typography, message } from 'antd'
 import {
   CheckCircleOutlined,
   CodeOutlined,
@@ -58,6 +58,8 @@ export default function ProductPortal() {
   const [status, setStatus] = useState<PipelineStatus | null>(null)
   const [artifact, setArtifact] = useState<PipelineArtifact | null>(null)
   const [matchedSkill, setMatchedSkill] = useState<ProjectSkillMatch | null>(null)
+  const [matchedRequirement, setMatchedRequirement] = useState('')
+  const [selectedPagePath, setSelectedPagePath] = useState('')
   const [logs, setLogs] = useState<string[]>([])
   const [currentStage, setCurrentStage] = useState('')
   const [streamOutputByStage, setStreamOutputByStage] = useState<Record<string, string>>({})
@@ -121,6 +123,8 @@ export default function ProductPortal() {
     setPipelineId(id)
     localStorage.setItem(LAST_PRODUCT_PIPELINE_ID, id)
     setMatchedSkill(null)
+    setMatchedRequirement('')
+    setSelectedPagePath('')
     setFeedback('')
       setStreamOutputByStage({})
       setSandboxPreviewUrl('')
@@ -247,10 +251,24 @@ export default function ProductPortal() {
     setStreamOutputByStage({})
 
     try {
-      appendLog('正在分析需求并匹配项目 Skill')
-      const match = await pipelineApi.matchProjectSkill({ user_request: trimmedRequirement })
-      setMatchedSkill(match)
-      appendLog(`已匹配前端项目：${match.skill.project_name || match.skill.project_id}（${formatMatchSource(match.match_source)}）`)
+      let match = matchedRequirement === trimmedRequirement ? matchedSkill : null
+      if (!match) {
+        appendLog('正在分析需求并匹配项目 Skill')
+        match = await pipelineApi.matchProjectSkill({ user_request: trimmedRequirement })
+        setMatchedSkill(match)
+        setMatchedRequirement(trimmedRequirement)
+        const pageCandidates = match.frontend_page_candidates?.candidates || []
+        setSelectedPagePath(pageCandidates[0]?.path || '')
+        appendLog(`已匹配前端项目：${match.skill.project_name || match.skill.project_id}（${formatMatchSource(match.match_source)}）`)
+        if (match.frontend_page_candidates?.requires_selection) {
+          if (pageCandidates.length) {
+            message.info('已列出现有页面候选，请确认要修改的页面后再次执行')
+          } else {
+            message.warning('未找到与需求相关的现有页面候选，无法继续生成')
+          }
+          return
+        }
+      }
       const backendMatches = match.backend_matches || (match.backend_match ? [match.backend_match] : [])
       if (backendMatches.length) {
         appendLog(`已匹配后端项目组：${backendMatches.map(item => item.skill.project_name || item.skill.project_id).join('、')}`)
@@ -259,6 +277,12 @@ export default function ProductPortal() {
       const projectId = String(match.skill.project_id)
       const backendProjectIds = backendMatches.map(item => String(item.skill.project_id))
       const backendProjectId = backendProjectIds[0] || ''
+      const requiresPageSelection = Boolean(match.frontend_page_candidates?.requires_selection)
+      const selectedCandidate = (match.frontend_page_candidates?.candidates || []).find(item => item.path === selectedPagePath)
+      if (requiresPageSelection && !selectedPagePath) {
+        message.error('这是现有功能改造，但没有可确认的现有页面候选；请先完善项目源码分析或 Project Skill')
+        return
+      }
       const created = await pipelineApi.create({
         user_request: trimmedRequirement,
         project_id: projectId,
@@ -276,6 +300,8 @@ export default function ProductPortal() {
         skill_config: {
           entry: 'product_portal',
           auto_matched: true,
+          selected_frontend_page_path: selectedPagePath || undefined,
+          selected_frontend_page_confidence: selectedCandidate?.confidence,
           match_source: match.match_source,
           match_reason: match.match_reason,
           match_confidence: match.confidence,
@@ -462,7 +488,15 @@ export default function ProductPortal() {
           <TextArea
             rows={12}
             value={requirement}
-            onChange={(event) => setRequirement(event.target.value)}
+            onChange={(event) => {
+              const nextValue = event.target.value
+              setRequirement(nextValue)
+              if (matchedRequirement && nextValue.trim() !== matchedRequirement) {
+                setMatchedSkill(null)
+                setMatchedRequirement('')
+                setSelectedPagePath('')
+              }
+            }}
             placeholder="描述产品需求、页面目标、核心字段、权限点和验收标准"
           />
 
@@ -482,6 +516,43 @@ export default function ProductPortal() {
                     <Tag color="green">{Math.round(matchedSkill.confidence * 100)}%</Tag>
                   </Text>
                   <Text>{matchedSkill.match_reason}</Text>
+                  {matchedSkill.frontend_page_candidates?.requires_selection && (
+                    <Alert
+                      type={selectedPagePath ? 'info' : 'warning'}
+                      showIcon
+                      message="选择要修改的现有页面"
+                      description={
+                        (matchedSkill.frontend_page_candidates.candidates || []).length ? (
+                          <Radio.Group
+                            value={selectedPagePath}
+                            onChange={(event) => setSelectedPagePath(event.target.value)}
+                            style={{ width: '100%' }}
+                          >
+                            <Space direction="vertical" style={{ width: '100%' }}>
+                              {(matchedSkill.frontend_page_candidates.candidates || []).slice(0, 5).map((candidate) => (
+                                <Radio key={candidate.path} value={candidate.path}>
+                                  <Space wrap size={6}>
+                                    <Text code>{candidate.path}</Text>
+                                    <Tag color={candidate.confidence >= 0.75 ? 'green' : candidate.confidence >= 0.55 ? 'gold' : 'orange'}>
+                                      {Math.round(candidate.confidence * 100)}%
+                                    </Tag>
+                                    {candidate.matched_terms?.slice(0, 4).map((term) => (
+                                      <Tag key={term}>{term}</Tag>
+                                    ))}
+                                    <Text type="secondary">{candidate.reason}</Text>
+                                  </Space>
+                                </Radio>
+                              ))}
+                            </Space>
+                          </Radio.Group>
+                        ) : (
+                          <Text type="warning">
+                            未找到与需求相关的现有页面候选。系统不会新建页面冒充现有功能改造。
+                          </Text>
+                        )
+                      }
+                    />
+                  )}
                   {(matchedSkill.backend_matches || (matchedSkill.backend_match ? [matchedSkill.backend_match] : [])).map((backendMatch) => (
                     <Fragment key={backendMatch.skill.project_id}>
                       <Text>
@@ -508,7 +579,7 @@ export default function ProductPortal() {
             style={{ marginTop: 16 }}
             onClick={handleCreatePipeline}
           >
-            分析需求并执行流水线
+            {matchedSkill && matchedRequirement === requirement.trim() ? '确认页面并执行流水线' : '分析需求并匹配页面'}
           </Button>
 
           {awaitingConfirmStage && (

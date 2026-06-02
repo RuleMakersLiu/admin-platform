@@ -2,6 +2,7 @@ from pathlib import Path
 
 from app.ai.flow_manager import (
     _auto_fix_frontend_preview_code_files,
+    _frontend_existing_page_candidates,
     _frontend_relevant_existing_page_paths,
     _validate_frontend_preview_code_files,
 )
@@ -399,6 +400,27 @@ def test_relevant_existing_page_paths_ignore_activity_for_retail_product_request
     ) == ["src/views/product/RetailGoodsList.vue"]
 
 
+def test_existing_page_candidates_include_confidence_and_reason():
+    files = {
+        "src/views/activityManage/ActivityManageList.vue": "活动管理列表，活动名称，活动状态，投放渠道",
+        "src/views/product/RetailGoodsList.vue": "零售商品列表，商品名称，商品ID，商品状态，库存",
+    }
+
+    candidates = _frontend_existing_page_candidates(
+        files,
+        "我想给商城管理平台现有的零售商品列表增加一个商品ID的筛选项",
+    )
+
+    assert candidates == [
+        {
+            "path": "src/views/product/RetailGoodsList.vue",
+            "confidence": 0.92,
+            "matched_terms": ["goods", "product", "retail", "商品", "零售"],
+            "reason": "命中业务词：goods, product, retail, 商品, 零售",
+        }
+    ]
+
+
 def test_preview_validator_allows_existing_page_for_existing_feature_change():
     files = {
         "src/views/mall/goods/RetailGoodsList.vue": """
@@ -426,6 +448,78 @@ export function list () {
         files,
         user_request="我想给商城管理平台现有的零售商品列表增加一个商品ID的筛选项",
         existing_frontend_paths=["src/views/mall/goods/RetailGoodsList.vue"],
+    ) == []
+
+
+def test_preview_validator_rejects_mock_list_for_existing_feature_change():
+    files = {
+        "src/views/product/RetailGoodsList.vue": """
+<template><s-table :data="loadData" /></template>
+<script>
+export default {
+  data () {
+    return {
+      loadData: () => Promise.resolve({
+        page: 1, pageNo: 1, pageSize: 10, count: 0, totalCount: 0, list: []
+      })
+    }
+  }
+}
+</script>
+""",
+        "src/api/product.js": """
+const mockProductList = [{ productId: '10001', productName: '旧商品' }]
+export function list () {
+  return new Promise(resolve => resolve({
+    result: { page: 1, pageNo: 1, pageSize: 10, count: 1, totalCount: 1, list: mockProductList }
+  }))
+}
+""",
+    }
+
+    issues = _validate_frontend_preview_code_files(
+        files,
+        user_request="我想给商城管理平台现有的零售商品列表增加一个商品ID的筛选项",
+        existing_frontend_paths=["src/views/product/RetailGoodsList.vue"],
+    )
+
+    assert any("生成了 mock 列表数据" in issue for issue in issues)
+    assert any("模拟接口 Promise" in issue for issue in issues)
+
+
+def test_preview_validator_allows_existing_api_param_patch_without_mock():
+    files = {
+        "src/views/product/RetailGoodsList.vue": """
+<template><s-table :data="loadData" /></template>
+<script>
+export default {
+  data () {
+    return {
+      loadData: parameter => list({ ...parameter, productId: this.queryParam.productId }).then(res => ({
+        page: res.result.page,
+        pageNo: res.result.pageNo,
+        pageSize: res.result.pageSize,
+        count: res.result.count,
+        totalCount: res.result.totalCount,
+        list: Array.isArray(res.result.list) ? res.result.list : []
+      }))
+    }
+  }
+}
+</script>
+""",
+        "src/api/product.js": """
+import request from '@/utils/request'
+export function list (parameter) {
+  return request({ url: '/product/retail/list', method: 'get', params: { ...parameter, productId: parameter.productId } })
+}
+""",
+    }
+
+    assert _validate_frontend_preview_code_files(
+        files,
+        user_request="我想给商城管理平台现有的零售商品列表增加一个商品ID的筛选项",
+        existing_frontend_paths=["src/views/product/RetailGoodsList.vue"],
     ) == []
 
 

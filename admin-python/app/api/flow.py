@@ -293,6 +293,22 @@ async def match_project_skill(request: MatchProjectSkillRequest, http_request: R
     if backend_match:
         match["backend_match"] = backend_match
         match["backend_matches"] = backend_match.get("matches") or [backend_match]
+    try:
+        from app.ai.flow_manager import get_frontend_page_candidates_for_requirement
+
+        frontend_project_id = str((match.get("skill") or {}).get("project_id") or "")
+        if frontend_project_id:
+            match["frontend_page_candidates"] = await get_frontend_page_candidates_for_requirement(
+                frontend_project_id,
+                request.user_request.strip(),
+            )
+    except Exception as exc:
+        logger.warning("Failed to load frontend page candidates: %s", exc)
+        match["frontend_page_candidates"] = {
+            "requires_selection": False,
+            "candidates": [],
+            "error": str(exc),
+        }
     match["tenant_scope"] = tenant_scope
     return {"code": 200, "message": "匹配成功", "data": match}
 

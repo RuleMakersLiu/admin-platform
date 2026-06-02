@@ -293,6 +293,7 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 2. 根据匹配项目的真实技术栈生成文件：Vue 后台通常生成 `src/views/**/*.vue` + `src/api/*.js`；React 后台通常生成 `src/pages/**/*.tsx|jsx` + service/api 文件；uni-app/小程序项目按项目现有 `pages/**`、`*.vue` 或 `*.wxml/*.js/*.json/*.wxss` 结构生成。不要把所有项目都当 Vue 后台。
    - 文件路径必须像目标项目里的真实业务模块路径，优先沿用 Project Skill 或代码参考里的目录命名。
    - 如果用户需求表达的是“现有/已有/当前/原有页面或功能上增加、修改、优化、补充筛选/字段/按钮/查询”，必须修改「与本需求相关的已确认前端页面路径」中的现有页面；禁止凭语义新建 `src/views/**/List.vue` 或 `src/pages/**/List.vue` 来冒充改造，禁止选择活动管理、营销活动等无关业务页面。
+   - 现有功能改造必须做最小增量：旧表格列、旧列表数据、旧查询接口都是既有能力，不要重新生成整页 mock 数据或新建一套列表 API。比如“给现有零售商品列表增加商品ID筛选项”，只需要在现有页面增加查询控件、queryParam 和请求参数传递；除非需求明确要求新增接口/新增数据源，否则不要输出 `mockProductList`、`Mock.mock` 或完整假数据。
    - 如果找不到与现有功能对应的已确认页面路径，本阶段不要编造新页面，应输出空 JSON 数组让系统失败并在修复反馈中暴露“缺少真实页面路径”。
    - 禁止生成 `Demo`、`Example`、`Standalone`、`SandboxPreview`、`PreviewOnly`、`MockPage`、`GeneratedPage` 这类独立演示路径或组件名。
    - 禁止生成新的 `package.json`、`vite.config.*`、`main.*`、`App.*`、`index.html` 来伪造一个独立应用。
@@ -905,6 +906,29 @@ def _validate_existing_feature_paths(
     return issues
 
 
+def _validate_existing_feature_mock_scope(files: Dict[str, str], user_request: str = "") -> List[str]:
+    if not _is_existing_feature_change_request(user_request):
+        return []
+    if re.search(r"(mock|假数据|模拟数据|预览数据|新接口|新增接口|新增数据源)", user_request or "", re.I):
+        return []
+
+    issues = []
+    for path, content in files.items():
+        safe_path = str(path).replace("\\", "/").lstrip("/")
+        if not safe_path.startswith("src/api/") or not isinstance(content, str):
+            continue
+        if re.search(r"\bmock[A-Za-z0-9_]*List\b|\bMock\.mock\b|const\s+mock[A-Za-z0-9_]*\s*=", content):
+            issues.append(
+                f"{safe_path} 为现有功能改造生成了 mock 列表数据；旧列表数据和旧接口应复用现有能力，"
+                "除非需求明确要求新增接口或 mock 数据"
+            )
+        if re.search(r"return\s+new\s+Promise\s*\(", content) and re.search(r"\b(list|data)\s*:", content):
+            issues.append(
+                f"{safe_path} 为现有功能改造生成了模拟接口 Promise；应只在必要时补充现有请求参数，不要重造旧列表数据"
+            )
+    return issues
+
+
 def _validate_frontend_preview_code_files(
     files: Dict[str, str],
     user_request: str = "",
@@ -915,6 +939,7 @@ def _validate_frontend_preview_code_files(
         return ["没有生成前端代码文件"]
 
     issues.extend(_validate_existing_feature_paths(files, user_request, existing_frontend_paths))
+    issues.extend(_validate_existing_feature_mock_scope(files, user_request))
 
     normalized_paths = [str(path).replace("\\", "/").lstrip("/") for path in files]
     vue_admin_paths = [
@@ -1823,7 +1848,15 @@ def _requirement_strong_business_terms(requirement: str) -> List[str]:
         "管理", "平台", "系统", "列表", "筛选", "查询", "搜索", "字段", "id",
         "商品id", "增加", "新增", "现有", "已有",
     }
-    strong = [term for term in terms if term.lower() not in generic and len(term) >= 2]
+    known_business_terms = ("商品", "零售", "活动", "营销", "订单", "用户", "酒店", "分类")
+    strong = []
+    for term in terms:
+        if term.lower() in generic or len(term) < 2:
+            continue
+        if re.fullmatch(r"[a-z0-9_]+", term.lower()):
+            strong.append(term)
+            continue
+        strong.extend(known for known in known_business_terms if known in term)
     return _business_synonyms_for_terms(strong)
 
 
@@ -1860,6 +1893,10 @@ def _frontend_existing_page_paths(files: Dict[str, str]) -> List[str]:
 
 
 def _frontend_relevant_existing_page_paths(files: Dict[str, str], requirement: str, limit: int = 12) -> List[str]:
+    return [item["path"] for item in _frontend_existing_page_candidates(files, requirement, limit)]
+
+
+def _frontend_existing_page_candidates(files: Dict[str, str], requirement: str, limit: int = 12) -> List[Dict[str, Any]]:
     strong_terms = _requirement_strong_business_terms(requirement)
     if not strong_terms:
         return []
@@ -1872,7 +1909,7 @@ def _frontend_relevant_existing_page_paths(files: Dict[str, str], requirement: s
     if "活动" in requirement_text:
         anchor_groups.append(["活动", "activity"])
 
-    scored = []
+    scored: List[Tuple[int, str, List[str], List[str]]] = []
     for path, content in files.items():
         normalized = str(path).replace("\\", "/").lstrip("/")
         if not _is_frontend_page_path(normalized):
@@ -1890,10 +1927,33 @@ def _frontend_relevant_existing_page_paths(files: Dict[str, str], requirement: s
         if not path_hits and len(content_hits) < 2:
             continue
         score = len(path_hits) * 4 + len(content_hits)
-        scored.append((score, normalized))
+        scored.append((score, normalized, path_hits, content_hits))
 
     scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    return [path for _, path in scored[:limit]]
+    if not scored:
+        return []
+    top_score = max(score for score, _, _, _ in scored)
+    candidates = []
+    for score, path, path_hits, content_hits in scored[:limit]:
+        confidence = round(min(0.98, max(0.35, score / max(top_score, 1) * 0.92)), 2)
+        matched_terms = sorted(set(path_hits + content_hits))
+        candidates.append({
+            "path": path,
+            "confidence": confidence,
+            "matched_terms": matched_terms[:8],
+            "reason": f"命中业务词：{', '.join(matched_terms[:6])}" if matched_terms else "命中项目页面路径",
+        })
+    return candidates
+
+
+async def get_frontend_page_candidates_for_requirement(project_id: str, requirement: str) -> Dict[str, Any]:
+    files = await _load_project_files_cached(project_id, "frontend")
+    candidates = _frontend_existing_page_candidates(files, requirement)
+    return {
+        "project_id": str(project_id or ""),
+        "requires_selection": _is_existing_feature_change_request(requirement),
+        "candidates": candidates,
+    }
 
 
 async def _load_project_context(project_id: str, project_type: str, requirement: str = "") -> str:
@@ -2583,6 +2643,7 @@ class DevPipelineManager:
             "frontend_tech": pipe_config.get("frontend_tech", ""),
             "pipeline_mode": pipe_config.get("pipeline_mode", "full"),
         }
+        selected_frontend_page_path = str(pipe_config.get("selected_frontend_page_path") or "").strip()
 
         # 加载关联项目的知识库上下文（上下文工程：语义检索 + 项目知识）
         project_ctx_section = ""
@@ -2637,12 +2698,21 @@ class DevPipelineManager:
         if fe_proj_id and stage_key in ("frontend_dev", "prototype", "page_design", "delivery", "code_review"):
             from app.services.knowledge_service import get_relevant_context
             frontend_files = await _load_project_files_cached(fe_proj_id, "frontend")
-            frontend_existing_paths = (
-                _frontend_relevant_existing_page_paths(frontend_files, user_request)
-                or ([] if _is_existing_feature_change_request(user_request) else _frontend_existing_page_paths(frontend_files))
-            )
+            if selected_frontend_page_path:
+                frontend_existing_paths = [selected_frontend_page_path]
+            else:
+                frontend_existing_paths = (
+                    _frontend_relevant_existing_page_paths(frontend_files, user_request)
+                    or ([] if _is_existing_feature_change_request(user_request) else _frontend_existing_page_paths(frontend_files))
+                )
             if frontend_existing_paths:
                 context["frontend_existing_paths"] = frontend_existing_paths
+            if selected_frontend_page_path:
+                ctx_parts.append(
+                    "## 用户已选择要修改的现有前端页面\n"
+                    f"- `{selected_frontend_page_path}`\n"
+                    "本次前端预览代码必须修改这个页面路径，不允许改成其他页面或新建替代页面。"
+                )
             if compact_preview_stage:
                 fe_ctx = await _load_project_context(fe_proj_id, "frontend", user_request)
                 if fe_ctx:
