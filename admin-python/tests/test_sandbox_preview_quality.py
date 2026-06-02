@@ -434,6 +434,20 @@ def test_existing_page_candidates_map_retail_goods_menu_to_commodity_list_source
   <s-table ref="table" :columns="columns" :data="loadData" />
 </template>
 """,
+        "src/views/selfOperateCommodity/commodityList/List.vue": """
+<template>
+  <a-form>
+    <a-form-item label="商品名称"><a-input v-model="queryParam.productName" /></a-form-item>
+    <a-form-item label="商品编号"><a-input v-model="queryParam.productCode" /></a-form-item>
+  </a-form>
+  <s-table ref="table" :columns="columns" :data="loadData" />
+</template>
+<script>
+export default { data () { return { url: { list: '/api/product/glsw/product/selfOperatedList' } } } }
+</script>
+""",
+        "src/views/selfOperateCommodity/commodityList/Operate.vue": "商品编辑页，SKU设置，商品名称",
+        "src/views/supplyChainMidPlatform/commodityManage/commodityList/List.vue": "供应链商品列表，商品ID，商品名称",
         "src/views/commodityCenter/commodityPool/CommodityPoolList.vue": "商品池列表，零售商品，商品ID，商品名称",
         "src/views/orderList/modules/detailContent/retail.vue": "零售订单详情，商品名称，商品ID",
     }
@@ -444,7 +458,10 @@ def test_existing_page_candidates_map_retail_goods_menu_to_commodity_list_source
     )
 
     assert candidates
-    assert candidates[0]["path"] == "src/views/commodityList/ProductList.vue"
+    assert candidates[0]["path"] == "src/views/selfOperateCommodity/commodityList/List.vue"
+    assert "src/views/selfOperateCommodity/commodityList/Operate.vue" not in [
+        candidate["path"] for candidate in candidates
+    ]
     assert "src/views/commodityCenter/commodityPool/CommodityPoolList.vue" not in [
         candidate["path"] for candidate in candidates
     ]

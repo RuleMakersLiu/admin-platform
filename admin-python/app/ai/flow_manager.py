@@ -1921,6 +1921,8 @@ def _is_primary_product_list_context(path: str, content: str) -> bool:
         return False
     if any(segment in lower_path for segment in ("/orderlist/", "refundorderlist", "/modules/", "/detail")):
         return False
+    if lower_path.endswith("/operate.vue"):
+        return False
     if "commoditylist" in lower_path or "commodity/list" in lower_path:
         return True
     if ("productlist" in lower_path or lower_path.endswith("/list.vue")) and (
@@ -1970,6 +1972,16 @@ def _frontend_existing_page_candidates(files: Dict[str, str], requirement: str, 
         score = len(path_hits) * 4 + len(content_hits)
         if _is_primary_product_list_context(normalized, content or "") and "商品" in (requirement or ""):
             score += 12
+        if (
+            "商城" in (requirement or "")
+            and ("零售" in (requirement or "") or "自营" in (requirement or ""))
+            and "selfoperatecommodity/commoditylist/list.vue" in normalized.lower()
+        ):
+            score += 18
+        if "supplychainmidplatform/" in normalized.lower() and "供应链" not in (requirement or ""):
+            score -= 6
+        if "platformcommodity/" in normalized.lower() and "平台商品" not in (requirement or ""):
+            score -= 4
         scored.append((score, normalized, path_hits, content_hits))
 
     scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
