@@ -3544,7 +3544,47 @@ class DevPipelineManager:
     async def get_pipeline_status(self, pipeline_id: str) -> Dict[str, Any]:
         async with async_session_maker() as session:
             pipe = await self._load_pipeline(session, pipeline_id)
-            return self._to_status_dict(pipe)
+            status = self._to_status_dict(pipe)
+            pipe_config = json.loads(pipe.skill_config or "{}")
+            current_stage = pipe.current_stage
+            current_structured = (
+                (status.get("stages") or {})
+                .get(current_stage or "", {})
+                .get("structured_output")
+                or {}
+            )
+            if (
+                pipe.status == PipelineStatus.WAITING_CONFIRM.value
+                and current_stage == "prototype"
+                and pipe_config.get("pipeline_mode") == "frontend_contract_review"
+                and _is_existing_feature_change_request(pipe.user_request or "")
+                and not str(pipe_config.get("selected_frontend_page_path") or "").strip()
+                and not current_structured.get("needs_frontend_page_selection")
+            ):
+                frontend_project_id = str(pipe_config.get("frontend_project_id") or pipe.project_id or "").strip()
+                page_candidates: Dict[str, Any] = {
+                    "project_id": frontend_project_id,
+                    "requires_selection": True,
+                    "candidates": [],
+                    "uncertain": True,
+                }
+                if frontend_project_id:
+                    page_candidates = await get_frontend_page_candidates_for_requirement(
+                        frontend_project_id,
+                        pipe.user_request or "",
+                    )
+                stage_status = (status.get("stages") or {}).get(current_stage, {})
+                stage_status["structured_output"] = {
+                    **current_structured,
+                    "needs_frontend_page_selection": True,
+                    "frontend_page_candidates": page_candidates,
+                }
+                stage_status["output"] = (
+                    "这是现有页面功能改造，请先选择要修改的页面功能。"
+                    "系统会基于所选页面重新生成，不会新建替代页面。"
+                )
+                status["stages"][current_stage] = stage_status
+            return status
 
     async def get_preview(self, pipeline_id: str) -> Dict[str, Any]:
         async with async_session_maker() as session:
