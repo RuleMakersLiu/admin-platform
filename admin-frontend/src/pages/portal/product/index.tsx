@@ -262,7 +262,7 @@ export default function ProductPortal() {
         appendLog(`已匹配前端项目：${match.skill.project_name || match.skill.project_id}（${formatMatchSource(match.match_source)}）`)
         if (match.frontend_page_candidates?.requires_selection) {
           if (pageCandidates.length) {
-            message.info('已列出现有页面候选，请确认要修改的页面后再次执行')
+            message.info(match.frontend_page_candidates.uncertain ? '页面匹配不确定，请人工选择候选页面' : '已列出现有页面候选，请确认要修改的页面后再次执行')
           } else {
             message.warning('未找到与需求相关的现有页面候选，无法继续生成')
           }
@@ -520,7 +520,7 @@ export default function ProductPortal() {
                     <Alert
                       type={selectedPagePath ? 'info' : 'warning'}
                       showIcon
-                      message="选择要修改的现有页面"
+                      message={matchedSkill.frontend_page_candidates.uncertain ? '页面匹配不确定，请人工选择' : '选择要修改的现有页面'}
                       description={
                         (matchedSkill.frontend_page_candidates.candidates || []).length ? (
                           <Radio.Group
@@ -536,6 +536,9 @@ export default function ProductPortal() {
                                     <Tag color={candidate.confidence >= 0.75 ? 'green' : candidate.confidence >= 0.55 ? 'gold' : 'orange'}>
                                       {Math.round(candidate.confidence * 100)}%
                                     </Tag>
+                                    {(candidate.uncertain || matchedSkill.frontend_page_candidates?.uncertain) && (
+                                      <Tag color="orange">低置信</Tag>
+                                    )}
                                     {candidate.matched_terms?.slice(0, 4).map((term) => (
                                       <Tag key={term}>{term}</Tag>
                                     ))}
@@ -679,11 +682,16 @@ export default function ProductPortal() {
 
           <div style={{ marginTop: 18 }}>
             <Title level={5}>执行日志</Title>
-            {logs.length ? logs.map((line, index) => (
-              <div key={`${line}-${index}`} style={{ fontSize: 12, color: '#475569', padding: '4px 0', borderBottom: '1px solid #f1f5f9' }}>
-                {line}
-              </div>
-            )) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无执行日志" />}
+            <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid #eef2f7', borderRadius: 6, padding: '6px 8px', background: '#fbfdff' }}>
+              {logs.length ? logs.map((line, index) => (
+                <div
+                  key={`${line}-${index}`}
+                  style={{ fontSize: 12, color: '#475569', padding: '4px 0', borderBottom: '1px solid #f1f5f9', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                >
+                  {line}
+                </div>
+              )) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无执行日志" />}
+            </div>
           </div>
         </div>
 

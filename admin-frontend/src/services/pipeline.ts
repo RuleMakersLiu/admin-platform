@@ -74,11 +74,13 @@ export interface ProjectSkillMatch {
   backend_matches?: ProjectSkillMatch[]
   frontend_page_candidates?: {
     requires_selection?: boolean
+    uncertain?: boolean
     candidates?: Array<{
       path: string
       confidence: number
       matched_terms?: string[]
       reason?: string
+      uncertain?: boolean
     }>
     error?: string
   }

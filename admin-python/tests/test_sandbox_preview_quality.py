@@ -3,6 +3,7 @@ from pathlib import Path
 from app.ai.flow_manager import (
     _auto_fix_frontend_preview_code_files,
     _frontend_existing_page_candidates,
+    _frontend_fallback_page_candidates,
     _frontend_relevant_existing_page_paths,
     _validate_frontend_preview_code_files,
 )
@@ -419,6 +420,23 @@ def test_existing_page_candidates_include_confidence_and_reason():
             "reason": "命中业务词：goods, product, retail, 商品, 零售",
         }
     ]
+
+
+def test_fallback_page_candidates_offer_uncertain_options_when_no_strong_match():
+    files = {
+        "src/views/activityManage/ActivityManageList.vue": "活动管理列表，活动名称，活动状态，投放渠道",
+        "src/views/order/OrderList.vue": "订单列表，订单状态，支付状态",
+    }
+
+    candidates = _frontend_fallback_page_candidates(
+        files,
+        "我想给商城管理平台现有的零售商品列表增加一个商品ID的筛选项",
+    )
+
+    assert candidates
+    assert candidates[0]["uncertain"] is True
+    assert candidates[0]["confidence"] <= 0.52
+    assert "低置信候选" in candidates[0]["reason"]
 
 
 def test_preview_validator_allows_existing_page_for_existing_feature_change():

@@ -1946,13 +1946,45 @@ def _frontend_existing_page_candidates(files: Dict[str, str], requirement: str, 
     return candidates
 
 
+def _frontend_fallback_page_candidates(files: Dict[str, str], requirement: str, limit: int = 8) -> List[Dict[str, Any]]:
+    terms = _business_synonyms_for_terms(_requirement_match_terms(requirement))
+    scored = []
+    for path, content in files.items():
+        normalized = str(path).replace("\\", "/").lstrip("/")
+        if not _is_frontend_page_path(normalized):
+            continue
+        haystack = f"{normalized}\n{content or ''}".lower()
+        hits = [term for term in terms if term.lower() in haystack]
+        score = len(hits)
+        path_lower = normalized.lower()
+        if "list" in path_lower or "列表" in (content or ""):
+            score += 1
+        scored.append((score, normalized, sorted(set(hits))[:6]))
+
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    candidates = []
+    for score, path, hits in scored[:limit]:
+        candidates.append({
+            "path": path,
+            "confidence": round(min(0.52, 0.18 + score * 0.08), 2),
+            "matched_terms": hits,
+            "reason": "低置信候选，需要人工确认" if not hits else f"低置信候选，命中：{', '.join(hits[:4])}",
+            "uncertain": True,
+        })
+    return candidates
+
+
 async def get_frontend_page_candidates_for_requirement(project_id: str, requirement: str) -> Dict[str, Any]:
     files = await _load_project_files_cached(project_id, "frontend")
     candidates = _frontend_existing_page_candidates(files, requirement)
+    fallback_candidates: List[Dict[str, Any]] = []
+    if _is_existing_feature_change_request(requirement) and not candidates:
+        fallback_candidates = _frontend_fallback_page_candidates(files, requirement)
     return {
         "project_id": str(project_id or ""),
         "requires_selection": _is_existing_feature_change_request(requirement),
-        "candidates": candidates,
+        "candidates": candidates or fallback_candidates,
+        "uncertain": bool(fallback_candidates and not candidates),
     }
 
 
