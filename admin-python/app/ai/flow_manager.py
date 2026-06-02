@@ -293,7 +293,9 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 2. 根据匹配项目的真实技术栈生成文件：Vue 后台通常生成 `src/views/**/*.vue` + `src/api/*.js`；React 后台通常生成 `src/pages/**/*.tsx|jsx` + service/api 文件；uni-app/小程序项目按项目现有 `pages/**`、`*.vue` 或 `*.wxml/*.js/*.json/*.wxss` 结构生成。不要把所有项目都当 Vue 后台。
    - 文件路径必须像目标项目里的真实业务模块路径，优先沿用 Project Skill 或代码参考里的目录命名。
    - 如果用户需求表达的是“现有/已有/当前/原有页面或功能上增加、修改、优化、补充筛选/字段/按钮/查询”，必须修改「与本需求相关的已确认前端页面路径」中的现有页面；禁止凭语义新建 `src/views/**/List.vue` 或 `src/pages/**/List.vue` 来冒充改造，禁止选择活动管理、营销活动等无关业务页面。
-   - 现有功能改造必须做最小增量：旧表格列、旧列表数据、旧查询接口都是既有能力，不要重新生成整页 mock 数据或新建一套列表 API。比如“给现有零售商品列表增加商品ID筛选项”，只需要在现有页面增加查询控件、queryParam 和请求参数传递；除非需求明确要求新增接口/新增数据源，否则不要输出 `mockProductList`、`Mock.mock` 或完整假数据。
+   - 现有功能改造必须做最小增量：旧表格列、旧列表数据、旧查询接口、旧 mixin、旧组件、旧操作列都是既有能力，不要重写整页架构，不要重新生成整页 mock 数据或新建一套列表 API。比如“给现有零售商品列表增加商品ID筛选项”，只需要在现有页面增加/调整查询控件、queryParam 和请求参数传递；除非需求明确要求新增接口/新增数据源，否则不要输出 `mockProductList`、`Mock.mock` 或完整假数据。
+   - 如果现有页面里已经存在等价筛选项（例如“商品编号”绑定 `queryParam.productCode`，而用户说“商品ID筛选”），优先做最小语义调整（如 label/placeholder 改为商品ID）或保持该字段，不要新增重复字段，不要把 `productCode` 改成未确认的 `productId`。
+   - 修改现有 Vue 列表页时必须保留原页面的 `ListMixin`/`mixins`、`<s-table :data="loadData">`、`url.list` 接口、已有 columns/slots/操作按钮和已有导入；除非用户明确要求删除，否则不要用本地 `data()`、新 API 文件或新接口替代原列表加载方式。
    - 如果找不到与现有功能对应的已确认页面路径，本阶段不要编造新页面，应输出空 JSON 数组让系统失败并在修复反馈中暴露“缺少真实页面路径”。
    - 禁止生成 `Demo`、`Example`、`Standalone`、`SandboxPreview`、`PreviewOnly`、`MockPage`、`GeneratedPage` 这类独立演示路径或组件名。
    - 禁止生成新的 `package.json`、`vite.config.*`、`main.*`、`App.*`、`index.html` 来伪造一个独立应用。
@@ -929,10 +931,123 @@ def _validate_existing_feature_mock_scope(files: Dict[str, str], user_request: s
     return issues
 
 
+def _collect_api_endpoints(content: str) -> List[str]:
+    if not isinstance(content, str):
+        return []
+    return sorted(set(re.findall(r"['\"](/api/[^'\"]+)['\"]", content)))
+
+
+def _validate_undefined_data_return_refs(path: str, content: str) -> List[str]:
+    if not isinstance(content, str) or not path.endswith((".vue", ".js", ".ts", ".tsx", ".jsx")):
+        return []
+    issues: List[str] = []
+    in_data_return = False
+    entered_runtime_function = False
+    for line in content.splitlines():
+        stripped = line.strip()
+        if re.search(r"\bdata\s*\([^)]*\)\s*\{", line):
+            in_data_return = False
+            entered_runtime_function = False
+            continue
+        if not in_data_return and re.search(r"\breturn\s*\{", line):
+            in_data_return = True
+            continue
+        if not in_data_return:
+            continue
+        if re.search(r"\b(loadData|[A-Za-z_$][\w$]*)\s*:\s*(?:async\s*)?(?:function\b|[^,\n]*=>)", stripped):
+            entered_runtime_function = True
+        if not entered_runtime_function and re.match(
+            r"[A-Za-z_$][\w$]*\s*:\s*(?:result|res|parameter)\.[A-Za-z_$]",
+            stripped,
+        ):
+            safe_path = str(path).replace("\\", "/").lstrip("/")
+            issues.append(
+                f"{safe_path} 的 data() 初始返回对象引用了 result/res/parameter 等未定义运行期变量，"
+                "会导致 created/首屏渲染时报错"
+            )
+            break
+    return issues
+
+
+def _validate_existing_feature_preservation(
+    files: Dict[str, str],
+    user_request: str = "",
+    existing_frontend_paths: Optional[List[str]] = None,
+    existing_frontend_files: Optional[Dict[str, str]] = None,
+) -> List[str]:
+    if not _is_existing_feature_change_request(user_request):
+        return []
+    existing_files = {
+        str(path).replace("\\", "/").lstrip("/"): content
+        for path, content in (existing_frontend_files or {}).items()
+        if isinstance(content, str)
+    }
+    if not existing_files:
+        return []
+
+    issues: List[str] = []
+    allowed_paths = {
+        str(path).replace("\\", "/").lstrip("/")
+        for path in (existing_frontend_paths or [])
+        if str(path).strip()
+    }
+    generated_paths = {str(path).replace("\\", "/").lstrip("/") for path in files}
+    explicit_new_api = re.search(r"(新接口|新增接口|新增数据源|mock|模拟数据|假数据)", user_request or "", re.I)
+    original_api_paths = {path for path in existing_files if path.startswith("src/api/")}
+
+    for path in generated_paths:
+        if (
+            path.startswith("src/api/")
+            and path not in original_api_paths
+            and not explicit_new_api
+            and allowed_paths
+        ):
+            issues.append(
+                f"{path} 是为现有功能改造新增的 API 文件；本需求应复用现有页面的查询接口，"
+                "除非用户明确要求新增接口或 mock 数据"
+            )
+
+    for path in sorted(allowed_paths & generated_paths):
+        original = existing_files.get(path, "")
+        generated = files.get(path, "")
+        if not isinstance(generated, str) or not original:
+            continue
+        safe_path = path
+        original_lower = original.lower()
+        generated_lower = generated.lower()
+
+        if "listmixin" in original_lower and "listmixin" not in generated_lower:
+            issues.append(f"{safe_path} 原页面使用 ListMixin，生成代码移除了它，属于整页重写而不是现有功能最小改造")
+        if re.search(r"\bmixins\s*:", original) and not re.search(r"\bmixins\s*:", generated):
+            issues.append(f"{safe_path} 原页面存在 mixins 配置，生成代码不能移除既有列表行为")
+        if "<s-table" in original_lower and "<s-table" not in generated_lower:
+            issues.append(f"{safe_path} 原页面使用 STable，生成代码不能替换为其他表格或静态列表")
+        if re.search(r"<s-table[^>]+:data=[\"']loadData[\"']", original, re.I | re.S) and not re.search(
+            r"<s-table[^>]+:data=[\"']loadData[\"']", generated, re.I | re.S
+        ):
+            issues.append(f"{safe_path} 原页面 STable 使用 loadData，生成代码必须保留该数据加载入口")
+        if "queryparam" in original_lower and "queryparam" not in generated_lower:
+            issues.append(f"{safe_path} 原页面使用 queryParam 查询对象，生成代码不能改成本地孤立查询状态")
+        if re.search(r"(商品id|商品编号|商品id的筛选|商品ID)", user_request or "", re.I):
+            if "productCode" in original and "productCode" not in generated:
+                issues.append(
+                    f"{safe_path} 原页面商品编号/商品ID筛选使用 queryParam.productCode，"
+                    "生成代码不能改成未确认的 productId 或丢失既有字段"
+                )
+
+        original_endpoints = _collect_api_endpoints(original)
+        for endpoint in original_endpoints:
+            if endpoint not in generated:
+                issues.append(f"{safe_path} 原页面列表接口 {endpoint} 被移除或替换，现有功能改造必须复用原接口")
+
+    return issues
+
+
 def _validate_frontend_preview_code_files(
     files: Dict[str, str],
     user_request: str = "",
     existing_frontend_paths: Optional[List[str]] = None,
+    existing_frontend_files: Optional[Dict[str, str]] = None,
 ) -> List[str]:
     issues: List[str] = []
     if not files:
@@ -940,6 +1055,14 @@ def _validate_frontend_preview_code_files(
 
     issues.extend(_validate_existing_feature_paths(files, user_request, existing_frontend_paths))
     issues.extend(_validate_existing_feature_mock_scope(files, user_request))
+    issues.extend(
+        _validate_existing_feature_preservation(
+            files,
+            user_request=user_request,
+            existing_frontend_paths=existing_frontend_paths,
+            existing_frontend_files=existing_frontend_files,
+        )
+    )
 
     normalized_paths = [str(path).replace("\\", "/").lstrip("/") for path in files]
     vue_admin_paths = [
@@ -992,6 +1115,7 @@ def _validate_frontend_preview_code_files(
             issues.append(f"{path} 内容不是字符串")
             continue
         safe_path = str(path).replace("\\", "/").lstrip("/")
+        issues.extend(_validate_undefined_data_return_refs(safe_path, content))
         path_lower = safe_path.lower()
         if standalone_path_pattern.search(path_lower):
             issues.append(f"{safe_path} 像独立 demo/preview 页面，必须基于匹配前端项目的真实业务目录生成")
@@ -1015,15 +1139,17 @@ def _validate_frontend_preview_code_files(
 
         if safe_path.endswith(".vue"):
             if "<s-table" in content.lower():
+                uses_existing_list_mixin = "listmixin" in content.lower()
                 if "loadData" not in content:
                     issues.append(f"{safe_path} 使用 STable 但没有定义 loadData")
-                if not re.search(r"\blist\s*:", content) and not re.search(r"\blist\b", content):
-                    issues.append(f"{safe_path} 使用 STable 时必须处理分页对象 list 字段")
-                for required in ("page", "count"):
-                    if not re.search(rf"\b{required}\s*:", content):
-                        issues.append(f"{safe_path} 使用 STable 时必须处理分页字段 {required}")
-                if re.search(r"return\s+res\.data\s*(?:[;\n}]|$)", content):
-                    issues.append(f"{safe_path} 的 loadData 不能只返回 res.data，必须返回含 list/page/count 的分页对象")
+                if not uses_existing_list_mixin:
+                    if not re.search(r"\blist\s*:", content) and not re.search(r"\blist\b", content):
+                        issues.append(f"{safe_path} 使用 STable 时必须处理分页对象 list 字段")
+                    for required in ("page", "count"):
+                        if not re.search(rf"\b{required}\s*:", content):
+                            issues.append(f"{safe_path} 使用 STable 时必须处理分页字段 {required}")
+                    if re.search(r"return\s+res\.data\s*(?:[;\n}]|$)", content):
+                        issues.append(f"{safe_path} 的 loadData 不能只返回 res.data，必须返回含 list/page/count 的分页对象")
             for handler in re.findall(r"@(?:click|change|blur|submit|confirm|pressEnter)=\"([A-Za-z_$][\w$]*)", content):
                 if f"{handler} (" not in content and f"{handler}(" not in content:
                     issues.append(f"{safe_path} 模板事件 {handler} 未实现")
@@ -1064,6 +1190,10 @@ def _patch_stable_table_contract_content(content: str) -> str:
         prefix = match.group("prefix")
         body = match.group("body")
         suffix = match.group("suffix")
+        first_load_data = body.find("loadData")
+        first_page_no = body.find("pageNo")
+        if first_load_data >= 0 and (first_page_no < 0 or first_load_data < first_page_no):
+            return match.group(0)
         if not (
             re.search(r"\bpageNo\s*:", body)
             and re.search(r"\btotalCount\s*:", body)
@@ -1140,6 +1270,23 @@ def _patch_stable_table_contract_content(content: str) -> str:
     patched = content
     for pattern in patterns:
         patched = re.sub(pattern, replacement, patched, flags=re.S)
+    patched = re.sub(
+        r"(?P<prefix>return\s*\{\s*)"
+        r"(?P<body>"
+        r"pageNo\s*:\s*(?P<page_no>[^,\n}]+),\s*"
+        r"pageSize\s*:\s*[^,\n}]+,\s*"
+        r"totalCount\s*:\s*(?P<total_count>[^,\n}]+),\s*"
+        r"(?:totalPage\s*:\s*[^,\n}]+,\s*)?"
+        r"list\s*:\s*list\s*"
+        r")(?P<suffix>\})",
+        lambda match: (
+            f"{match.group('prefix')}page: {match.group('page_no').strip()},\n"
+            f"              count: {match.group('total_count').strip()},\n"
+            f"              {match.group('body')}{match.group('suffix')}"
+        ),
+        patched,
+        flags=re.S,
+    )
     patched = re.sub(
         r"(?P<prefix>return\s*\{)(?P<body>.*?)(?P<suffix>\n\s*\})",
         ensure_required_fields,
@@ -2802,6 +2949,16 @@ class DevPipelineManager:
                     f"- `{selected_frontend_page_path}`\n"
                     "本次前端预览代码必须修改这个页面路径，不允许改成其他页面或新建替代页面。"
                 )
+                selected_content = frontend_files.get(selected_frontend_page_path)
+                if selected_content:
+                    selected_content = _compact_context(selected_content, 4500 if compact_preview_stage else 9000)
+                    ctx_parts.append(
+                        "## 已选择页面的原始代码（必须基于此文件做最小增量修改）\n"
+                        f"路径：`{selected_frontend_page_path}`\n"
+                        "要求：保留原页面的 imports、mixins、components、url/list 接口、表格列、slots、操作按钮和已有方法；"
+                        "只改用户明确要求的筛选/字段/交互。若已有等价字段，优先调整文案，不要重复添加字段。\n\n"
+                        f"{selected_content}"
+                    )
             if compact_preview_stage:
                 fe_ctx = await _load_project_context(fe_proj_id, "frontend", user_request)
                 if fe_ctx:
@@ -3176,10 +3333,23 @@ class DevPipelineManager:
                                     "stage": current_stage,
                                     "fixes": auto_fixes,
                                 })
+                            existing_frontend_files: Dict[str, str] = {}
+                            existing_paths = parsed.get("_frontend_existing_paths") or []
+                            frontend_project_id = str(pipe_config.get("frontend_project_id") or pipe.project_id or "").strip()
+                            if existing_paths and frontend_project_id:
+                                source_files = await _load_project_files_cached(frontend_project_id, "frontend")
+                                existing_frontend_files = {
+                                    str(path).replace("\\", "/").lstrip("/"): source_files.get(
+                                        str(path).replace("\\", "/").lstrip("/"), ""
+                                    )
+                                    for path in existing_paths
+                                    if source_files.get(str(path).replace("\\", "/").lstrip("/"))
+                                }
                             preview_issues = _validate_frontend_preview_code_files(
                                 parsed.get("code_files", {}),
                                 user_request=pipe.user_request or "",
-                                existing_frontend_paths=parsed.get("_frontend_existing_paths") or [],
+                                existing_frontend_paths=existing_paths,
+                                existing_frontend_files=existing_frontend_files,
                             )
                         if not preview_issues:
                             break
@@ -3233,10 +3403,23 @@ class DevPipelineManager:
                                 "stage": current_stage,
                                 "fixes": auto_fixes,
                             })
+                        existing_frontend_files: Dict[str, str] = {}
+                        existing_paths = parsed.get("_frontend_existing_paths") or []
+                        frontend_project_id = str(pipe_config.get("frontend_project_id") or pipe.project_id or "").strip()
+                        if existing_paths and frontend_project_id:
+                            source_files = await _load_project_files_cached(frontend_project_id, "frontend")
+                            existing_frontend_files = {
+                                str(path).replace("\\", "/").lstrip("/"): source_files.get(
+                                    str(path).replace("\\", "/").lstrip("/"), ""
+                                )
+                                for path in existing_paths
+                                if source_files.get(str(path).replace("\\", "/").lstrip("/"))
+                            }
                         preview_issues = _validate_frontend_preview_code_files(
                             parsed.get("code_files", {}),
                             user_request=pipe.user_request or "",
-                            existing_frontend_paths=parsed.get("_frontend_existing_paths") or [],
+                            existing_frontend_paths=existing_paths,
+                            existing_frontend_files=existing_frontend_files,
                         )
                         if preview_issues:
                             error_msg = "预览生成代码未通过可运行性约束: " + "；".join(preview_issues[:8])

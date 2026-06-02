@@ -402,6 +402,136 @@ def test_relevant_existing_page_paths_ignore_activity_for_retail_product_request
     ) == ["src/views/product/RetailGoodsList.vue"]
 
 
+def test_existing_feature_validator_rejects_rewritten_selected_list_page():
+    original_page = """
+<template>
+  <a-card>
+    <a-form>
+      <a-form-item label="商品编号">
+        <a-input v-model="queryParam.productCode" />
+      </a-form-item>
+    </a-form>
+    <s-table ref="table" :columns="columns" :data="loadData">
+      <span slot="action"></span>
+    </s-table>
+  </a-card>
+</template>
+<script>
+import { ListMixin } from '@/mixins/ListMixin'
+export default {
+  name: 'SelfOperateCommodityList',
+  mixins: [ListMixin],
+  data () {
+    return {
+      queryParam: {},
+      url: { list: '/api/product/glsw/product/selfOperatedList' },
+      columns: []
+    }
+  }
+}
+</script>
+"""
+    generated_files = {
+        "src/views/selfOperateCommodity/commodityList/List.vue": """
+<template>
+  <a-card>
+    <a-form>
+      <a-form-item label="商品ID"><a-input v-model="filters.productId" /></a-form-item>
+    </a-form>
+    <s-table ref="table" :columns="columns" :data="loadData" />
+  </a-card>
+</template>
+<script>
+import { getRetailCommodityList } from '@/api/commodityCenter'
+export default {
+  data () {
+    return {
+      filters: { productId: '' },
+      columns: [],
+      loadData: parameter => getRetailCommodityList(parameter).then(res => ({
+        page: res.page || 1,
+        count: res.count || 0,
+        list: Array.isArray(res.list) ? res.list : []
+      }))
+    }
+  }
+}
+</script>
+""",
+        "src/api/commodityCenter.js": "export function getRetailCommodityList () { return Promise.resolve({ list: [] }) }",
+    }
+
+    issues = _validate_frontend_preview_code_files(
+        generated_files,
+        user_request="我想给商城管理平台现有的零售商品列表增加一个商品ID的筛选项",
+        existing_frontend_paths=["src/views/selfOperateCommodity/commodityList/List.vue"],
+        existing_frontend_files={"src/views/selfOperateCommodity/commodityList/List.vue": original_page},
+    )
+
+    assert any("新增的 API 文件" in issue for issue in issues)
+    assert any("移除了它" in issue for issue in issues)
+    assert any("queryParam.productCode" in issue for issue in issues)
+    assert any("/api/product/glsw/product/selfOperatedList" in issue for issue in issues)
+
+
+def test_existing_feature_validator_allows_minimal_label_change_on_selected_page():
+    original_page = """
+<template>
+  <a-form>
+    <a-form-item label="商品编号"><a-input placeholder="请输入商品编号" v-model="queryParam.productCode" /></a-form-item>
+  </a-form>
+  <s-table ref="table" :columns="columns" :data="loadData" />
+</template>
+<script>
+import { ListMixin } from '@/mixins/ListMixin'
+export default {
+  mixins: [ListMixin],
+  data () {
+    return {
+      queryParam: {},
+      url: { list: '/api/product/glsw/product/selfOperatedList' },
+      columns: []
+    }
+  }
+}
+</script>
+"""
+    generated_page = original_page.replace("商品编号", "商品ID")
+
+    issues = _validate_frontend_preview_code_files(
+        {"src/views/selfOperateCommodity/commodityList/List.vue": generated_page},
+        user_request="我想给商城管理平台现有的零售商品列表增加一个商品ID的筛选项",
+        existing_frontend_paths=["src/views/selfOperateCommodity/commodityList/List.vue"],
+        existing_frontend_files={"src/views/selfOperateCommodity/commodityList/List.vue": original_page},
+    )
+
+    assert issues == []
+
+
+def test_preview_validator_rejects_data_return_using_runtime_result_variable():
+    files = {
+        "src/views/selfOperateCommodity/commodityList/List.vue": """
+<template><s-table :data="loadData" /></template>
+<script>
+export default {
+  data () {
+    return {
+      page: result.page || 1,
+      count: parameter.count || 0,
+      list: []
+    }
+  },
+  methods: { loadData () { return Promise.resolve({ page: 1, count: 0, list: [] }) } }
+}
+</script>
+""",
+    }
+
+    issues = _validate_frontend_preview_code_files(files)
+
+    assert any("data() 初始返回对象引用了" in issue for issue in issues)
+
+
 def test_existing_page_candidates_include_confidence_and_reason():
     files = {
         "src/views/activityManage/ActivityManageList.vue": "活动管理列表，活动名称，活动状态，投放渠道",
