@@ -152,6 +152,56 @@ if (process.env.NODE_ENV === 'development') {
     assert _validate_frontend_preview_code_files(fixed) == []
 
 
+def test_preview_auto_fix_repairs_stable_return_with_precomputed_list():
+    files = {
+        "src/views/product/retail/List.vue": """
+<template>
+  <s-table :data="loadData" />
+</template>
+<script>
+import { getProductRetailList } from '@/api/product'
+export default {
+  data () {
+    return {
+      loadData: parameter => {
+        return getProductRetailList(parameter)
+          .then(res => {
+            const result = res.result || res.data || res || {}
+            const list = Array.isArray(result.list) ? result.list : []
+            return {
+              pageNo: result.pageNo || result.page || parameter.pageNo || 1,
+              pageSize: result.pageSize || parameter.pageSize || 10,
+              totalCount: result.totalCount || result.count || 0,
+              totalPage: result.totalPage || Math.ceil((result.totalCount || result.count || 0) / (result.pageSize || parameter.pageSize || 10)),
+              list: list
+            }
+          })
+      }
+    }
+  }
+}
+</script>
+""",
+        "src/api/product.js": """
+export function getProductRetailList () {
+  return Promise.resolve({
+    result: { page: 1, pageNo: 1, pageSize: 10, count: 1, totalCount: 1, list: [] }
+  })
+}
+""",
+    }
+
+    assert any("分页字段 page" in issue for issue in _validate_frontend_preview_code_files(files))
+    assert any("分页字段 count" in issue for issue in _validate_frontend_preview_code_files(files))
+
+    fixed, fixes = _auto_fix_frontend_preview_code_files(files)
+
+    assert fixes
+    assert "page: result.pageNo || result.page || parameter.pageNo || 1" in fixed["src/views/product/retail/List.vue"]
+    assert "count: result.totalCount || result.count || 0" in fixed["src/views/product/retail/List.vue"]
+    assert _validate_frontend_preview_code_files(fixed) == []
+
+
 def test_preview_validator_accepts_stable_with_consistent_list_contract():
     files = {
         "src/views/Product/RetailList.vue": """

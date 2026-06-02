@@ -969,6 +969,32 @@ def _patch_stable_table_contract_content(content: str) -> str:
     if "<s-table" not in (content or "").lower():
         return content
 
+    def ensure_required_fields(match: re.Match) -> str:
+        prefix = match.group("prefix")
+        body = match.group("body")
+        suffix = match.group("suffix")
+        if not (
+            re.search(r"\bpageNo\s*:", body)
+            and re.search(r"\btotalCount\s*:", body)
+            and re.search(r"\b(?:list|data)\s*:", body)
+        ):
+            return match.group(0)
+
+        additions = []
+        page_no_match = re.search(r"\bpageNo\s*:\s*([^,\n}]+)", body)
+        total_count_match = re.search(r"\btotalCount\s*:\s*([^,\n}]+)", body)
+        if not re.search(r"\bpage\s*:", body) and page_no_match:
+            additions.append(f"page: {page_no_match.group(1).strip()}")
+        if not re.search(r"\bcount\s*:", body) and total_count_match:
+            additions.append(f"count: {total_count_match.group(1).strip()}")
+        if not additions:
+            return match.group(0)
+
+        indent_match = re.search(r"\n(\s*)\w+\s*:", body)
+        indent = indent_match.group(1) if indent_match else "          "
+        injected = "".join(f"\n{indent}{field}," for field in additions)
+        return prefix + injected + body + suffix
+
     list_expr = (
         "Array.isArray(result.list)\n"
         "          ? result.list\n"
@@ -1023,6 +1049,12 @@ def _patch_stable_table_contract_content(content: str) -> str:
     patched = content
     for pattern in patterns:
         patched = re.sub(pattern, replacement, patched, flags=re.S)
+    patched = re.sub(
+        r"(?P<prefix>return\s*\{)(?P<body>.*?)(?P<suffix>\n\s*\})",
+        ensure_required_fields,
+        patched,
+        flags=re.S,
+    )
     return patched
 
 
