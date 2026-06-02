@@ -317,6 +317,68 @@ export default { name: 'StandalonePreview' }
     assert any("独立预览组件命名" in issue for issue in issues)
 
 
+def test_preview_validator_rejects_new_page_for_existing_feature_change():
+    files = {
+        "src/views/product/retail/List.vue": """
+<template><s-table :data="loadData" /></template>
+<script>
+export default {
+  data () {
+    return {
+      loadData: () => Promise.resolve({
+        page: 1, pageNo: 1, pageSize: 10, count: 0, totalCount: 0, list: []
+      })
+    }
+  }
+}
+</script>
+""",
+        "src/api/product.js": """
+export function list () {
+  return Promise.resolve({ result: { page: 1, pageNo: 1, pageSize: 10, count: 0, totalCount: 0, list: [] } })
+}
+""",
+    }
+
+    issues = _validate_frontend_preview_code_files(
+        files,
+        user_request="我想给商城管理平台现有的零售商品列表增加一个商品ID的筛选项",
+        existing_frontend_paths=["src/views/mall/goods/RetailGoodsList.vue"],
+    )
+
+    assert any("不是项目代码参考中已确认存在的页面" in issue for issue in issues)
+
+
+def test_preview_validator_allows_existing_page_for_existing_feature_change():
+    files = {
+        "src/views/mall/goods/RetailGoodsList.vue": """
+<template><s-table :data="loadData" /></template>
+<script>
+export default {
+  data () {
+    return {
+      loadData: () => Promise.resolve({
+        page: 1, pageNo: 1, pageSize: 10, count: 0, totalCount: 0, list: []
+      })
+    }
+  }
+}
+</script>
+""",
+        "src/api/product.js": """
+export function list () {
+  return Promise.resolve({ result: { page: 1, pageNo: 1, pageSize: 10, count: 0, totalCount: 0, list: [] } })
+}
+""",
+    }
+
+    assert _validate_frontend_preview_code_files(
+        files,
+        user_request="我想给商城管理平台现有的零售商品列表增加一个商品ID的筛选项",
+        existing_frontend_paths=["src/views/mall/goods/RetailGoodsList.vue"],
+    ) == []
+
+
 def test_preview_validator_accepts_detail_page_without_table_contract():
     files = {
         "src/views/Product/RetailDetail.vue": """

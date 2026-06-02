@@ -278,6 +278,7 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 ## 重要：参考项目
 结合 Frontend Project Skill，优先复用现有项目的目录、组件库、路由、API 封装、权限判断、表格/表单模式和样式规范。不要展开解释。
 如果没有匹配到前端项目或 Project Skill 信息不足，不要生成独立 demo 页面，应该让本阶段失败并说明缺少匹配项目依据。
+如果「前端项目关键文件参考」里提供了「已确认存在的前端页面路径」，这些路径是判断现有功能的唯一可信依据。
 
 ## 生成目标
 本阶段就是前端代码生成阶段，不再有后续单独的“前端开发”阶段。产物会直接覆盖到匹配前端项目的沙箱副本中，并通过该项目自己的 npm 脚本启动预览。
@@ -291,6 +292,8 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 1. 根据目标技术栈生成真实项目代码，不要再输出纯静态 HTML mock。
 2. 根据匹配项目的真实技术栈生成文件：Vue 后台通常生成 `src/views/**/*.vue` + `src/api/*.js`；React 后台通常生成 `src/pages/**/*.tsx|jsx` + service/api 文件；uni-app/小程序项目按项目现有 `pages/**`、`*.vue` 或 `*.wxml/*.js/*.json/*.wxss` 结构生成。不要把所有项目都当 Vue 后台。
    - 文件路径必须像目标项目里的真实业务模块路径，优先沿用 Project Skill 或代码参考里的目录命名。
+   - 如果用户需求表达的是“现有/已有/当前/原有页面或功能上增加、修改、优化、补充筛选/字段/按钮/查询”，必须修改「已确认存在的前端页面路径」中的现有页面；禁止凭语义新建 `src/views/**/List.vue` 或 `src/pages/**/List.vue` 来冒充改造。
+   - 如果找不到与现有功能对应的已确认页面路径，本阶段不要编造新页面，应输出空 JSON 数组让系统失败并在修复反馈中暴露“缺少真实页面路径”。
    - 禁止生成 `Demo`、`Example`、`Standalone`、`SandboxPreview`、`PreviewOnly`、`MockPage`、`GeneratedPage` 这类独立演示路径或组件名。
    - 禁止生成新的 `package.json`、`vite.config.*`、`main.*`、`App.*`、`index.html` 来伪造一个独立应用。
 3. 第一屏必须匹配需求页面类型：列表页要有搜索筛选、表格和批量/行操作；详情页要有分区详情、状态标签、返回/编辑/启停等操作；表单页要有校验、提交、取消和异常提示；配置/看板页要有对应业务控件和状态。
@@ -845,10 +848,73 @@ Return FAIL with actionable feedback when any of these three checks is incomplet
 
 # ==================== 输出解析 ====================
 
-def _validate_frontend_preview_code_files(files: Dict[str, str]) -> List[str]:
+def _is_existing_feature_change_request(user_request: str) -> bool:
+    text = (user_request or "").strip()
+    if not text:
+        return False
+    existing_markers = ("现有", "已有", "当前", "原有", "既有")
+    change_markers = ("增加", "添加", "新增", "补充", "改造", "优化", "调整", "修改")
+    target_markers = ("列表", "页面", "功能", "筛选", "查询", "搜索", "字段", "按钮", "表格")
+    if any(marker in text for marker in existing_markers):
+        return any(marker in text for marker in target_markers)
+    return any(marker in text for marker in change_markers) and any(marker in text for marker in ("筛选", "查询", "搜索", "字段"))
+
+
+def _is_frontend_page_path(path: str) -> bool:
+    return (
+        path.startswith(("src/views/", "src/pages/", "pages/"))
+        and path.endswith((".vue", ".tsx", ".jsx", ".wxml"))
+    )
+
+
+def _validate_existing_feature_paths(
+    files: Dict[str, str],
+    user_request: str = "",
+    existing_frontend_paths: Optional[List[str]] = None,
+) -> List[str]:
+    if not _is_existing_feature_change_request(user_request):
+        return []
+
+    generated_page_paths = [
+        str(path).replace("\\", "/").lstrip("/")
+        for path in files
+        if _is_frontend_page_path(str(path).replace("\\", "/").lstrip("/"))
+    ]
+    if not generated_page_paths:
+        return []
+
+    existing_paths = {
+        str(path).replace("\\", "/").lstrip("/")
+        for path in (existing_frontend_paths or [])
+        if _is_frontend_page_path(str(path).replace("\\", "/").lstrip("/"))
+    }
+    if not existing_paths:
+        return [
+            "用户需求是修改现有功能，但项目代码参考未提供任何已确认存在的前端页面路径；"
+            "必须先匹配真实项目源码中的现有页面，不能新生成页面冒充改造"
+        ]
+
+    issues = []
+    for path in generated_page_paths:
+        if path not in existing_paths:
+            examples = "、".join(sorted(existing_paths)[:8])
+            issues.append(
+                f"{path} 不是项目代码参考中已确认存在的页面；用户需求是修改现有功能，"
+                f"必须改现有页面路径。可用现有页面示例：{examples}"
+            )
+    return issues
+
+
+def _validate_frontend_preview_code_files(
+    files: Dict[str, str],
+    user_request: str = "",
+    existing_frontend_paths: Optional[List[str]] = None,
+) -> List[str]:
     issues: List[str] = []
     if not files:
         return ["没有生成前端代码文件"]
+
+    issues.extend(_validate_existing_feature_paths(files, user_request, existing_frontend_paths))
 
     normalized_paths = [str(path).replace("\\", "/").lstrip("/") for path in files]
     vue_admin_paths = [
@@ -1709,20 +1775,66 @@ async def _call_agent_with_retry_stream(
 _project_cache: Dict[str, Dict[str, str]] = {}
 
 
-async def _load_project_context(project_id: str, project_type: str) -> str:
+async def _load_project_files_cached(project_id: str, project_type: str) -> Dict[str, str]:
+    if not project_id:
+        return {}
+    cache_key = f"{project_id}:{project_type}"
+    if cache_key not in _project_cache:
+        _project_cache[cache_key] = await _fetch_project_files_from_git(project_id)
+    return _project_cache[cache_key]
+
+
+def _requirement_match_terms(requirement: str) -> List[str]:
+    terms = set(re.findall(r"[A-Za-z0-9_]{2,}", (requirement or "").lower()))
+    cjk_chunks = re.findall(r"[\u4e00-\u9fff]+", requirement or "")
+    for chunk in cjk_chunks:
+        if len(chunk) <= 4:
+            terms.add(chunk)
+            continue
+        for size in (2, 3, 4):
+            for index in range(0, len(chunk) - size + 1):
+                terms.add(chunk[index:index + size])
+    stop_terms = {"现有", "已有", "增加", "新增", "添加", "一个", "功能", "页面", "字段", "筛选", "查询", "搜索"}
+    return sorted(term for term in terms if term not in stop_terms)
+
+
+def _select_relevant_project_files(files: Dict[str, str], requirement: str, limit: int = 8) -> List[Tuple[str, str]]:
+    terms = _requirement_match_terms(requirement)
+    if not terms:
+        return []
+
+    candidates = []
+    for path, content in files.items():
+        normalized = str(path).replace("\\", "/")
+        if not normalized.startswith(("src/views/", "src/pages/", "pages/", "src/api/")):
+            continue
+        if not normalized.endswith((".vue", ".tsx", ".jsx", ".js", ".ts", ".wxml")):
+            continue
+        haystack = f"{normalized}\n{content}".lower()
+        matched_terms = [term for term in terms if term.lower() in haystack]
+        if not matched_terms:
+            continue
+        page_bonus = 2 if _is_frontend_page_path(normalized) else 0
+        score = len(matched_terms) + page_bonus
+        candidates.append((score, len(content or ""), normalized, content))
+
+    candidates.sort(key=lambda item: (item[0], -item[1], item[2]), reverse=True)
+    return [(path, content) for _, _, path, content in candidates[:limit]]
+
+
+def _frontend_existing_page_paths(files: Dict[str, str]) -> List[str]:
+    return sorted(
+        str(path).replace("\\", "/").lstrip("/")
+        for path in files
+        if _is_frontend_page_path(str(path).replace("\\", "/").lstrip("/"))
+    )
+
+
+async def _load_project_context(project_id: str, project_type: str, requirement: str = "") -> str:
     """从 Generator 获取项目信息，从 Git 拉取关键文件，返回上下文文本。
     project_type: "frontend" 或 "backend"
     """
-    if not project_id:
-        return ""
-
-    cache_key = f"{project_id}:{project_type}"
-    if cache_key in _project_cache:
-        files = _project_cache[cache_key]
-    else:
-        files = await _fetch_project_files_from_git(project_id)
-        _project_cache[cache_key] = files
-
+    files = await _load_project_files_cached(project_id, project_type)
     if not files:
         return ""
 
@@ -1732,6 +1844,8 @@ async def _load_project_context(project_id: str, project_type: str) -> str:
     for path, content in files.items():
         if any(path.endswith(p) or path.endswith("/" + p) for p in key_patterns):
             key_files[path] = content
+    for path, content in _select_relevant_project_files(files, requirement):
+        key_files[path] = content
     if not key_files:
         # 没匹配到关键文件，取前 3 个非空文件
         for path, content in list(files.items())[:3]:
@@ -1741,6 +1855,12 @@ async def _load_project_context(project_id: str, project_type: str) -> str:
     # 构建上下文文本（总长度限制 6000 字符）
     sections = []
     total = 0
+    if project_type == "frontend":
+        existing_pages = _frontend_existing_page_paths(files)
+        if existing_pages:
+            path_block = "## 已确认存在的前端页面路径\n" + "\n".join(f"- `{path}`" for path in existing_pages[:30])
+            sections.append(path_block)
+            total += len(path_block)
     for path, content in sorted(key_files.items()):
         chunk = f"### {path}\n```\n{content[:1500]}\n```\n"
         if total + len(chunk) > 6000:
@@ -2406,6 +2526,7 @@ class DevPipelineManager:
         if be_proj_id and be_proj_id not in be_proj_ids:
             be_proj_ids.insert(0, be_proj_id)
         ctx_parts = []
+        frontend_existing_paths: List[str] = []
         project_skill_snapshot = pipe_config.get("project_skill_snapshot") or {}
         backend_skill_snapshot = pipe_config.get("backend_project_skill_snapshot") or {}
         backend_skill_snapshots = pipe_config.get("backend_project_skill_snapshots") or []
@@ -2447,8 +2568,13 @@ class DevPipelineManager:
             )
         if fe_proj_id and stage_key in ("frontend_dev", "prototype", "page_design", "delivery", "code_review"):
             from app.services.knowledge_service import get_relevant_context
+            frontend_existing_paths = _frontend_existing_page_paths(
+                await _load_project_files_cached(fe_proj_id, "frontend")
+            )
+            if frontend_existing_paths:
+                context["frontend_existing_paths"] = frontend_existing_paths
             if compact_preview_stage:
-                fe_ctx = await _load_project_context(fe_proj_id, "frontend")
+                fe_ctx = await _load_project_context(fe_proj_id, "frontend", user_request)
                 if fe_ctx:
                     ctx_parts.append(f"## 前端项目关键文件参考\n{_compact_context(fe_ctx, 2500)}")
             else:
@@ -2460,7 +2586,7 @@ class DevPipelineManager:
                 if ctx:
                     ctx_parts.append(ctx)
                 else:
-                    fe_ctx = await _load_project_context(fe_proj_id, "frontend")
+                    fe_ctx = await _load_project_context(fe_proj_id, "frontend", user_request)
                     if fe_ctx:
                         ctx_parts.append(f"## 前端项目代码参考\n{fe_ctx}")
         for current_be_proj_id in be_proj_ids:
@@ -2475,7 +2601,7 @@ class DevPipelineManager:
             if ctx:
                 ctx_parts.append(ctx)
             else:
-                be_ctx = await _load_project_context(current_be_proj_id, "backend")
+                be_ctx = await _load_project_context(current_be_proj_id, "backend", user_request)
                 if be_ctx:
                     ctx_parts.append(f"## 后端项目代码参考\n{be_ctx}")
         if ctx_parts:
@@ -2518,6 +2644,8 @@ class DevPipelineManager:
             )
 
         parsed = _parse_agent_output(stage_key, raw_output)
+        if stage_key == "prototype" and frontend_existing_paths:
+            parsed["_frontend_existing_paths"] = frontend_existing_paths
         return raw_output, parsed
 
     async def _load_project_prompts(self, project_id: str) -> Dict[str, str]:
@@ -2765,7 +2893,11 @@ class DevPipelineManager:
                                     "stage": current_stage,
                                     "fixes": auto_fixes,
                                 })
-                            preview_issues = _validate_frontend_preview_code_files(parsed.get("code_files", {}))
+                            preview_issues = _validate_frontend_preview_code_files(
+                                parsed.get("code_files", {}),
+                                user_request=pipe.user_request or "",
+                                existing_frontend_paths=parsed.get("_frontend_existing_paths") or [],
+                            )
                         if not preview_issues:
                             break
 
@@ -2818,7 +2950,11 @@ class DevPipelineManager:
                                 "stage": current_stage,
                                 "fixes": auto_fixes,
                             })
-                        preview_issues = _validate_frontend_preview_code_files(parsed.get("code_files", {}))
+                        preview_issues = _validate_frontend_preview_code_files(
+                            parsed.get("code_files", {}),
+                            user_request=pipe.user_request or "",
+                            existing_frontend_paths=parsed.get("_frontend_existing_paths") or [],
+                        )
                         if preview_issues:
                             error_msg = "预览生成代码未通过可运行性约束: " + "；".join(preview_issues[:8])
                             stages[current_stage].update({
