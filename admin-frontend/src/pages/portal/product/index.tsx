@@ -634,16 +634,25 @@ export default function ProductPortal() {
                       {item.status === 'failed' ? '重新生成' : '继续'}
                     </Button>,
                     item.status === 'waiting_confirm' && pipelineId === item.pipeline_id ? (
-                      <Button
-                        key="reject"
-                        size="small"
-                        danger
-                        type="link"
-                        loading={running}
-                        onClick={() => resumePipeline(false)}
-                      >
-                        重新生成
-                      </Button>
+                      <Space key="confirm-actions" size={0}>
+                        <Button
+                          size="small"
+                          type="link"
+                          loading={running}
+                          onClick={() => resumePipeline(true)}
+                        >
+                          确认
+                        </Button>
+                        <Button
+                          size="small"
+                          danger
+                          type="link"
+                          loading={running}
+                          onClick={() => resumePipeline(false)}
+                        >
+                          重新生成
+                        </Button>
+                      </Space>
                     ) : null,
                     <Button
                       key="delete"
@@ -707,6 +716,16 @@ export default function ProductPortal() {
                 {activeStage && <Tag color="blue">{stageLabel[activeStage] || activeStage}</Tag>}
                 {status?.status === 'waiting_confirm' && (
                   <Button
+                    type="primary"
+                    icon={<CheckCircleOutlined />}
+                    loading={running}
+                    onClick={() => resumePipeline(true)}
+                  >
+                    确认继续
+                  </Button>
+                )}
+                {status?.status === 'waiting_confirm' && (
+                  <Button
                     danger
                     icon={<ReloadOutlined />}
                     loading={running}
@@ -750,6 +769,35 @@ export default function ProductPortal() {
               current={Math.max(stageOrder.indexOf(activeStage), 0)}
               style={{ marginTop: 18 }}
             />
+            {status?.status === 'waiting_confirm' && (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginTop: 16 }}
+                message={`当前阶段等待确认：${stageLabel[status.current_stage] || status.current_stage}`}
+                description={
+                  <Space direction="vertical" style={{ width: '100%' }}>
+                    <Text>
+                      如果右侧输出和前端代码方向正确，点击“确认继续”；如果预览没正常生成或页面不对，填写修改意见后点击“重新生成当前阶段”。
+                    </Text>
+                    <TextArea
+                      rows={3}
+                      value={feedback}
+                      onChange={(event) => setFeedback(event.target.value)}
+                      placeholder="例如：预览未生成；页面路径不对；不要新建 mock 数据；请改现有零售商品列表页。"
+                    />
+                    <Space>
+                      <Button type="primary" icon={<CheckCircleOutlined />} loading={running} onClick={() => resumePipeline(true)}>
+                        确认继续
+                      </Button>
+                      <Button danger icon={<ReloadOutlined />} loading={running} onClick={() => resumePipeline(false)}>
+                        重新生成当前阶段
+                      </Button>
+                    </Space>
+                  </Space>
+                }
+              />
+            )}
           </div>
 
           <div className="workbench-card" style={{ background: '#fff', border: '1px solid #e5eaf3', borderRadius: 8, padding: 20 }}>
