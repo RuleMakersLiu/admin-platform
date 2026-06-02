@@ -73,6 +73,8 @@ class Settings(BaseSettings):
     pipeline_preview_port_start: int = 43000
     pipeline_preview_port_end: int = 43100
     pipeline_preview_api_proxy: str = ""
+    pipeline_execution_concurrency: int = 8
+    pipeline_execution_queue_limit: int = 50
     deploy_service_url: str = "http://admin-deploy:8083"
 
     # ==================== 埋点数据配置 ====================

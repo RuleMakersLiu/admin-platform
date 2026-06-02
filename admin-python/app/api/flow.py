@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, Dict, List, Any, Set
 
 from app.ai.flow_manager import pipeline_manager, STAGE_DEFINITIONS, DEFAULT_STAGE_PROMPTS
+from app.core.config import settings
 
 router = APIRouter(prefix="/flow", tags=["智能体流程"])
 logger = logging.getLogger(__name__)
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 _pipeline_tasks: Dict[str, asyncio.Task] = {}
 _pipeline_subscribers: Dict[str, Set[asyncio.Queue]] = {}
 _pipeline_task_lock = asyncio.Lock()
+_pipeline_execution_semaphore = asyncio.Semaphore(settings.pipeline_execution_concurrency)
 
 
 class CreatePipelineRequest(BaseModel):
@@ -87,13 +89,36 @@ async def _broadcast_pipeline_event(pipeline_id: str, event: Dict[str, Any]) -> 
             logger.warning("Pipeline %s subscriber queue full, dropping event", pipeline_id)
 
 
+def _active_pipeline_task_count() -> int:
+    return sum(1 for task in _pipeline_tasks.values() if not task.done())
+
+
 async def _run_pipeline_background(pipeline_id: str, user_input: str) -> None:
     try:
-        result = await pipeline_manager.execute_stage(
+        await _broadcast_pipeline_event(
             pipeline_id,
-            user_input,
-            stream_callback=lambda event: _broadcast_pipeline_event(pipeline_id, event),
+            {
+                "type": "queued",
+                "pipeline_id": pipeline_id,
+                "active_tasks": _active_pipeline_task_count(),
+                "concurrency": settings.pipeline_execution_concurrency,
+            },
         )
+        async with _pipeline_execution_semaphore:
+            await _broadcast_pipeline_event(
+                pipeline_id,
+                {
+                    "type": "dequeued",
+                    "pipeline_id": pipeline_id,
+                    "active_tasks": _active_pipeline_task_count(),
+                    "concurrency": settings.pipeline_execution_concurrency,
+                },
+            )
+            result = await pipeline_manager.execute_stage(
+                pipeline_id,
+                user_input,
+                stream_callback=lambda event: _broadcast_pipeline_event(pipeline_id, event),
+            )
         await _broadcast_pipeline_event(
             pipeline_id,
             {"type": "done", "pipeline_id": pipeline_id, "result": result},
@@ -116,6 +141,10 @@ async def _ensure_pipeline_background_task(pipeline_id: str, user_input: str) ->
         task = _pipeline_tasks.get(pipeline_id)
         if task and not task.done():
             return
+        if _active_pipeline_task_count() >= settings.pipeline_execution_queue_limit:
+            raise RuntimeError(
+                f"开发流水线执行队列已满，当前最多支持 {settings.pipeline_execution_queue_limit} 个并发等待任务"
+            )
         _pipeline_tasks[pipeline_id] = asyncio.create_task(
             _run_pipeline_background(pipeline_id, user_input),
         )
@@ -289,10 +318,10 @@ async def execute_stage_stream(pipeline_id: str, request: ExecuteStageRequest = 
     async def event_generator():
         queue: asyncio.Queue = asyncio.Queue(maxsize=300)
         _pipeline_subscribers.setdefault(pipeline_id, set()).add(queue)
-        await _ensure_pipeline_background_task(pipeline_id, user_input)
-        yield _sse_event({"type": "heartbeat", "pipeline_id": pipeline_id})
 
         try:
+            await _ensure_pipeline_background_task(pipeline_id, user_input)
+            yield _sse_event({"type": "heartbeat", "pipeline_id": pipeline_id})
             while True:
                 task = _pipeline_tasks.get(pipeline_id)
                 if (not task or task.done()) and queue.empty():

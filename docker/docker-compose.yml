@@ -50,6 +50,8 @@ services:
       - JWT_SECRET=admin-platform-jwt-secret-key-2026-dev-only
       - DEBUG=false
       - PIPELINE_PREVIEW_API_PROXY=https://malladmin-jdagent.hctest.tech
+      - PIPELINE_EXECUTION_CONCURRENCY=8
+      - PIPELINE_EXECUTION_QUEUE_LIMIT=50
     depends_on:
       - postgres
       - redis
