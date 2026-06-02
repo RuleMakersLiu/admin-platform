@@ -331,7 +331,19 @@ export default function ProductPortal() {
     if (!pipelineId) return
     setRunning(true)
     try {
-      const finalStatus = await runUntilPause(pipelineId)
+      const note = feedback.trim()
+      if (status?.status === 'failed') {
+        const failedStage = status.current_stage || currentStage || 'prototype'
+        await pipelineApi.rollback(
+          pipelineId,
+          failedStage,
+          note || '当前阶段失败，请根据错误反馈重新生成并修复。',
+        )
+        appendLog(`重新生成：${stageLabel[failedStage] || failedStage}`)
+        setFeedback('')
+        setAwaitingConfirmStage('')
+      }
+      const finalStatus = await runUntilPause(pipelineId, note)
       loadPipelines()
       if (finalStatus?.status === 'failed') {
         message.error('流水线执行失败，请查看阶段输出')
@@ -542,10 +554,10 @@ export default function ProductPortal() {
                       key="run"
                       size="small"
                       type="link"
-                      disabled={running || !pipelineId || pipelineId !== item.pipeline_id || ['completed', 'failed', 'cancelled', 'waiting_confirm'].includes(item.status)}
+                      disabled={running || !pipelineId || pipelineId !== item.pipeline_id || ['completed', 'cancelled', 'waiting_confirm'].includes(item.status)}
                       onClick={continueSelectedPipeline}
                     >
-                      继续
+                      {item.status === 'failed' ? '重新生成' : '继续'}
                     </Button>,
                     item.status === 'waiting_confirm' && pipelineId === item.pipeline_id ? (
                       <Button
@@ -620,6 +632,16 @@ export default function ProductPortal() {
                     icon={<ReloadOutlined />}
                     loading={running}
                     onClick={() => resumePipeline(false)}
+                  >
+                    重新生成当前阶段
+                  </Button>
+                )}
+                {status?.status === 'failed' && (
+                  <Button
+                    danger
+                    icon={<ReloadOutlined />}
+                    loading={running}
+                    onClick={continueSelectedPipeline}
                   >
                     重新生成当前阶段
                   </Button>
