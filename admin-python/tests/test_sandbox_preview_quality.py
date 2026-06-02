@@ -1,6 +1,10 @@
 from pathlib import Path
 
-from app.ai.flow_manager import _auto_fix_frontend_preview_code_files, _validate_frontend_preview_code_files
+from app.ai.flow_manager import (
+    _auto_fix_frontend_preview_code_files,
+    _frontend_relevant_existing_page_paths,
+    _validate_frontend_preview_code_files,
+)
 from app.services.sandbox_preview_service import SandboxPreviewService
 
 
@@ -347,6 +351,52 @@ export function list () {
     )
 
     assert any("不是项目代码参考中已确认存在的页面" in issue for issue in issues)
+
+
+def test_preview_validator_rejects_unrelated_existing_page_for_existing_feature_change():
+    files = {
+        "src/views/activityManage/ActivityManageList.vue": """
+<template><s-table :data="loadData" /></template>
+<script>
+export default {
+  name: 'ActivityManageList',
+  data () {
+    return {
+      loadData: () => Promise.resolve({
+        page: 1, pageNo: 1, pageSize: 10, count: 0, totalCount: 0, list: []
+      })
+    }
+  }
+}
+</script>
+""",
+        "src/api/product.js": """
+export function list () {
+  return Promise.resolve({ result: { page: 1, pageNo: 1, pageSize: 10, count: 0, totalCount: 0, list: [] } })
+}
+""",
+    }
+
+    issues = _validate_frontend_preview_code_files(
+        files,
+        user_request="我想给商城管理平台现有的零售商品列表增加一个商品ID的筛选项",
+        existing_frontend_paths=["src/views/product/RetailGoodsList.vue"],
+    )
+
+    assert any("不是项目代码参考中已确认存在的页面" in issue for issue in issues)
+
+
+def test_relevant_existing_page_paths_ignore_activity_for_retail_product_request():
+    files = {
+        "src/views/activityManage/ActivityManageList.vue": "活动管理列表，活动名称，活动状态，投放渠道",
+        "src/views/product/RetailGoodsList.vue": "零售商品列表，商品名称，商品ID，商品状态，库存",
+        "src/views/product/ProductCategory.vue": "商品分类管理，类目名称",
+    }
+
+    assert _frontend_relevant_existing_page_paths(
+        files,
+        "我想给商城管理平台现有的零售商品列表增加一个商品ID的筛选项",
+    ) == ["src/views/product/RetailGoodsList.vue"]
 
 
 def test_preview_validator_allows_existing_page_for_existing_feature_change():

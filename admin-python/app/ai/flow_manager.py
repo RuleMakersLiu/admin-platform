@@ -278,7 +278,7 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 ## 重要：参考项目
 结合 Frontend Project Skill，优先复用现有项目的目录、组件库、路由、API 封装、权限判断、表格/表单模式和样式规范。不要展开解释。
 如果没有匹配到前端项目或 Project Skill 信息不足，不要生成独立 demo 页面，应该让本阶段失败并说明缺少匹配项目依据。
-如果「前端项目关键文件参考」里提供了「已确认存在的前端页面路径」，这些路径是判断现有功能的唯一可信依据。
+如果「前端项目关键文件参考」里提供了「与本需求相关的已确认前端页面路径」，这些路径是判断现有功能的唯一可信依据；不要选择无关业务页面。
 
 ## 生成目标
 本阶段就是前端代码生成阶段，不再有后续单独的“前端开发”阶段。产物会直接覆盖到匹配前端项目的沙箱副本中，并通过该项目自己的 npm 脚本启动预览。
@@ -292,7 +292,7 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 1. 根据目标技术栈生成真实项目代码，不要再输出纯静态 HTML mock。
 2. 根据匹配项目的真实技术栈生成文件：Vue 后台通常生成 `src/views/**/*.vue` + `src/api/*.js`；React 后台通常生成 `src/pages/**/*.tsx|jsx` + service/api 文件；uni-app/小程序项目按项目现有 `pages/**`、`*.vue` 或 `*.wxml/*.js/*.json/*.wxss` 结构生成。不要把所有项目都当 Vue 后台。
    - 文件路径必须像目标项目里的真实业务模块路径，优先沿用 Project Skill 或代码参考里的目录命名。
-   - 如果用户需求表达的是“现有/已有/当前/原有页面或功能上增加、修改、优化、补充筛选/字段/按钮/查询”，必须修改「已确认存在的前端页面路径」中的现有页面；禁止凭语义新建 `src/views/**/List.vue` 或 `src/pages/**/List.vue` 来冒充改造。
+   - 如果用户需求表达的是“现有/已有/当前/原有页面或功能上增加、修改、优化、补充筛选/字段/按钮/查询”，必须修改「与本需求相关的已确认前端页面路径」中的现有页面；禁止凭语义新建 `src/views/**/List.vue` 或 `src/pages/**/List.vue` 来冒充改造，禁止选择活动管理、营销活动等无关业务页面。
    - 如果找不到与现有功能对应的已确认页面路径，本阶段不要编造新页面，应输出空 JSON 数组让系统失败并在修复反馈中暴露“缺少真实页面路径”。
    - 禁止生成 `Demo`、`Example`、`Standalone`、`SandboxPreview`、`PreviewOnly`、`MockPage`、`GeneratedPage` 这类独立演示路径或组件名。
    - 禁止生成新的 `package.json`、`vite.config.*`、`main.*`、`App.*`、`index.html` 来伪造一个独立应用。
@@ -1798,6 +1798,35 @@ def _requirement_match_terms(requirement: str) -> List[str]:
     return sorted(term for term in terms if term not in stop_terms)
 
 
+def _business_synonyms_for_terms(terms: List[str]) -> List[str]:
+    synonyms = set(terms)
+    mapping = {
+        "商品": ["product", "goods", "sku", "spu"],
+        "零售": ["retail"],
+        "商城": ["mall", "shop", "store"],
+        "列表": ["list"],
+        "活动": ["activity"],
+    }
+    for term in terms:
+        for key, values in mapping.items():
+            if key in term:
+                synonyms.update(values)
+        for key, values in mapping.items():
+            if term in values:
+                synonyms.add(key)
+    return sorted(synonyms)
+
+
+def _requirement_strong_business_terms(requirement: str) -> List[str]:
+    terms = _requirement_match_terms(requirement)
+    generic = {
+        "管理", "平台", "系统", "列表", "筛选", "查询", "搜索", "字段", "id",
+        "商品id", "增加", "新增", "现有", "已有",
+    }
+    strong = [term for term in terms if term.lower() not in generic and len(term) >= 2]
+    return _business_synonyms_for_terms(strong)
+
+
 def _select_relevant_project_files(files: Dict[str, str], requirement: str, limit: int = 8) -> List[Tuple[str, str]]:
     terms = _requirement_match_terms(requirement)
     if not terms:
@@ -1830,6 +1859,43 @@ def _frontend_existing_page_paths(files: Dict[str, str]) -> List[str]:
     )
 
 
+def _frontend_relevant_existing_page_paths(files: Dict[str, str], requirement: str, limit: int = 12) -> List[str]:
+    strong_terms = _requirement_strong_business_terms(requirement)
+    if not strong_terms:
+        return []
+    anchor_groups: List[List[str]] = []
+    requirement_text = requirement or ""
+    if "零售" in requirement_text:
+        anchor_groups.append(["零售", "retail"])
+    if "商品" in requirement_text:
+        anchor_groups.append(["商品", "product", "goods", "sku", "spu"])
+    if "活动" in requirement_text:
+        anchor_groups.append(["活动", "activity"])
+
+    scored = []
+    for path, content in files.items():
+        normalized = str(path).replace("\\", "/").lstrip("/")
+        if not _is_frontend_page_path(normalized):
+            continue
+        path_text = normalized.lower()
+        content_text = (content or "").lower()
+        combined_text = f"{path_text}\n{content_text}"
+        if anchor_groups and not all(
+            any(anchor.lower() in combined_text for anchor in group)
+            for group in anchor_groups
+        ):
+            continue
+        path_hits = [term for term in strong_terms if term.lower() in path_text]
+        content_hits = [term for term in strong_terms if term.lower() in content_text]
+        if not path_hits and len(content_hits) < 2:
+            continue
+        score = len(path_hits) * 4 + len(content_hits)
+        scored.append((score, normalized))
+
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [path for _, path in scored[:limit]]
+
+
 async def _load_project_context(project_id: str, project_type: str, requirement: str = "") -> str:
     """从 Generator 获取项目信息，从 Git 拉取关键文件，返回上下文文本。
     project_type: "frontend" 或 "backend"
@@ -1856,9 +1922,11 @@ async def _load_project_context(project_id: str, project_type: str, requirement:
     sections = []
     total = 0
     if project_type == "frontend":
-        existing_pages = _frontend_existing_page_paths(files)
+        relevant_pages = _frontend_relevant_existing_page_paths(files, requirement)
+        existing_pages = relevant_pages or _frontend_existing_page_paths(files)
         if existing_pages:
-            path_block = "## 已确认存在的前端页面路径\n" + "\n".join(f"- `{path}`" for path in existing_pages[:30])
+            title = "## 与本需求相关的已确认前端页面路径" if relevant_pages else "## 已确认存在的前端页面路径"
+            path_block = title + "\n" + "\n".join(f"- `{path}`" for path in existing_pages[:30])
             sections.append(path_block)
             total += len(path_block)
     for path, content in sorted(key_files.items()):
@@ -2568,8 +2636,10 @@ class DevPipelineManager:
             )
         if fe_proj_id and stage_key in ("frontend_dev", "prototype", "page_design", "delivery", "code_review"):
             from app.services.knowledge_service import get_relevant_context
-            frontend_existing_paths = _frontend_existing_page_paths(
-                await _load_project_files_cached(fe_proj_id, "frontend")
+            frontend_files = await _load_project_files_cached(fe_proj_id, "frontend")
+            frontend_existing_paths = (
+                _frontend_relevant_existing_page_paths(frontend_files, user_request)
+                or ([] if _is_existing_feature_change_request(user_request) else _frontend_existing_page_paths(frontend_files))
             )
             if frontend_existing_paths:
                 context["frontend_existing_paths"] = frontend_existing_paths
