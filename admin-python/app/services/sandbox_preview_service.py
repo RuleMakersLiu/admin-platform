@@ -839,6 +839,19 @@ class SandboxPreviewService:
         headers = {k: v for k, v in request_headers.items() if k.lower() not in {"host", "connection", "content-length"}}
         async with httpx.AsyncClient(follow_redirects=False, timeout=30.0) as client:
             response = await client.request(method, target, headers=headers, content=body)
+            if (
+                method == "GET"
+                and response.status_code == 404
+                and path
+                and not path.startswith(("api/", "javaApi/", "logApi/", "socket.io/", "sockjs-node/", "__webpack_dev_server__/"))
+                and not re.search(
+                    r"\.(?:js|css|map|json|png|jpg|jpeg|gif|svg|ico|woff2?|ttf|eot)(?:$|\?)",
+                    path,
+                    flags=re.I,
+                )
+            ):
+                fallback_target = f"http://{settings.pipeline_preview_host}:{entry['port']}{self._preview_base(pipeline_id)}"
+                response = await client.request("GET", fallback_target, headers=headers)
         content_type = response.headers.get("content-type", "")
         if "text/html" in content_type:
             prefix = f"/api/flow/pipeline/{pipeline_id}/sandbox-preview/"
