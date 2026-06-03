@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from app.ai.flow_manager import (
+    _auto_fix_existing_feature_from_original,
     _auto_fix_frontend_preview_code_files,
     _frontend_existing_page_candidates,
     _frontend_fallback_page_candidates,
@@ -508,6 +509,66 @@ export default {
     assert issues == []
 
 
+def test_existing_feature_auto_fix_reverts_to_original_equivalent_filter():
+    original_page = """
+<template>
+  <a-form>
+    <a-form-item label="商品编号"><a-input placeholder="请输入商品编号" v-model="queryParam.productCode" /></a-form-item>
+  </a-form>
+  <s-table ref="table" :columns="columns" :data="loadData" />
+</template>
+<script>
+import { ListMixin } from '@/mixins/ListMixin'
+export default {
+  mixins: [ListMixin],
+  data () {
+    return {
+      queryParam: {},
+      url: { list: '/api/product/glsw/product/selfOperatedList' },
+      columns: []
+    }
+  }
+}
+</script>
+"""
+    generated_files = {
+        "src/views/selfOperateCommodity/commodityList/List.vue": """
+<template>
+  <a-form><a-input v-model="filters.productId" /></a-form>
+  <s-table :data="loadData" />
+</template>
+<script>
+import { list } from '@/api/selfOperateCommodity'
+export default {
+  data () {
+    return { filters: {}, loadData: () => list() }
+  }
+}
+</script>
+""",
+        "src/api/selfOperateCommodity.js": "export function list () { return Promise.resolve({ list: [] }) }",
+    }
+
+    fixed, fixes = _auto_fix_existing_feature_from_original(
+        generated_files,
+        user_request="我想给商城管理平台现有的零售商品列表增加一个商品ID的筛选项",
+        existing_frontend_paths=["src/views/selfOperateCommodity/commodityList/List.vue"],
+        existing_frontend_files={"src/views/selfOperateCommodity/commodityList/List.vue": original_page},
+    )
+
+    assert fixes
+    assert list(fixed) == ["src/views/selfOperateCommodity/commodityList/List.vue"]
+    assert "商品ID" in fixed["src/views/selfOperateCommodity/commodityList/List.vue"]
+    assert "queryParam.productCode" in fixed["src/views/selfOperateCommodity/commodityList/List.vue"]
+    assert "/api/product/glsw/product/selfOperatedList" in fixed["src/views/selfOperateCommodity/commodityList/List.vue"]
+    assert _validate_frontend_preview_code_files(
+        fixed,
+        user_request="我想给商城管理平台现有的零售商品列表增加一个商品ID的筛选项",
+        existing_frontend_paths=["src/views/selfOperateCommodity/commodityList/List.vue"],
+        existing_frontend_files={"src/views/selfOperateCommodity/commodityList/List.vue": original_page},
+    ) == []
+
+
 def test_preview_validator_rejects_data_return_using_runtime_result_variable():
     files = {
         "src/views/selfOperateCommodity/commodityList/List.vue": """
@@ -532,6 +593,30 @@ export default {
     assert any("data() 初始返回对象引用了" in issue for issue in issues)
 
 
+def test_preview_validator_allows_vue_ref_event_expression():
+    files = {
+        "src/views/selfOperateCommodity/commodityList/List.vue": """
+<template>
+  <a-button @click="$refs.table.refresh(true)">查询</a-button>
+  <s-table ref="table" :data="loadData" />
+</template>
+<script>
+export default {
+  data () {
+    return {
+      loadData: () => Promise.resolve({ page: 1, count: 0, list: [] })
+    }
+  }
+}
+</script>
+""",
+    }
+
+    issues = _validate_frontend_preview_code_files(files)
+
+    assert not any("模板事件 $refs 未实现" in issue for issue in issues)
+
+
 def test_existing_page_candidates_include_confidence_and_reason():
     files = {
         "src/views/activityManage/ActivityManageList.vue": "活动管理列表，活动名称，活动状态，投放渠道",
@@ -549,6 +634,10 @@ def test_existing_page_candidates_include_confidence_and_reason():
             "confidence": 0.92,
             "matched_terms": ["goods", "product", "retail", "商品", "零售"],
             "reason": "命中业务词：goods, product, retail, 商品, 零售",
+            "display_name": "零售商品列表",
+            "menu_hint": "商品相关列表页",
+            "route_hint": "",
+            "developer_hint": "src/views/product/RetailGoodsList.vue",
         }
     ]
 
@@ -589,6 +678,9 @@ export default { data () { return { url: { list: '/api/product/glsw/product/self
 
     assert candidates
     assert candidates[0]["path"] == "src/views/selfOperateCommodity/commodityList/List.vue"
+    assert candidates[0]["display_name"] == "自营零售商品列表"
+    assert "商城管理" in candidates[0]["menu_hint"]
+    assert candidates[0]["route_hint"] == "/product/goods/list"
     assert "src/views/selfOperateCommodity/commodityList/Operate.vue" not in [
         candidate["path"] for candidate in candidates
     ]

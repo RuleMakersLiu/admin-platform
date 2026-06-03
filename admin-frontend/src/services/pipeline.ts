@@ -78,6 +78,10 @@ export interface ProjectSkillMatch {
     candidates?: Array<{
       path: string
       confidence: number
+      display_name?: string
+      menu_hint?: string
+      route_hint?: string
+      developer_hint?: string
       matched_terms?: string[]
       reason?: string
       uncertain?: boolean
@@ -94,6 +98,10 @@ export interface ProjectSkillMatch {
 export interface FrontendPageCandidate {
   path: string
   confidence: number
+  display_name?: string
+  menu_hint?: string
+  route_hint?: string
+  developer_hint?: string
   matched_terms?: string[]
   reason?: string
   uncertain?: boolean

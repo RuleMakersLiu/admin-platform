@@ -1150,7 +1150,10 @@ def _validate_frontend_preview_code_files(
                             issues.append(f"{safe_path} 使用 STable 时必须处理分页字段 {required}")
                     if re.search(r"return\s+res\.data\s*(?:[;\n}]|$)", content):
                         issues.append(f"{safe_path} 的 loadData 不能只返回 res.data，必须返回含 list/page/count 的分页对象")
-            for handler in re.findall(r"@(?:click|change|blur|submit|confirm|pressEnter)=\"([A-Za-z_$][\w$]*)", content):
+            for handler_expr in re.findall(r"@(?:click|change|blur|submit|confirm|pressEnter)=\"([^\"]+)\"", content):
+                handler = handler_expr.strip()
+                if not re.fullmatch(r"[A-Za-z_$][\w$]*", handler):
+                    continue
                 if f"{handler} (" not in content and f"{handler}(" not in content:
                     issues.append(f"{safe_path} 模板事件 {handler} 未实现")
         if safe_path.endswith(".wxml"):
@@ -1311,6 +1314,56 @@ def _auto_fix_frontend_preview_code_files(files: Dict[str, str]) -> Tuple[Dict[s
             fixes.append(f"{safe_path}: 自动补齐 STable 分页返回字段 page/count/list")
         fixed[path] = patched
     return fixed, fixes
+
+
+def _auto_fix_existing_feature_from_original(
+    files: Dict[str, str],
+    user_request: str = "",
+    existing_frontend_paths: Optional[List[str]] = None,
+    existing_frontend_files: Optional[Dict[str, str]] = None,
+) -> Tuple[Dict[str, str], List[str]]:
+    if not _is_existing_feature_change_request(user_request):
+        return files, []
+    if not re.search(r"商品\s*(?:id|ID|编号)|商品id|商品ID|商品编号", user_request or ""):
+        return files, []
+
+    existing_paths = [
+        str(path).replace("\\", "/").lstrip("/")
+        for path in (existing_frontend_paths or [])
+        if str(path).strip()
+    ]
+    existing_files = {
+        str(path).replace("\\", "/").lstrip("/"): content
+        for path, content in (existing_frontend_files or {}).items()
+        if isinstance(content, str)
+    }
+    for path in existing_paths:
+        original = existing_files.get(path, "")
+        if not original or "productCode" not in original:
+            continue
+        if "商品编号" not in original and "商品ID" not in original:
+            continue
+
+        patched = original
+        patched = patched.replace("商品编号", "商品ID")
+        patched = patched.replace("请输入商品编号", "请输入商品ID")
+        patched = patched.replace("输入商品编号", "输入商品ID")
+
+        generated_paths = {str(item).replace("\\", "/").lstrip("/") for item in files}
+        has_new_api = any(item.startswith("src/api/") for item in generated_paths)
+        current_page = files.get(path, "")
+        preservation_issues = _validate_existing_feature_preservation(
+            files,
+            user_request=user_request,
+            existing_frontend_paths=[path],
+            existing_frontend_files={path: original},
+        )
+        if has_new_api or preservation_issues or current_page != patched:
+            return {path: patched}, [
+                f"{path}: 检测到原页面已有商品编号/productCode 等价筛选，已自动回退为基于原页面的最小改动并移除新建 API 文件"
+            ]
+
+    return files, []
 
 
 def _try_parse_json_code_files(raw_output: str) -> Dict[str, str]:
@@ -2098,6 +2151,55 @@ def _matches_requirement_anchor_groups(path: str, content: str, requirement: str
     return True
 
 
+def _humanize_frontend_page_path(path: str, content: str = "") -> Dict[str, str]:
+    normalized = str(path).replace("\\", "/").lstrip("/")
+    text = f"{normalized}\n{content or ''}".lower()
+    name_parts: List[str] = []
+    if re.search(r"selfoperate|self_operate|self-operated|自营", text):
+        name_parts.append("自营")
+    if "selfoperatecommodity/commoditylist/list.vue" in normalized.lower():
+        name_parts.append("零售")
+    if re.search(r"retail|零售", text):
+        name_parts.append("零售")
+    if re.search(r"goods|product|commodity|sku|spu|商品", text):
+        name_parts.append("商品")
+    if re.search(r"pool|商品池", text):
+        name_parts.append("池")
+    if re.search(r"activity|活动", text):
+        name_parts.append("活动")
+    if re.search(r"order|订单", text):
+        name_parts.append("订单")
+    if re.search(r"category|分类|类目", text):
+        name_parts.append("分类")
+    if re.search(r"list|列表", text):
+        name_parts.append("列表")
+    if not name_parts:
+        file_name = normalized.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        display_name = re.sub(r"([a-z])([A-Z])", r"\1 \2", file_name).strip() or "现有页面"
+    else:
+        display_name = "".join(dict.fromkeys(name_parts))
+        if not display_name.endswith(("页", "列表", "管理")):
+            display_name = f"{display_name}页"
+
+    route_parts = []
+    if "selfoperatecommodity/commoditylist/list.vue" in normalized.lower():
+        route_parts.append("商城管理 / 商品管理 / 零售商品列表")
+        route_parts.append("/product/goods/list")
+    elif "product" in text and "list" in text:
+        route_parts.append("商品相关列表页")
+    elif "activity" in text:
+        route_parts.append("活动管理相关页面")
+    elif "order" in text:
+        route_parts.append("订单相关页面")
+
+    return {
+        "display_name": display_name,
+        "menu_hint": "；".join(route_parts[:2]) if route_parts else display_name,
+        "route_hint": route_parts[-1] if route_parts and route_parts[-1].startswith("/") else "",
+        "developer_hint": normalized,
+    }
+
+
 def _frontend_existing_page_candidates(files: Dict[str, str], requirement: str, limit: int = 12) -> List[Dict[str, Any]]:
     strong_terms = _requirement_strong_business_terms(requirement)
     if not strong_terms:
@@ -2139,11 +2241,13 @@ def _frontend_existing_page_candidates(files: Dict[str, str], requirement: str, 
     for score, path, path_hits, content_hits in scored[:limit]:
         confidence = round(min(0.98, max(0.35, score / max(top_score, 1) * 0.92)), 2)
         matched_terms = sorted(set(path_hits + content_hits))
+        content = files.get(path, "")
         candidates.append({
             "path": path,
             "confidence": confidence,
             "matched_terms": matched_terms[:8],
             "reason": f"命中业务词：{', '.join(matched_terms[:6])}" if matched_terms else "命中项目页面路径",
+            **_humanize_frontend_page_path(path, content),
         })
     return candidates
 
@@ -2168,12 +2272,14 @@ def _frontend_fallback_page_candidates(files: Dict[str, str], requirement: str, 
     scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
     candidates = []
     for score, path, hits in scored[:limit]:
+        content = files.get(path, "")
         candidates.append({
             "path": path,
             "confidence": round(min(0.52, 0.18 + score * 0.08), 2),
             "matched_terms": hits,
             "reason": "低置信候选，需要人工确认" if not hits else f"低置信候选，命中：{', '.join(hits[:4])}",
             "uncertain": True,
+            **_humanize_frontend_page_path(path, content),
         })
     return candidates
 
@@ -3345,6 +3451,21 @@ class DevPipelineManager:
                                     for path in existing_paths
                                     if source_files.get(str(path).replace("\\", "/").lstrip("/"))
                                 }
+                            fixed_files, original_fixes = _auto_fix_existing_feature_from_original(
+                                parsed.get("code_files", {}),
+                                user_request=pipe.user_request or "",
+                                existing_frontend_paths=existing_paths,
+                                existing_frontend_files=existing_frontend_files,
+                            )
+                            if original_fixes:
+                                parsed["code_files"] = fixed_files
+                                parsed["auto_fixes"] = (parsed.get("auto_fixes") or []) + original_fixes
+                                raw_output += "\n\n--- 自动修复 ---\n" + "\n".join(original_fixes)
+                                await emit({
+                                    "type": "stage_auto_fixed",
+                                    "stage": current_stage,
+                                    "fixes": original_fixes,
+                                })
                             preview_issues = _validate_frontend_preview_code_files(
                                 parsed.get("code_files", {}),
                                 user_request=pipe.user_request or "",
@@ -3415,6 +3536,21 @@ class DevPipelineManager:
                                 for path in existing_paths
                                 if source_files.get(str(path).replace("\\", "/").lstrip("/"))
                             }
+                        fixed_files, original_fixes = _auto_fix_existing_feature_from_original(
+                            parsed.get("code_files", {}),
+                            user_request=pipe.user_request or "",
+                            existing_frontend_paths=existing_paths,
+                            existing_frontend_files=existing_frontend_files,
+                        )
+                        if original_fixes:
+                            parsed["code_files"] = fixed_files
+                            parsed["auto_fixes"] = (parsed.get("auto_fixes") or []) + original_fixes
+                            raw_output += "\n\n--- 自动修复 ---\n" + "\n".join(original_fixes)
+                            await emit({
+                                "type": "stage_auto_fixed",
+                                "stage": current_stage,
+                                "fixes": original_fixes,
+                            })
                         preview_issues = _validate_frontend_preview_code_files(
                             parsed.get("code_files", {}),
                             user_request=pipe.user_request or "",

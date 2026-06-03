@@ -66,8 +66,20 @@ const pageFunctionName = (path: string) => {
 }
 
 const candidateLabel = (candidate: FrontendPageCandidate) => {
-  const name = pageFunctionName(candidate.path)
+  const name = candidate.display_name || pageFunctionName(candidate.path)
   return name.endsWith('页') ? name : `${name}页`
+}
+
+const candidateConfidenceLabel = (confidence = 0) => {
+  if (confidence >= 0.75) return '很可能是这个'
+  if (confidence >= 0.55) return '可能是这个'
+  return '需要确认'
+}
+
+const candidateConfidenceColor = (confidence = 0) => {
+  if (confidence >= 0.75) return 'green'
+  if (confidence >= 0.55) return 'gold'
+  return 'orange'
 }
 
 export default function ProductPortal() {
@@ -129,6 +141,58 @@ export default function ProductPortal() {
     if (!structured.needs_frontend_page_selection) return null
     return (structured.frontend_page_candidates || null) as FrontendPageCandidates | null
   }
+
+  const renderPageCandidateOptions = (
+    candidates: FrontendPageCandidate[],
+    options?: { uncertain?: boolean; limit?: number },
+  ) => (
+    <Radio.Group
+      value={selectedPagePath}
+      onChange={(event) => setSelectedPagePath(event.target.value)}
+      style={{ width: '100%' }}
+    >
+      <Space direction="vertical" style={{ width: '100%' }}>
+        {candidates.slice(0, options?.limit || 6).map((candidate) => {
+          const checked = selectedPagePath === candidate.path
+          return (
+            <Radio
+              key={candidate.path}
+              value={candidate.path}
+              style={{
+                display: 'block',
+                width: '100%',
+                padding: '10px 12px',
+                margin: 0,
+                border: `1px solid ${checked ? '#91caff' : '#f0f0f0'}`,
+                borderRadius: 6,
+                background: checked ? '#e6f4ff' : '#fff',
+              }}
+            >
+              <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                <Space wrap size={6}>
+                  <Text strong>{candidateLabel(candidate)}</Text>
+                  <Tag color={candidateConfidenceColor(candidate.confidence)}>
+                    {candidateConfidenceLabel(candidate.confidence)}
+                  </Tag>
+                  {(candidate.uncertain || options?.uncertain) && <Tag color="orange">请你确认</Tag>}
+                </Space>
+                <Text type="secondary">
+                  {candidate.menu_hint || candidate.reason || '系统根据页面内容和业务词匹配到的现有功能'}
+                </Text>
+                <Space wrap size={6}>
+                  {candidate.route_hint && <Tag color="blue">路由：{candidate.route_hint}</Tag>}
+                  {candidate.matched_terms?.slice(0, 3).map((term) => <Tag key={term}>{term}</Tag>)}
+                </Space>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  开发定位：{candidate.developer_hint || candidate.path}
+                </Text>
+              </Space>
+            </Radio>
+          )
+        })}
+      </Space>
+    </Radio.Group>
+  )
 
   const refreshOutputs = async (id: string) => {
     const [nextStatus, nextArtifact] = await Promise.all([
@@ -612,36 +676,10 @@ export default function ProductPortal() {
                       message={matchedSkill.frontend_page_candidates.uncertain ? '页面匹配不确定，请人工选择' : '选择要修改的现有页面'}
                       description={
                         (matchedSkill.frontend_page_candidates.candidates || []).length ? (
-                          <Radio.Group
-                            value={selectedPagePath}
-                            onChange={(event) => setSelectedPagePath(event.target.value)}
-                            style={{ width: '100%' }}
-                          >
-                            <Space direction="vertical" style={{ width: '100%' }}>
-                              {(matchedSkill.frontend_page_candidates.candidates || []).slice(0, 5).map((candidate) => (
-                                <Radio key={candidate.path} value={candidate.path}>
-                                  <Space direction="vertical" size={2}>
-                                    <Space wrap size={6}>
-                                      <Text strong>{candidateLabel(candidate)}</Text>
-                                      <Tag color={candidate.confidence >= 0.75 ? 'green' : candidate.confidence >= 0.55 ? 'gold' : 'orange'}>
-                                        {Math.round(candidate.confidence * 100)}%
-                                      </Tag>
-                                      {(candidate.uncertain || matchedSkill.frontend_page_candidates?.uncertain) && (
-                                        <Tag color="orange">需确认</Tag>
-                                      )}
-                                      {candidate.matched_terms?.slice(0, 4).map((term) => (
-                                        <Tag key={term}>{term}</Tag>
-                                      ))}
-                                    </Space>
-                                    <Space wrap size={6}>
-                                      <Text type="secondary">{candidate.reason}</Text>
-                                      <Text type="secondary" style={{ fontSize: 12 }}>{candidate.path}</Text>
-                                    </Space>
-                                  </Space>
-                                </Radio>
-                              ))}
-                            </Space>
-                          </Radio.Group>
+                          renderPageCandidateOptions(
+                            matchedSkill.frontend_page_candidates.candidates || [],
+                            { uncertain: matchedSkill.frontend_page_candidates.uncertain, limit: 5 },
+                          )
                         ) : (
                           <Text type="warning">
                             未找到与需求相关的现有页面候选。系统不会新建页面冒充现有功能改造。
@@ -807,32 +845,10 @@ export default function ProductPortal() {
                   <Space direction="vertical" style={{ width: '100%' }}>
                     {pendingPageSelection ? (
                       pendingPageCandidates.length ? (
-                        <Radio.Group
-                          value={selectedPagePath}
-                          onChange={(event) => setSelectedPagePath(event.target.value)}
-                          style={{ width: '100%' }}
-                        >
-                          <Space direction="vertical" style={{ width: '100%' }}>
-                            {pendingPageCandidates.slice(0, 6).map((candidate) => (
-                              <Radio key={candidate.path} value={candidate.path}>
-                                <Space direction="vertical" size={2}>
-                                  <Space wrap size={6}>
-                                    <Text strong>{candidateLabel(candidate)}</Text>
-                                    <Tag color={candidate.confidence >= 0.75 ? 'green' : candidate.confidence >= 0.55 ? 'gold' : 'orange'}>
-                                      {Math.round(candidate.confidence * 100)}%
-                                    </Tag>
-                                    {(candidate.uncertain || pendingPageSelection.uncertain) && <Tag color="orange">需确认</Tag>}
-                                    {candidate.matched_terms?.slice(0, 4).map((term) => <Tag key={term}>{term}</Tag>)}
-                                  </Space>
-                                  <Space wrap size={6}>
-                                    <Text type="secondary">{candidate.reason}</Text>
-                                    <Text type="secondary" style={{ fontSize: 12 }}>{candidate.path}</Text>
-                                  </Space>
-                                </Space>
-                              </Radio>
-                            ))}
-                          </Space>
-                        </Radio.Group>
+                        renderPageCandidateOptions(pendingPageCandidates, {
+                          uncertain: pendingPageSelection.uncertain,
+                          limit: 6,
+                        })
                       ) : (
                         <Text type="warning">没有找到像“零售商品列表”这样的现有页面候选，系统不会新建页面冒充现有功能。</Text>
                       )
