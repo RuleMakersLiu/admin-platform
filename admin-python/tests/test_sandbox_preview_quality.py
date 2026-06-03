@@ -6,6 +6,7 @@ from app.ai.flow_manager import (
     _frontend_existing_page_candidates,
     _frontend_fallback_page_candidates,
     _frontend_relevant_existing_page_paths,
+    _pick_existing_frontend_files,
     _validate_frontend_preview_code_files,
 )
 from app.services.sandbox_preview_service import SandboxPreviewService
@@ -566,6 +567,75 @@ export default {
         user_request="我想给商城管理平台现有的零售商品列表增加一个商品ID的筛选项",
         existing_frontend_paths=["src/views/selfOperateCommodity/commodityList/List.vue"],
         existing_frontend_files={"src/views/selfOperateCommodity/commodityList/List.vue": original_page},
+    ) == []
+
+
+def test_existing_feature_auto_fix_handles_generated_stable_and_search_handlers():
+    original_page = """
+<template>
+  <a-form>
+    <a-form-item label="商品编号"><a-input placeholder="请输入商品编号" v-model="queryParam.productCode" /></a-form-item>
+  </a-form>
+  <s-table ref="table" :columns="columns" :data="loadData" />
+</template>
+<script>
+import { ListMixin } from '@/mixins/ListMixin'
+export default {
+  mixins: [ListMixin],
+  data () {
+    return {
+      queryParam: {},
+      url: { list: '/api/product/glsw/product/selfOperatedList' },
+      columns: []
+    }
+  }
+}
+</script>
+"""
+    generated_files = {
+        "src/views/selfOperateCommodity/commodityList/List.vue": """
+<template>
+  <a-form>
+    <a-input v-model="query.productId" />
+    <a-button @click="searchQuery">查询</a-button>
+    <a-button @click="searchReset">重置</a-button>
+  </a-form>
+  <s-table :data="loadData" />
+</template>
+<script>
+export default {
+  data () {
+    return {
+      query: { productId: '' },
+      rows: undefined,
+      loadData: () => Promise.resolve(this.rows.map(item => item))
+    }
+  }
+}
+</script>
+""",
+    }
+    source_files = {
+        "/src\\views\\selfOperateCommodity\\commodityList\\List.vue": original_page,
+    }
+    existing_files = _pick_existing_frontend_files(
+        source_files,
+        ["src/views/selfOperateCommodity/commodityList/List.vue"],
+    )
+
+    fixed, fixes = _auto_fix_existing_feature_from_original(
+        generated_files,
+        user_request="我想给商城管理平台现有的零售商品列表增加一个商品ID的筛选项",
+        existing_frontend_paths=["src/views/selfOperateCommodity/commodityList/List.vue"],
+        existing_frontend_files=existing_files,
+    )
+
+    assert fixes
+    assert _validate_frontend_preview_code_files(
+        fixed,
+        user_request="我想给商城管理平台现有的零售商品列表增加一个商品ID的筛选项",
+        existing_frontend_paths=["src/views/selfOperateCommodity/commodityList/List.vue"],
+        existing_frontend_files=existing_files,
     ) == []
 
 

@@ -1366,6 +1366,24 @@ def _auto_fix_existing_feature_from_original(
     return files, []
 
 
+def _pick_existing_frontend_files(
+    source_files: Dict[str, str],
+    existing_paths: Optional[List[str]],
+) -> Dict[str, str]:
+    normalized_source = {
+        str(path).replace("\\", "/").lstrip("/"): content
+        for path, content in (source_files or {}).items()
+        if isinstance(content, str)
+    }
+    picked: Dict[str, str] = {}
+    for path in existing_paths or []:
+        normalized_path = str(path).replace("\\", "/").lstrip("/")
+        content = normalized_source.get(normalized_path)
+        if content:
+            picked[normalized_path] = content
+    return picked
+
+
 def _try_parse_json_code_files(raw_output: str) -> Dict[str, str]:
     """尝试从 LLM 输出中提取 JSON 格式的代码文件映射。
     支持格式: ```json\n{"path": "src/xxx", "content": "..."}\n``` 或直接 JSON 对象
@@ -3444,13 +3462,7 @@ class DevPipelineManager:
                             frontend_project_id = str(pipe_config.get("frontend_project_id") or pipe.project_id or "").strip()
                             if existing_paths and frontend_project_id:
                                 source_files = await _load_project_files_cached(frontend_project_id, "frontend")
-                                existing_frontend_files = {
-                                    str(path).replace("\\", "/").lstrip("/"): source_files.get(
-                                        str(path).replace("\\", "/").lstrip("/"), ""
-                                    )
-                                    for path in existing_paths
-                                    if source_files.get(str(path).replace("\\", "/").lstrip("/"))
-                                }
+                                existing_frontend_files = _pick_existing_frontend_files(source_files, existing_paths)
                             fixed_files, original_fixes = _auto_fix_existing_feature_from_original(
                                 parsed.get("code_files", {}),
                                 user_request=pipe.user_request or "",
@@ -3529,13 +3541,7 @@ class DevPipelineManager:
                         frontend_project_id = str(pipe_config.get("frontend_project_id") or pipe.project_id or "").strip()
                         if existing_paths and frontend_project_id:
                             source_files = await _load_project_files_cached(frontend_project_id, "frontend")
-                            existing_frontend_files = {
-                                str(path).replace("\\", "/").lstrip("/"): source_files.get(
-                                    str(path).replace("\\", "/").lstrip("/"), ""
-                                )
-                                for path in existing_paths
-                                if source_files.get(str(path).replace("\\", "/").lstrip("/"))
-                            }
+                            existing_frontend_files = _pick_existing_frontend_files(source_files, existing_paths)
                         fixed_files, original_fixes = _auto_fix_existing_feature_from_original(
                             parsed.get("code_files", {}),
                             user_request=pipe.user_request or "",
