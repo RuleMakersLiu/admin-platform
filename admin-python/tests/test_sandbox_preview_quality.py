@@ -7,6 +7,7 @@ from app.ai.flow_manager import (
     _frontend_fallback_page_candidates,
     _frontend_relevant_existing_page_paths,
     _pick_existing_frontend_files,
+    _resolve_existing_page_paths_for_preview,
     _validate_frontend_preview_code_files,
 )
 from app.services.sandbox_preview_service import SandboxPreviewService
@@ -637,6 +638,21 @@ export default {
         existing_frontend_paths=["src/views/selfOperateCommodity/commodityList/List.vue"],
         existing_frontend_files=existing_files,
     ) == []
+
+
+def test_existing_page_paths_fallback_to_selected_path_and_generated_path():
+    parsed = {
+        "code_files": {
+            "src/views/selfOperateCommodity/commodityList/List.vue": "<template />",
+        }
+    }
+    pipe_config = {
+        "selected_frontend_page_path": "src/views/selfOperateCommodity/commodityList/List.vue",
+    }
+
+    assert _resolve_existing_page_paths_for_preview(parsed, pipe_config) == [
+        "src/views/selfOperateCommodity/commodityList/List.vue"
+    ]
 
 
 def test_preview_validator_rejects_data_return_using_runtime_result_variable():

@@ -1349,19 +1349,9 @@ def _auto_fix_existing_feature_from_original(
         patched = patched.replace("请输入商品编号", "请输入商品ID")
         patched = patched.replace("输入商品编号", "输入商品ID")
 
-        generated_paths = {str(item).replace("\\", "/").lstrip("/") for item in files}
-        has_new_api = any(item.startswith("src/api/") for item in generated_paths)
-        current_page = files.get(path, "")
-        preservation_issues = _validate_existing_feature_preservation(
-            files,
-            user_request=user_request,
-            existing_frontend_paths=[path],
-            existing_frontend_files={path: original},
-        )
-        if has_new_api or preservation_issues or current_page != patched:
-            return {path: patched}, [
-                f"{path}: 检测到原页面已有商品编号/productCode 等价筛选，已自动回退为基于原页面的最小改动并移除新建 API 文件"
-            ]
+        return {path: patched}, [
+            f"{path}: 检测到原页面已有商品编号/productCode 等价筛选，已自动回退为基于原页面的最小改动并移除新建 API 文件"
+        ]
 
     return files, []
 
@@ -1382,6 +1372,46 @@ def _pick_existing_frontend_files(
         if content:
             picked[normalized_path] = content
     return picked
+
+
+def _resolve_existing_page_paths_for_preview(
+    parsed: Dict[str, Any],
+    pipe_config: Dict[str, Any],
+) -> List[str]:
+    paths: List[str] = []
+    selected_path = str(pipe_config.get("selected_frontend_page_path") or "").strip()
+    if selected_path:
+        paths.append(selected_path)
+    paths.extend(parsed.get("_frontend_existing_paths") or [])
+    code_files = parsed.get("code_files") or {}
+    if isinstance(code_files, dict):
+        paths.extend(
+            str(path)
+            for path in code_files
+            if _is_frontend_page_path(str(path).replace("\\", "/").lstrip("/"))
+        )
+    normalized: List[str] = []
+    seen = set()
+    for path in paths:
+        safe_path = str(path).replace("\\", "/").lstrip("/")
+        if safe_path and safe_path not in seen:
+            seen.add(safe_path)
+            normalized.append(safe_path)
+    return normalized
+
+
+async def _load_existing_preview_page_files(
+    pipe_config: Dict[str, Any],
+    pipe_project_id: str,
+    parsed: Dict[str, Any],
+) -> Tuple[List[str], Dict[str, str]]:
+    existing_paths = _resolve_existing_page_paths_for_preview(parsed, pipe_config)
+    frontend_project_id = str(pipe_config.get("frontend_project_id") or pipe_project_id or "").strip()
+    existing_frontend_files: Dict[str, str] = {}
+    if existing_paths and frontend_project_id:
+        source_files = await _load_project_files_cached(frontend_project_id, "frontend")
+        existing_frontend_files = _pick_existing_frontend_files(source_files, existing_paths)
+    return existing_paths, existing_frontend_files
 
 
 def _try_parse_json_code_files(raw_output: str) -> Dict[str, str]:
@@ -3457,12 +3487,11 @@ class DevPipelineManager:
                                     "stage": current_stage,
                                     "fixes": auto_fixes,
                                 })
-                            existing_frontend_files: Dict[str, str] = {}
-                            existing_paths = parsed.get("_frontend_existing_paths") or []
-                            frontend_project_id = str(pipe_config.get("frontend_project_id") or pipe.project_id or "").strip()
-                            if existing_paths and frontend_project_id:
-                                source_files = await _load_project_files_cached(frontend_project_id, "frontend")
-                                existing_frontend_files = _pick_existing_frontend_files(source_files, existing_paths)
+                            existing_paths, existing_frontend_files = await _load_existing_preview_page_files(
+                                pipe_config,
+                                pipe.project_id or "",
+                                parsed,
+                            )
                             fixed_files, original_fixes = _auto_fix_existing_feature_from_original(
                                 parsed.get("code_files", {}),
                                 user_request=pipe.user_request or "",
@@ -3536,12 +3565,11 @@ class DevPipelineManager:
                                 "stage": current_stage,
                                 "fixes": auto_fixes,
                             })
-                        existing_frontend_files: Dict[str, str] = {}
-                        existing_paths = parsed.get("_frontend_existing_paths") or []
-                        frontend_project_id = str(pipe_config.get("frontend_project_id") or pipe.project_id or "").strip()
-                        if existing_paths and frontend_project_id:
-                            source_files = await _load_project_files_cached(frontend_project_id, "frontend")
-                            existing_frontend_files = _pick_existing_frontend_files(source_files, existing_paths)
+                        existing_paths, existing_frontend_files = await _load_existing_preview_page_files(
+                            pipe_config,
+                            pipe.project_id or "",
+                            parsed,
+                        )
                         fixed_files, original_fixes = _auto_fix_existing_feature_from_original(
                             parsed.get("code_files", {}),
                             user_request=pipe.user_request or "",
