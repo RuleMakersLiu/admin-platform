@@ -1154,6 +1154,8 @@ def _validate_frontend_preview_code_files(
                 handler = handler_expr.strip()
                 if not re.fullmatch(r"[A-Za-z_$][\w$]*", handler):
                     continue
+                if "listmixin" in content.lower() and handler in {"searchQuery", "searchReset"}:
+                    continue
                 if f"{handler} (" not in content and f"{handler}(" not in content:
                     issues.append(f"{safe_path} 模板事件 {handler} 未实现")
         if safe_path.endswith(".wxml"):

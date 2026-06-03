@@ -709,6 +709,34 @@ export default {
     assert not any("模板事件 $refs 未实现" in issue for issue in issues)
 
 
+def test_preview_validator_allows_list_mixin_search_handlers():
+    files = {
+        "src/views/selfOperateCommodity/commodityList/List.vue": """
+<template>
+  <a-form @keyup.enter.native="searchQuery">
+    <a-button @click="searchQuery">查询</a-button>
+    <a-button @click="searchReset">重置</a-button>
+  </a-form>
+  <s-table ref="table" :data="loadData" />
+</template>
+<script>
+import { ListMixin } from '@/mixins/ListMixin'
+export default {
+  mixins: [ListMixin],
+  data () {
+    return { queryParam: {}, url: { list: '/api/product/glsw/product/selfOperatedList' } }
+  }
+}
+</script>
+""",
+    }
+
+    issues = _validate_frontend_preview_code_files(files)
+
+    assert not any("模板事件 searchQuery 未实现" in issue for issue in issues)
+    assert not any("模板事件 searchReset 未实现" in issue for issue in issues)
+
+
 def test_existing_page_candidates_include_confidence_and_reason():
     files = {
         "src/views/activityManage/ActivityManageList.vue": "活动管理列表，活动名称，活动状态，投放渠道",
