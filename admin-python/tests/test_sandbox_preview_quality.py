@@ -7,6 +7,7 @@ from app.ai.flow_manager import (
     _frontend_fallback_page_candidates,
     _frontend_relevant_existing_page_paths,
     _pick_existing_frontend_files,
+    _project_file_read_limit,
     _resolve_existing_page_paths_for_preview,
     _validate_frontend_preview_code_files,
 )
@@ -47,6 +48,11 @@ if (process.env.NODE_ENV === 'development') {
     assert any("必须处理分页对象 list 字段" in issue for issue in issues)
     assert any("列表 mock 缺少 list 数组字段" in issue for issue in issues)
     assert any("列表 mock 缺少分页字段 count" in issue for issue in issues)
+
+
+def test_project_file_read_limit_keeps_existing_page_methods():
+    assert _project_file_read_limit("src/views/selfOperateCommodity/commodityList/List.vue") == 30000
+    assert _project_file_read_limit("src/api/product.js") == 5000
 
 
 def test_sandbox_preview_patches_stable_response_contract():

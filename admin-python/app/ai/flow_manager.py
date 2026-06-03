@@ -2454,7 +2454,7 @@ async def _fetch_project_files_from_git(project_id: str) -> Dict[str, str]:
                     continue
                 try:
                     with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
-                        content = f.read(5000)
+                        content = f.read(_project_file_read_limit(rel_path))
                     files[rel_path] = content
                 except Exception:
                     pass
@@ -2469,6 +2469,15 @@ async def _fetch_project_files_from_git(project_id: str) -> Dict[str, str]:
     except Exception as e:
         logger.warning(f"Failed to load project context for {project_id}: {e}")
         return {}
+
+
+def _project_file_read_limit(rel_path: str) -> int:
+    normalized = str(rel_path).replace("\\", "/").lstrip("/")
+    if normalized.startswith(("src/views/", "src/pages/", "pages/")) and normalized.endswith((
+        ".vue", ".tsx", ".jsx", ".js", ".ts", ".wxml",
+    )):
+        return 30000
+    return 5000
 
 
 async def _clone_project_repo(clone_url: str, branch: str, tmp_dir: str):
