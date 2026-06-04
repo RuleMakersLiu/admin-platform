@@ -296,6 +296,9 @@ export const pipelineApi = {
   getOutput: (id: string, stage?: string) =>
     api.get(`${BASE}/${id}/output`, { params: { stage: stage || '' } }) as any,
 
+  updateStageOutput: (id: string, stage: string, output: string) =>
+    api.put(`${BASE}/${id}/stages/${stage}/output`, { output }) as any,
+
   list: () =>
     api.get(`${BASE}/list`) as any,
 

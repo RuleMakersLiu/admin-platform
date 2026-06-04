@@ -483,7 +483,7 @@ export default {
     assert any("/api/product/glsw/product/selfOperatedList" in issue for issue in issues)
 
 
-def test_existing_feature_validator_allows_minimal_label_change_on_selected_page():
+def test_existing_feature_validator_rejects_overwriting_product_code_filter_for_additive_id():
     original_page = """
 <template>
   <a-form>
@@ -506,6 +506,45 @@ export default {
 </script>
 """
     generated_page = original_page.replace("商品编号", "商品ID")
+
+    issues = _validate_frontend_preview_code_files(
+        {"src/views/selfOperateCommodity/commodityList/List.vue": generated_page},
+        user_request="我想给商城管理平台现有的零售商品列表增加一个商品ID的筛选项",
+        existing_frontend_paths=["src/views/selfOperateCommodity/commodityList/List.vue"],
+        existing_frontend_files={"src/views/selfOperateCommodity/commodityList/List.vue": original_page},
+    )
+
+    assert any("现有筛选项“商品编号”被改名或覆盖" in issue for issue in issues)
+    assert any("不能复用原有字段 queryParam.productCode" in issue for issue in issues)
+
+
+def test_existing_feature_validator_allows_additive_product_id_filter_on_selected_page():
+    original_page = """
+<template>
+  <a-form>
+    <a-form-item label="商品编号"><a-input placeholder="请输入商品编号" v-model="queryParam.productCode" /></a-form-item>
+  </a-form>
+  <s-table ref="table" :columns="columns" :data="loadData" />
+</template>
+<script>
+import { ListMixin } from '@/mixins/ListMixin'
+export default {
+  mixins: [ListMixin],
+  data () {
+    return {
+      queryParam: {},
+      url: { list: '/api/product/glsw/product/selfOperatedList' },
+      columns: []
+    }
+  }
+}
+</script>
+"""
+    generated_page = original_page.replace(
+        '<a-form-item label="商品编号">',
+        '<a-form-item label="商品ID"><a-input placeholder="请输入商品ID" v-model="queryParam.id" /></a-form-item>\n'
+        '    <a-form-item label="商品编号">',
+    )
 
     issues = _validate_frontend_preview_code_files(
         {"src/views/selfOperateCommodity/commodityList/List.vue": generated_page},
@@ -567,6 +606,8 @@ export default {
     assert fixes
     assert list(fixed) == ["src/views/selfOperateCommodity/commodityList/List.vue"]
     assert "商品ID" in fixed["src/views/selfOperateCommodity/commodityList/List.vue"]
+    assert "商品编号" in fixed["src/views/selfOperateCommodity/commodityList/List.vue"]
+    assert "queryParam.id" in fixed["src/views/selfOperateCommodity/commodityList/List.vue"]
     assert "queryParam.productCode" in fixed["src/views/selfOperateCommodity/commodityList/List.vue"]
     assert "/api/product/glsw/product/selfOperatedList" in fixed["src/views/selfOperateCommodity/commodityList/List.vue"]
     assert _validate_frontend_preview_code_files(
@@ -575,6 +616,37 @@ export default {
         existing_frontend_paths=["src/views/selfOperateCommodity/commodityList/List.vue"],
         existing_frontend_files={"src/views/selfOperateCommodity/commodityList/List.vue": original_page},
     ) == []
+
+
+def test_existing_feature_auto_fix_adds_generic_filter_without_overwriting_existing_filters():
+    original_page = """
+<template>
+  <a-form>
+    <a-form-item label="客户名称"><a-input placeholder="请输入客户名称" v-model="queryParam.customerName" /></a-form-item>
+  </a-form>
+</template>
+<script>
+export default {
+  data () {
+    return { queryParam: {} }
+  }
+}
+</script>
+"""
+
+    fixed, fixes = _auto_fix_existing_feature_from_original(
+        {"src/views/customer/List.vue": "<template><a-form /></template>"},
+        user_request="给现有客户列表新增状态筛选项",
+        existing_frontend_paths=["src/views/customer/List.vue"],
+        existing_frontend_files={"src/views/customer/List.vue": original_page},
+    )
+
+    content = fixed["src/views/customer/List.vue"]
+    assert fixes
+    assert "客户名称" in content
+    assert "queryParam.customerName" in content
+    assert "状态" in content
+    assert "queryParam.status" in content
 
 
 def test_existing_feature_auto_fix_handles_generated_stable_and_search_handlers():

@@ -13,6 +13,7 @@ import {
   ThunderboltOutlined, BranchesOutlined, HistoryOutlined,
   ExclamationCircleOutlined, PlayCircleOutlined, ArrowLeftOutlined,
   UndoOutlined, SettingOutlined, DeleteOutlined, ReloadOutlined,
+  EditOutlined, SaveOutlined,
 } from '@ant-design/icons'
 import { useSearchParams } from 'react-router-dom'
 import { pipelineApi, type PipelineStatus, type PipelineStreamEvent } from '@/services/pipeline'
@@ -380,6 +381,7 @@ interface Styles {
   stageDetailHeader: React.CSSProperties
   stageDetailBody: React.CSSProperties
   outputContainer: React.CSSProperties
+  outputHeader: React.CSSProperties
   outputLabel: React.CSSProperties
   confirmPanel: React.CSSProperties
   confirmPanelActions: React.CSSProperties
@@ -563,19 +565,22 @@ const styles: Styles = {
   outputContainer: {
     maxHeight: 620,
     overflow: 'auto',
-    padding: '28px 24px 24px',
+    padding: '16px 20px 20px',
     marginBottom: 16,
     borderRadius: 8,
     border: '1px solid #e5eaf3',
     background: '#f8fafd',
     color: '#243044',
-    position: 'relative' as const,
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
   },
+  outputHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 12,
+  },
   outputLabel: {
-    position: 'absolute' as const,
-    top: 8,
-    right: 12,
     fontSize: 11,
     color: '#667085',
     textTransform: 'uppercase' as const,
@@ -798,6 +803,9 @@ const PipelinePage: React.FC = () => {
   const [streamOutputByStage, setStreamOutputByStage] = useState<Record<string, string>>({})
   const [sandboxPreviewUrl, setSandboxPreviewUrl] = useState('')
   const [sandboxPreviewLoading, setSandboxPreviewLoading] = useState(false)
+  const [editingStage, setEditingStage] = useState('')
+  const [editedStageOutput, setEditedStageOutput] = useState('')
+  const [stageOutputSaving, setStageOutputSaving] = useState(false)
   const streamAbortRef = useRef<AbortController | null>(null)
   const streamReconnectKeyRef = useRef('')
   const isProductOnlyFlow = canUseProductPortal(user) && !canUsePipelineWorkbench(user)
@@ -1201,6 +1209,38 @@ const PipelinePage: React.FC = () => {
     }
   }
 
+  const startEditStageOutput = () => {
+    if (!activeStageKey) return
+    setEditingStage(activeStageKey)
+    setEditedStageOutput(String(liveStageOutput || ''))
+  }
+
+  const cancelEditStageOutput = () => {
+    setEditingStage('')
+    setEditedStageOutput('')
+  }
+
+  const saveStageOutput = async () => {
+    if (!pipelineId || !editingStage) return
+    setStageOutputSaving(true)
+    try {
+      await pipelineApi.updateStageOutput(pipelineId, editingStage, editedStageOutput)
+      message.success('已保存当前阶段内容')
+      setStreamOutputByStage((prev) => {
+        const next = { ...prev }
+        delete next[editingStage]
+        return next
+      })
+      setEditingStage('')
+      setEditedStageOutput('')
+      await refreshStatus(pipelineId)
+    } catch (e: any) {
+      message.error(e?.message || '保存失败')
+    } finally {
+      setStageOutputSaving(false)
+    }
+  }
+
 
   const getStepsStatus = (stageKey: string): 'wait' | 'process' | 'finish' | 'error' => {
     if (!pipeline) return 'wait'
@@ -1219,6 +1259,7 @@ const PipelinePage: React.FC = () => {
   const currentStage = pipeline?.stages?.[activeStageKey]
   const isViewingCurrent = activeStageKey === pipeline?.current_stage
   const liveStageOutput = (isViewingCurrent && streamOutputByStage[activeStageKey]) || currentStage?.output || ''
+  const isEditingStageOutput = editingStage === activeStageKey
   const pmQuality = activeStageKey === 'requirement'
     ? currentStage?.structured_output?.pm_quality
     : activeStageKey === 'page_design'
@@ -1267,6 +1308,11 @@ const PipelinePage: React.FC = () => {
     setRollbackStage(preferred)
     setRollbackModalVisible(true)
   }
+
+  useEffect(() => {
+    setEditingStage('')
+    setEditedStageOutput('')
+  }, [activeStageKey])
 
   // ============ Create Panel ============
   if (showCreate) {
@@ -1797,8 +1843,58 @@ const PipelinePage: React.FC = () => {
               {/* Output */}
               {liveStageOutput && (!loading || executionActive) && (
                 <div style={styles.outputContainer}>
-                  <span style={styles.outputLabel}>OUTPUT</span>
-                  <MarkdownRenderer content={displayOutput} className="pipeline-markdown" />
+                  <div style={styles.outputHeader}>
+                    <span style={styles.outputLabel}>{isEditingStageOutput ? 'EDITING' : 'OUTPUT'}</span>
+                    <Space size={8}>
+                      {isEditingStageOutput ? (
+                        <>
+                          <Button
+                            size="small"
+                            icon={<SaveOutlined />}
+                            type="primary"
+                            loading={stageOutputSaving}
+                            onClick={saveStageOutput}
+                            style={{ borderRadius: 6, fontSize: 12 }}
+                          >
+                            保存修改
+                          </Button>
+                          <Button
+                            size="small"
+                            onClick={cancelEditStageOutput}
+                            disabled={stageOutputSaving}
+                            style={{ borderRadius: 6, fontSize: 12 }}
+                          >
+                            取消
+                          </Button>
+                        </>
+                      ) : (
+                        <Button
+                          size="small"
+                          icon={<EditOutlined />}
+                          onClick={startEditStageOutput}
+                          disabled={isRunning}
+                          style={{ borderRadius: 6, fontSize: 12 }}
+                        >
+                          编辑内容
+                        </Button>
+                      )}
+                    </Space>
+                  </div>
+                  {isEditingStageOutput ? (
+                    <TextArea
+                      value={editedStageOutput}
+                      onChange={(e) => setEditedStageOutput(e.target.value)}
+                      autoSize={{ minRows: 12, maxRows: 28 }}
+                      style={{
+                        borderRadius: 8,
+                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                        fontSize: 12,
+                        lineHeight: 1.6,
+                      }}
+                    />
+                  ) : (
+                    <MarkdownRenderer content={displayOutput} className="pipeline-markdown" />
+                  )}
                 </div>
               )}
 

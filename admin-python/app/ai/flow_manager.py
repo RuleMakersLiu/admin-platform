@@ -98,6 +98,14 @@ def _stage_keys_for_mode(pipeline_mode: str = "full") -> List[str]:
     return PIPELINE_MODE_STAGES.get(pipeline_mode or "full", STAGE_KEYS)
 
 
+def _fix_loop_stage_for_mode(stage_keys: List[str]) -> str:
+    if "frontend_dev" in stage_keys:
+        return "frontend_dev"
+    if "prototype" in stage_keys:
+        return "prototype"
+    return stage_keys[0] if stage_keys else ""
+
+
 def _is_product_preview_code_stage(stage_key: str, pipe_config: Dict[str, Any]) -> bool:
     return stage_key == "prototype" and pipe_config.get("pipeline_mode") == "frontend_contract_review"
 
@@ -293,8 +301,8 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 2. 根据匹配项目的真实技术栈生成文件：Vue 后台通常生成 `src/views/**/*.vue` + `src/api/*.js`；React 后台通常生成 `src/pages/**/*.tsx|jsx` + service/api 文件；uni-app/小程序项目按项目现有 `pages/**`、`*.vue` 或 `*.wxml/*.js/*.json/*.wxss` 结构生成。不要把所有项目都当 Vue 后台。
    - 文件路径必须像目标项目里的真实业务模块路径，优先沿用 Project Skill 或代码参考里的目录命名。
    - 如果用户需求表达的是“现有/已有/当前/原有页面或功能上增加、修改、优化、补充筛选/字段/按钮/查询”，必须修改「与本需求相关的已确认前端页面路径」中的现有页面；禁止凭语义新建 `src/views/**/List.vue` 或 `src/pages/**/List.vue` 来冒充改造，禁止选择活动管理、营销活动等无关业务页面。
-   - 现有功能改造必须做最小增量：旧表格列、旧列表数据、旧查询接口、旧 mixin、旧组件、旧操作列都是既有能力，不要重写整页架构，不要重新生成整页 mock 数据或新建一套列表 API。比如“给现有零售商品列表增加商品ID筛选项”，只需要在现有页面增加/调整查询控件、queryParam 和请求参数传递；除非需求明确要求新增接口/新增数据源，否则不要输出 `mockProductList`、`Mock.mock` 或完整假数据。
-   - 如果现有页面里已经存在等价筛选项（例如“商品编号”绑定 `queryParam.productCode`，而用户说“商品ID筛选”），优先做最小语义调整（如 label/placeholder 改为商品ID）或保持该字段，不要新增重复字段，不要把 `productCode` 改成未确认的 `productId`。
+   - 现有功能改造必须做最小增量：旧表格列、旧列表数据、旧查询接口、旧 mixin、旧组件、旧操作列都是既有能力，不要重写整页架构，不要重新生成整页 mock 数据或新建一套列表 API。比如“给现有零售商品列表增加商品ID筛选项”，只需要在现有页面新增查询控件、queryParam 和请求参数传递；除非需求明确要求新增接口/新增数据源，否则不要输出 `mockProductList`、`Mock.mock` 或完整假数据。
+   - 如果用户说“新增/增加/添加某个筛选项”，这是新增筛选项，不是把已有筛选项改名。必须保留原页面已有筛选控件及其 `queryParam` 字段，再为新增筛选项绑定 API 契约确认的独立请求字段。例如新增“商品ID”时，保留原“商品编号”及 `queryParam.productCode`，再新增“商品ID”及 `queryParam.id`。只有用户明确说“改名/调整文案/重命名”时，才允许修改旧 label/placeholder。
    - 修改现有 Vue 列表页时必须保留原页面的 `ListMixin`/`mixins`、`<s-table :data="loadData">`、`url.list` 接口、已有 columns/slots/操作按钮和已有导入；除非用户明确要求删除，否则不要用本地 `data()`、新 API 文件或新接口替代原列表加载方式。
    - 如果找不到与现有功能对应的已确认页面路径，本阶段不要编造新页面，应输出空 JSON 数组让系统失败并在修复反馈中暴露“缺少真实页面路径”。
    - 禁止生成 `Demo`、`Example`、`Standalone`、`SandboxPreview`、`PreviewOnly`、`MockPage`、`GeneratedPage` 这类独立演示路径或组件名。
@@ -356,6 +364,16 @@ JSON 格式如下:
 
 ## 页面设计
 {{page_design_output}}
+
+## 前端预览代码
+{{prototype_output}}
+
+## 现有功能改造契约继承规则
+- 如果前端预览代码是修改现有页面，交付包必须继承真实页面代码里的接口路径、请求字段、响应字段、权限 key、mixin/组件行为，不得根据中文展示名另起字段或接口。
+- 如果需求是“新增/增加/添加某个筛选项”，交付包必须写清楚这是新增字段：保留所有原筛选项及其请求字段，再为新增筛选项使用 API 契约确认的独立请求字段；不得把旧字段改名来冒充新增。例如新增“商品ID”时，应保留原“商品编号”请求字段 `productCode`，新增字段按 API 契约使用 `id`。
+- 如果用户只是要求“把商品编号改成商品ID/调整文案”，且真实页面中该筛选绑定的是 `queryParam.productCode`，交付文档中的请求字段也必须写 `productCode`；不得改成未确认的 `goodsId`、`productId`。
+- 如果真实页面中列表接口来自 `url.list` 或已有 API 封装，交付文档必须沿用该接口；不得凭空写 `/goods/retail/list`、`/product/retail/list` 等新路径。
+- Mock 数据只补充新增/变化字段的示例；旧列表字段、旧接口和旧分页结构按现有页面能力继承，不要把老功能重新设计成另一套 API。
 
 请直接输出 Markdown 格式的交付文档（不要用代码块包裹），包含:
 1. PRD 摘要（功能清单、优先级、验收标准）
@@ -870,6 +888,40 @@ def _is_frontend_page_path(path: str) -> bool:
     )
 
 
+def _is_additive_filter_request(user_request: str = "") -> bool:
+    text = user_request or ""
+    if not re.search(r"(筛选|查询|搜索|检索|过滤)", text):
+        return False
+    if re.search(r"(改名|重命名|改成|替换|文案|展示名|label|placeholder)", text, re.I):
+        return False
+    return bool(re.search(r"(新增|增加|添加|补充|加一个|加上|加个)", text))
+
+
+def _requested_filter_label(user_request: str = "") -> str:
+    text = re.sub(r"\s+", "", user_request or "")
+    match = re.search(r"(?:新增|增加|添加|补充|加一个|加上|加个)(?:一个|一项|个|项)?(.{1,24}?)(?:的)?(?:筛选项|筛选|查询项|查询|搜索项|搜索|检索项|检索|过滤项|过滤)", text)
+    if not match:
+        return ""
+    label = match.group(1)
+    label = re.sub(r"^(?:现有|已有|当前|原有|页面|列表|表格|商城管理平台|管理平台)+", "", label)
+    label = re.sub(r"(?:字段|条件|控件|输入框|筛选项|查询项)$", "", label)
+    return label[:16]
+
+
+def _query_filter_bindings(content: str) -> List[Tuple[str, str]]:
+    if not isinstance(content, str):
+        return []
+    bindings: List[Tuple[str, str]] = []
+    for match in re.finditer(
+        r"<a-form-item[^>]*label=[\"']([^\"']+)[\"'][\s\S]{0,300}?v-model(?:\.trim)?=[\"']queryParam\.([A-Za-z_$][\w$]*)[\"']",
+        content,
+        re.I,
+    ):
+        label, field = match.groups()
+        bindings.append((label.strip(), field.strip()))
+    return bindings
+
+
 def _validate_existing_feature_paths(
     files: Dict[str, str],
     user_request: str = "",
@@ -1034,6 +1086,33 @@ def _validate_existing_feature_preservation(
                     f"{safe_path} 原页面商品编号/商品ID筛选使用 queryParam.productCode，"
                     "生成代码不能改成未确认的 productId 或丢失既有字段"
                 )
+        if _is_additive_filter_request(user_request):
+            requested_label = _requested_filter_label(user_request)
+            original_bindings = _query_filter_bindings(original)
+            generated_bindings = _query_filter_bindings(generated)
+            generated_labels = {label for label, _field in generated_bindings}
+            original_fields = {field for _label, field in original_bindings}
+            requested_fields = {
+                field
+                for label, field in generated_bindings
+                if requested_label and requested_label in label
+            }
+            for label, field in original_bindings:
+                if field in generated and label not in generated_labels:
+                    issues.append(
+                        f"{safe_path} 现有筛选项“{label}”被改名或覆盖；用户需求是新增筛选项，"
+                        f"必须保留原筛选项和 queryParam.{field}"
+                    )
+            if requested_label and requested_label not in generated:
+                issues.append(f"{safe_path} 用户需求是新增“{requested_label}”筛选项，但生成代码未出现该筛选控件")
+            if requested_label and requested_fields and requested_fields <= original_fields:
+                reused = "、".join(f"queryParam.{field}" for field in sorted(requested_fields))
+                issues.append(
+                    f"{safe_path} 新增“{requested_label}”筛选不能复用原有字段 {reused}；"
+                    "必须使用独立请求字段，不能把旧筛选项改名来冒充新增"
+                )
+            if requested_label and requested_label in generated and not requested_fields:
+                issues.append(f"{safe_path} 新增“{requested_label}”筛选项没有绑定 queryParam 请求字段")
 
         original_endpoints = _collect_api_endpoints(original)
         for endpoint in original_endpoints:
@@ -1318,6 +1397,59 @@ def _auto_fix_frontend_preview_code_files(files: Dict[str, str]) -> Tuple[Dict[s
     return fixed, fixes
 
 
+def _infer_new_filter_field(label: str, existing_fields: Optional[set] = None) -> str:
+    existing_fields = existing_fields or set()
+    normalized = label or ""
+    if re.search(r"ID|id|Id|编号|编码", normalized):
+        candidate = "id" if re.search(r"ID|id|Id", normalized) else "code"
+    elif "名称" in normalized or "名字" in normalized:
+        candidate = "name"
+    elif "状态" in normalized:
+        candidate = "status"
+    elif "类型" in normalized:
+        candidate = "type"
+    else:
+        candidate = "keyword"
+    if candidate not in existing_fields:
+        return candidate
+    index = 2
+    while f"{candidate}{index}" in existing_fields:
+        index += 1
+    return f"{candidate}{index}"
+
+
+def _insert_requested_filter(content: str, label: str) -> str:
+    if not isinstance(content, str) or not label:
+        return content
+    existing_fields = {field for _label, field in _query_filter_bindings(content)}
+    field = _infer_new_filter_field(label, existing_fields)
+    if f"queryParam.{field}" in content:
+        return content
+
+    lines = content.splitlines()
+    for index, line in enumerate(lines):
+        if not re.search(r"<a-form-item[^>]*label=[\"'][^\"']+[\"']", line):
+            continue
+        base_indent = re.match(r"\s*", line).group(0)
+        stripped = line.strip()
+        if stripped.startswith("<a-col") or "<a-col" in stripped:
+            filter_lines = [
+                f"{base_indent}<a-col :md=\"6\" :sm=\"24\">",
+                f"{base_indent}  <a-form-item label=\"{label}\">",
+                f"{base_indent}    <a-input v-model=\"queryParam.{field}\" placeholder=\"请输入{label}\" />",
+                f"{base_indent}  </a-form-item>",
+                f"{base_indent}</a-col>",
+            ]
+        else:
+            filter_lines = [
+                f"{base_indent}<a-form-item label=\"{label}\">",
+                f"{base_indent}  <a-input v-model=\"queryParam.{field}\" placeholder=\"请输入{label}\" />",
+                f"{base_indent}</a-form-item>",
+            ]
+        return "\n".join(lines[:index] + filter_lines + lines[index:])
+    return content
+
+
 def _auto_fix_existing_feature_from_original(
     files: Dict[str, str],
     user_request: str = "",
@@ -1325,8 +1457,6 @@ def _auto_fix_existing_feature_from_original(
     existing_frontend_files: Optional[Dict[str, str]] = None,
 ) -> Tuple[Dict[str, str], List[str]]:
     if not _is_existing_feature_change_request(user_request):
-        return files, []
-    if not re.search(r"商品\s*(?:id|ID|编号)|商品id|商品ID|商品编号", user_request or ""):
         return files, []
 
     existing_paths = [
@@ -1339,6 +1469,25 @@ def _auto_fix_existing_feature_from_original(
         for path, content in (existing_frontend_files or {}).items()
         if isinstance(content, str)
     }
+    requested_label = _requested_filter_label(user_request)
+    if _is_additive_filter_request(user_request) and requested_label:
+        for path in existing_paths:
+            original = existing_files.get(path, "")
+            if not original or not _query_filter_bindings(original):
+                continue
+            patched = _insert_requested_filter(original, requested_label)
+            if patched == original:
+                continue
+            return {path: patched}, [
+                (
+                    f"{path}: 检测到需求是新增“{requested_label}”筛选，已保留原页面已有筛选项，"
+                    "并新增独立 queryParam 筛选字段，同时移除新建 API 文件"
+                )
+            ]
+
+    if not re.search(r"商品\s*(?:id|ID|编号)|商品id|商品ID|商品编号", user_request or ""):
+        return files, []
+
     for path in existing_paths:
         original = existing_files.get(path, "")
         if not original or "productCode" not in original:
@@ -1347,13 +1496,12 @@ def _auto_fix_existing_feature_from_original(
             continue
 
         patched = original
+        fix_detail = "检测到原页面已有商品编号/productCode 等价筛选，已自动回退为基于原页面的最小改动并移除新建 API 文件"
         patched = patched.replace("商品编号", "商品ID")
         patched = patched.replace("请输入商品编号", "请输入商品ID")
         patched = patched.replace("输入商品编号", "输入商品ID")
 
-        return {path: patched}, [
-            f"{path}: 检测到原页面已有商品编号/productCode 等价筛选，已自动回退为基于原页面的最小改动并移除新建 API 文件"
-        ]
+        return {path: patched}, [f"{path}: {fix_detail}"]
 
     return files, []
 
@@ -3651,12 +3799,17 @@ class DevPipelineManager:
                     # ---- 条件分支：自修复决策 ----
 
                     # 分支 0: Code Review 失败 → 自动回退到前端开发阶段修复（优先级最高）
-                    if current_stage == "code_review" and parsed.get("review_passed") is False:
+                    if (
+                        current_stage == "code_review"
+                        and parsed.get("review_passed") is False
+                        and "frontend_dev" in stage_keys
+                    ):
                         if pipe.retry_count < MAX_FIX_ITERATIONS:
                             pipe.retry_count += 1
                             fix_feedback = parsed.get("fix_suggestions", raw_output[:500])
-                            pipe.current_stage = "frontend_dev"
-                            idx = stage_keys.index("frontend_dev")
+                            loop_stage = _fix_loop_stage_for_mode(stage_keys)
+                            pipe.current_stage = loop_stage
+                            idx = stage_keys.index(loop_stage)
                             for sk in stage_keys[idx:]:
                                 if sk not in stages:
                                     continue
@@ -3671,13 +3824,13 @@ class DevPipelineManager:
                             await session.commit()
 
                             logger.info(f"Pipeline {pipeline_id}: Code review failed, "
-                                       f"looping back to frontend_dev (iteration {pipe.retry_count}/{MAX_FIX_ITERATIONS})")
+                                       f"looping back to {loop_stage} (iteration {pipe.retry_count}/{MAX_FIX_ITERATIONS})")
                             await self._save_stage_memory(
                                 pipeline_id, "code_review_fix", agent_type,
                                 f"第{pipe.retry_count}次修复: {fix_feedback[:300]}",
                                 {}, pipe.tenant_id, db_session=session
                             )
-                            continue  # 继续循环，重新执行 frontend_dev
+                            continue  # 继续循环，重新执行修复阶段
                         else:
                             pipe.status = PipelineStatus.FAILED.value
                             pipe.stages_data = json.dumps(stages, ensure_ascii=False)
@@ -3696,8 +3849,9 @@ class DevPipelineManager:
                         if pipe.retry_count < MAX_FIX_ITERATIONS:
                             pipe.retry_count += 1
                             fix_feedback = f"测试发现问题，请修复:\n{parsed.get('bug_details', raw_output[:500])}"
-                            pipe.current_stage = "frontend_dev"
-                            idx = stage_keys.index("frontend_dev")
+                            loop_stage = _fix_loop_stage_for_mode(stage_keys)
+                            pipe.current_stage = loop_stage
+                            idx = stage_keys.index(loop_stage)
                             for sk in stage_keys[idx:]:
                                 if sk not in stages:
                                     continue
@@ -3712,7 +3866,7 @@ class DevPipelineManager:
                             await session.commit()
 
                             logger.info(f"Pipeline {pipeline_id}: Tests failed, "
-                                       f"looping back to frontend_dev (iteration {pipe.retry_count}/{MAX_FIX_ITERATIONS})")
+                                       f"looping back to {loop_stage} (iteration {pipe.retry_count}/{MAX_FIX_ITERATIONS})")
                             continue
                         else:
                             pipe.status = PipelineStatus.FAILED.value
@@ -4035,6 +4189,68 @@ class DevPipelineManager:
             stages = self._parse_stages(pipe)
             target = stage or pipe.current_stage
             stage_data = stages.get(target, {})
+            return {
+                "pipeline_id": pipeline_id,
+                "stage": target,
+                "output": stage_data.get("output", ""),
+                "structured_output": stage_data.get("structured_output", {}),
+                "preview_html": stage_data.get("preview_html", ""),
+                "code_files": stage_data.get("code_files", {}),
+            }
+
+    async def update_stage_output(self, pipeline_id: str, stage: str, output: str) -> Dict[str, Any]:
+        target = str(stage or "").strip()
+        if not target:
+            raise ValueError("阶段不能为空")
+        if output is None:
+            output = ""
+        async with async_session_maker() as session:
+            pipe = await self._load_pipeline(session, pipeline_id)
+            stages = self._parse_stages(pipe)
+            if target not in stages:
+                raise ValueError(f"阶段不存在: {target}")
+
+            stage_data = stages[target]
+            previous_output = stage_data.get("output", "")
+            parsed = stage_data.get("structured_output") or {}
+            if output != previous_output or not parsed:
+                parsed = _parse_agent_output(target, output)
+                if target in ("prototype", "frontend_dev") and parsed.get("code_files"):
+                    fixed_files, _auto_fixes = _auto_fix_frontend_preview_code_files(parsed.get("code_files", {}))
+                    parsed["code_files"] = fixed_files
+                    pipe_config = json.loads(pipe.skill_config or "{}")
+                    existing_paths, existing_frontend_files = await _load_existing_preview_page_files(
+                        pipe_config,
+                        pipe.project_id or "",
+                        parsed,
+                    )
+                    fixed_files, _original_fixes = _auto_fix_existing_feature_from_original(
+                        parsed.get("code_files", {}),
+                        user_request=pipe.user_request or "",
+                        existing_frontend_paths=existing_paths,
+                        existing_frontend_files=existing_frontend_files,
+                    )
+                    parsed["code_files"] = fixed_files
+                    preview_issues = _validate_frontend_preview_code_files(
+                        parsed.get("code_files", {}),
+                        user_request=pipe.user_request or "",
+                        existing_frontend_paths=existing_paths,
+                        existing_frontend_files=existing_frontend_files,
+                    )
+                    if preview_issues:
+                        raise ValueError("保存内容未通过可运行性约束: " + "；".join(preview_issues[:6]))
+
+            stage_data["output"] = output
+            stage_data["structured_output"] = parsed
+            stage_data["preview_html"] = parsed.get("preview_html", stage_data.get("preview_html", ""))
+            stage_data["code_files"] = parsed.get("code_files", stage_data.get("code_files", {}))
+            stage_data["manual_edited"] = True
+            stage_data["manual_edited_at"] = datetime.now().isoformat()
+            stages[target] = stage_data
+
+            pipe.stages_data = json.dumps(stages, ensure_ascii=False)
+            pipe.update_time = int(time.time() * 1000)
+            await session.commit()
             return {
                 "pipeline_id": pipeline_id,
                 "stage": target,

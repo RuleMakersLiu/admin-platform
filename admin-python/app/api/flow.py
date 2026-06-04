@@ -51,6 +51,10 @@ class ConfirmStageRequest(BaseModel):
     feedback: Optional[str] = Field(default="", description="修订反馈")
 
 
+class UpdateStageOutputRequest(BaseModel):
+    output: str = Field(default="", description="编辑后的阶段输出")
+
+
 class UpdateProjectSkillRequest(BaseModel):
     project_brief: Optional[str] = Field(default=None, description="Project brief")
     skill_content: Optional[str] = Field(default=None, description="Project Skill Markdown")
@@ -539,6 +543,18 @@ async def get_stage_output(pipeline_id: str, stage: str = ""):
         return {"code": 200, "message": "查询成功", "data": output}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.put("/pipeline/{pipeline_id}/stages/{stage}/output")
+async def update_stage_output(pipeline_id: str, stage: str, request: UpdateStageOutputRequest):
+    """编辑并保存阶段输出，后续阶段会读取保存后的内容。"""
+    try:
+        output = await pipeline_manager.update_stage_output(pipeline_id, stage, request.output)
+        return {"code": 200, "message": "保存成功", "data": output}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/pipeline/list")

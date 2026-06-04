@@ -5,6 +5,7 @@ import pytest
 from app.ai.flow_manager import (
     _build_pipeline_artifact,
     _build_pipeline_skill_snapshot,
+    _fix_loop_stage_for_mode,
     _init_stages_for_mode,
     _render_prompt_template,
     _validate_project_skill_ready,
@@ -78,6 +79,18 @@ def test_frontend_contract_review_mode_skips_backend_and_deploy_steps():
     ]
 
 
+def test_fix_loop_stage_falls_back_to_prototype_without_frontend_dev():
+    assert _fix_loop_stage_for_mode(["requirement", "prototype", "delivery", "code_review"]) == "prototype"
+    assert _fix_loop_stage_for_mode(["requirement", "frontend_dev", "code_review"]) == "frontend_dev"
+
+
+def test_frontend_contract_review_has_no_frontend_dev_fix_loop():
+    stage_keys = _init_stages_for_mode("frontend_contract_review").keys()
+
+    assert "frontend_dev" not in stage_keys
+    assert "prototype" in stage_keys
+
+
 def test_project_skill_must_be_confirmed_before_pipeline_creation():
     with pytest.raises(ValueError, match="confirmed"):
         _validate_project_skill_ready({"skill_status": "draft", "skill_content": "x"})
@@ -147,6 +160,27 @@ def test_requirement_prompt_names_frontend_and_backend_projects():
     assert "前端项目: web-product-agent" in prompt
     assert "后端项目: wealth-glsw-service" in prompt
     assert "必须分别写明前端参考项目和后端参考项目" in prompt
+
+
+def test_delivery_prompt_inherits_existing_frontend_contract():
+    prompt = _render_prompt_template(
+        DEFAULT_STAGE_PROMPTS["delivery"],
+        {
+            "requirement_output": "给现有零售商品列表增加商品ID筛选项",
+            "page_design_output": "商品ID是新增筛选项，商品编号现有字段为 productCode",
+            "prototype_output": "queryParam.productCode; queryParam.id; url: { list: '/api/product/glsw/product/selfOperatedList' }",
+            "backend_project_name": "wealth-admin-home",
+            "backend_tech": "java/spring-boot",
+            "stage_outputs": {},
+        },
+    )
+
+    assert "{{prototype_output}}" not in prompt
+    assert "queryParam.productCode" in prompt
+    assert "保留所有原筛选项及其请求字段" in prompt
+    assert "新增字段按 API 契约使用 `id`" in prompt
+    assert "不得把旧字段改名来冒充新增" in prompt
+    assert "不得凭空写 `/goods/retail/list`" in prompt
 
 
 def test_requirement_auto_match_prefers_relevant_confirmed_project_skill():
