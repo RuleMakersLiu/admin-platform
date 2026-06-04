@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
-import { Alert, Button, Collapse, Empty, Input, List, Modal, Radio, Space, Steps, Tag, Typography, message } from 'antd'
+import { Alert, Button, Collapse, Empty, Input, List, Modal, Radio, Space, Steps, Table, Tag, Typography, message } from 'antd'
 import {
   CheckCircleOutlined,
   CodeOutlined,
@@ -14,7 +14,7 @@ import {
 import { pipelineApi, type FrontendPageCandidate, type FrontendPageCandidates, type PipelineArtifact, type PipelineListItem, type PipelineStatus, type ProjectSkillMatch } from '@/services/pipeline'
 import { saveLastPortalPath, useAuthStore } from '@/stores/auth'
 
-const { Title, Text, Paragraph } = Typography
+const { Title, Text } = Typography
 const { TextArea } = Input
 
 const stageLabel: Record<string, string> = {
@@ -80,6 +80,110 @@ const candidateConfidenceColor = (confidence = 0) => {
   if (confidence >= 0.75) return 'green'
   if (confidence >= 0.55) return 'gold'
   return 'orange'
+}
+
+const severityColor = (severity = '') => {
+  const value = severity.toLowerCase()
+  if (value === 'critical') return 'red'
+  if (value === 'major') return 'orange'
+  if (value === 'minor') return 'blue'
+  return 'default'
+}
+
+const splitSuggestions = (text = '') => {
+  return text
+    .split(/\n|(?=\d+\.\s*)/)
+    .map((item) => item.replace(/^\d+\.\s*/, '').trim())
+    .filter(Boolean)
+}
+
+const ReviewSummary = ({ artifact }: { artifact: PipelineArtifact | null }) => {
+  if (artifact?.review_status !== 'completed') {
+    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="等待自动审查输出" />
+  }
+
+  const review = artifact.review || {}
+  const passed = review.review_passed !== false
+  const mismatches = Array.isArray(review.field_mismatches) ? review.field_mismatches : []
+  const suggestions = splitSuggestions(String(review.fix_suggestions || ''))
+  const rawOutput = String(review.output || artifact.review_output || '')
+
+  return (
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Alert
+        type={passed ? 'success' : 'error'}
+        showIcon
+        message={passed ? '审查通过，可以继续' : '审查未通过，需要先调整'}
+        description={review.contract_alignment || (passed ? '未发现阻塞问题。' : '存在字段、接口或运行风险，请按下方建议修复。')}
+      />
+
+      <Space wrap>
+        <Tag color={passed ? 'success' : 'error'}>{passed ? 'PASS' : 'FAIL'}</Tag>
+        {review.backend_score && <Tag color="purple">API 契约 {review.backend_score}</Tag>}
+        {review.frontend_score && <Tag color="cyan">前端代码 {review.frontend_score}</Tag>}
+        {mismatches.length > 0 && <Tag color="orange">{mismatches.length} 个需处理问题</Tag>}
+      </Space>
+
+      {mismatches.length > 0 && (
+        <Table
+          size="small"
+          pagination={false}
+          rowKey={(record, index) => `${record.location || 'issue'}-${index}`}
+          dataSource={mismatches}
+          columns={[
+            {
+              title: '级别',
+              dataIndex: 'severity',
+              width: 86,
+              render: (value) => <Tag color={severityColor(String(value || ''))}>{value || 'issue'}</Tag>,
+            },
+            {
+              title: '位置',
+              dataIndex: 'location',
+              width: 150,
+              render: (value) => value || '-',
+            },
+            {
+              title: '问题',
+              render: (_, record) => (
+                <Space direction="vertical" size={2}>
+                  {record.frontend_field && <Text>当前：<Text code>{record.frontend_field}</Text></Text>}
+                  {record.contract_field && record.contract_field !== '-' && <Text>应为：<Text code>{record.contract_field}</Text></Text>}
+                  {record.fix && <Text type="secondary">{record.fix}</Text>}
+                </Space>
+              ),
+            },
+          ]}
+        />
+      )}
+
+      {suggestions.length > 0 && (
+        <div style={{ border: '1px solid #e5eaf3', borderRadius: 8, padding: 12, background: '#fbfdff' }}>
+          <Text strong style={{ display: 'block', marginBottom: 8 }}>建议动作</Text>
+          <Space direction="vertical" size={6}>
+            {suggestions.map((item, index) => (
+              <Text key={`${item}-${index}`}>{index + 1}. {item}</Text>
+            ))}
+          </Space>
+        </div>
+      )}
+
+      {rawOutput && (
+        <Collapse
+          size="small"
+          items={[{
+            key: 'raw-review',
+            label: '查看原始审查内容',
+            children: (
+              <pre style={{ maxHeight: 360, overflow: 'auto', whiteSpace: 'pre-wrap', margin: 0, fontSize: 12 }}>
+                {rawOutput}
+              </pre>
+            ),
+          }]}
+        />
+      )}
+    </Space>
+  )
 }
 
 export default function ProductPortal() {
@@ -985,18 +1089,7 @@ export default function ProductPortal() {
                 <CheckCircleOutlined />
                 <Title level={4} style={{ margin: 0 }}>自动审查</Title>
               </Space>
-              <Paragraph>
-                <Tag color={artifact?.review_status === 'completed' ? (artifact?.review?.review_passed === false ? 'error' : 'success') : 'default'}>
-                  {artifact?.review_status === 'completed'
-                    ? (artifact?.review?.review_passed === false ? 'FAIL' : 'PASS/REVIEWED')
-                    : '等待审查'}
-                </Tag>
-              </Paragraph>
-              <pre style={{ minHeight: 180, maxHeight: 420, overflow: 'auto', whiteSpace: 'pre-wrap', margin: 0 }}>
-                {artifact?.review_status === 'completed'
-                  ? JSON.stringify(artifact.review || { output: artifact.review_output || '' }, null, 2)
-                  : '等待 code_review 阶段输出'}
-              </pre>
+              <ReviewSummary artifact={artifact} />
             </div>
           </div>
         </div>
