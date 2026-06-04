@@ -97,7 +97,15 @@ const splitSuggestions = (text = '') => {
     .filter(Boolean)
 }
 
-const ReviewSummary = ({ artifact }: { artifact: PipelineArtifact | null }) => {
+const ReviewSummary = ({
+  artifact,
+  regenerating,
+  onRegenerate,
+}: {
+  artifact: PipelineArtifact | null
+  regenerating?: boolean
+  onRegenerate?: () => void
+}) => {
   if (artifact?.review_status !== 'completed') {
     return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="等待自动审查输出" />
   }
@@ -123,6 +131,12 @@ const ReviewSummary = ({ artifact }: { artifact: PipelineArtifact | null }) => {
         {review.frontend_score && <Tag color="cyan">前端代码 {review.frontend_score}</Tag>}
         {mismatches.length > 0 && <Tag color="orange">{mismatches.length} 个需处理问题</Tag>}
       </Space>
+
+      {!passed && onRegenerate && (
+        <Button type="primary" danger icon={<ReloadOutlined />} loading={regenerating} onClick={onRegenerate}>
+          按审查意见重新生成前端预览
+        </Button>
+      )}
 
       {mismatches.length > 0 && (
         <Table
@@ -452,6 +466,65 @@ export default function ProductPortal() {
       return
     }
     await resumePipeline(false)
+  }
+
+  const regenerateFromReview = async () => {
+    if (!pipelineId) return
+    const review = artifact?.review || {}
+    const mismatches = Array.isArray(review.field_mismatches) ? review.field_mismatches : []
+    const feedbackText = [
+      '自动审查未通过，请按以下问题重新生成前端预览代码，生成后需要再次通过可运行性和契约审查。',
+      review.contract_alignment ? `审查结论：${review.contract_alignment}` : '',
+      mismatches.length
+        ? `需修复问题：${mismatches.map((item: any) => [
+          item.location,
+          item.frontend_field ? `当前 ${item.frontend_field}` : '',
+          item.contract_field && item.contract_field !== '-' ? `应为 ${item.contract_field}` : '',
+          item.fix,
+        ].filter(Boolean).join('，')).join('；')}`
+        : '',
+      review.fix_suggestions ? `修复建议：${review.fix_suggestions}` : '',
+      '必须保留现有页面、现有查询条件、现有表格列和现有接口；只做本次需求要求的增量改造。',
+    ].filter(Boolean).join('\n')
+
+    setRunning(true)
+    try {
+      await pipelineApi.rollback(pipelineId, 'prototype', feedbackText)
+      appendLog('按自动审查意见回到前端预览代码并重新生成')
+      setAwaitingConfirmStage('')
+      setCurrentStage('prototype')
+      setFeedback('')
+      setSandboxPreviewUrl('')
+      setStreamOutputByStage((prev) => ({
+        ...prev,
+        prototype: '',
+        delivery: '',
+        code_review: '',
+        report: '',
+      }))
+      setArtifact((prev) => prev ? {
+        ...prev,
+        frontend_files: {},
+        preview_html: '',
+        preview_url: '',
+        review: {},
+        review_output: '',
+        review_status: 'pending',
+      } : prev)
+
+      const finalStatus = await runUntilPause(pipelineId, feedbackText)
+      if (finalStatus?.status === 'failed') {
+        message.error('重新生成失败，请查看阶段输出')
+      } else if (finalStatus?.status === 'waiting_confirm') {
+        message.success('已重新生成，等待确认')
+      } else if (finalStatus?.status === 'completed') {
+        message.success('流水线执行完成')
+      }
+      loadPipelines()
+    } catch (error: unknown) {
+      message.error(error instanceof Error ? error.message : '按审查意见重新生成失败')
+      setRunning(false)
+    }
   }
 
   const selectExistingPageAndRegenerate = async () => {
@@ -1089,7 +1162,7 @@ export default function ProductPortal() {
                 <CheckCircleOutlined />
                 <Title level={4} style={{ margin: 0 }}>自动审查</Title>
               </Space>
-              <ReviewSummary artifact={artifact} />
+              <ReviewSummary artifact={artifact} regenerating={running} onRegenerate={regenerateFromReview} />
             </div>
           </div>
         </div>
