@@ -6,6 +6,7 @@ from app.ai.flow_manager import (
     _build_pipeline_artifact,
     _build_pipeline_skill_snapshot,
     _fix_loop_stage_for_mode,
+    _has_code_review_fix_loop,
     _init_stages_for_mode,
     _render_prompt_template,
     _validate_project_skill_ready,
@@ -89,6 +90,7 @@ def test_frontend_contract_review_has_no_frontend_dev_fix_loop():
 
     assert "frontend_dev" not in stage_keys
     assert "prototype" in stage_keys
+    assert _has_code_review_fix_loop(list(stage_keys))
 
 
 def test_project_skill_must_be_confirmed_before_pipeline_creation():

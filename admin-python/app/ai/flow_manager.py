@@ -106,6 +106,10 @@ def _fix_loop_stage_for_mode(stage_keys: List[str]) -> str:
     return stage_keys[0] if stage_keys else ""
 
 
+def _has_code_review_fix_loop(stage_keys: List[str]) -> bool:
+    return bool(_fix_loop_stage_for_mode(stage_keys))
+
+
 def _is_product_preview_code_stage(stage_key: str, pipe_config: Dict[str, Any]) -> bool:
     return stage_key == "prototype" and pipe_config.get("pipeline_mode") == "frontend_contract_review"
 
@@ -3802,12 +3806,42 @@ class DevPipelineManager:
                     if (
                         current_stage == "code_review"
                         and parsed.get("review_passed") is False
-                        and "frontend_dev" in stage_keys
+                        and _has_code_review_fix_loop(stage_keys)
                     ):
                         if pipe.retry_count < MAX_FIX_ITERATIONS:
                             pipe.retry_count += 1
-                            fix_feedback = parsed.get("fix_suggestions", raw_output[:500])
                             loop_stage = _fix_loop_stage_for_mode(stage_keys)
+                            mismatch_feedback = ""
+                            field_mismatches = parsed.get("field_mismatches")
+                            if isinstance(field_mismatches, list) and field_mismatches:
+                                mismatch_feedback = "\n".join(
+                                    "- "
+                                    + "，".join(
+                                        str(part)
+                                        for part in (
+                                            item.get("severity"),
+                                            item.get("location"),
+                                            f"当前: {item.get('frontend_field')}" if item.get("frontend_field") else "",
+                                            f"应为: {item.get('contract_field')}" if item.get("contract_field") else "",
+                                            item.get("fix"),
+                                        )
+                                        if part
+                                    )
+                                    for item in field_mismatches
+                                    if isinstance(item, dict)
+                                )
+                            fix_feedback = "\n".join(
+                                part.strip()
+                                for part in (
+                                    "自动审查未通过，请只修复审查指出的问题，生成完整可运行代码。",
+                                    parsed.get("contract_alignment", ""),
+                                    mismatch_feedback,
+                                    parsed.get("fix_suggestions", ""),
+                                    "必须保留现有页面、现有接口、现有查询条件和现有表格列；只做本次需求的增量改造。",
+                                    raw_output[:500] if not parsed.get("fix_suggestions") else "",
+                                )
+                                if part and str(part).strip()
+                            )
                             pipe.current_stage = loop_stage
                             idx = stage_keys.index(loop_stage)
                             for sk in stage_keys[idx:]:
@@ -3816,8 +3850,11 @@ class DevPipelineManager:
                                 stages[sk]["status"] = "pending"
                                 stages[sk]["output"] = ""
                                 stages[sk]["error"] = ""
+                                stages[sk]["structured_output"] = {}
                                 stages[sk]["code_files"] = {}
                                 stages[sk]["preview_html"] = ""
+                                stages[sk]["completed_at"] = None
+                                stages[sk]["revision_feedback"] = fix_feedback if sk == loop_stage else ""
                             pipe.status = PipelineStatus.RUNNING.value
                             pipe.stages_data = json.dumps(stages, ensure_ascii=False)
                             pipe.update_time = int(time.time() * 1000)
