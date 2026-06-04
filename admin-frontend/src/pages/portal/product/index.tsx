@@ -520,6 +520,20 @@ export default function ProductPortal() {
         setFeedback('')
         setAwaitingConfirmStage('')
       }
+      if (status?.status === 'waiting_confirm') {
+        const confirmStage = status.current_stage || awaitingConfirmStage || currentStage
+        const confirmResult = await pipelineApi.confirm(
+          pipelineId,
+          true,
+          note || '人工确认通过，继续执行。',
+        )
+        if (confirmResult?.error) {
+          throw new Error(confirmResult.error)
+        }
+        appendLog(`确认通过：${stageLabel[confirmStage] || confirmStage}`)
+        setFeedback('')
+        setAwaitingConfirmStage('')
+      }
       const finalStatus = await runUntilPause(pipelineId, note)
       loadPipelines()
       if (finalStatus?.status === 'failed') {
@@ -735,10 +749,10 @@ export default function ProductPortal() {
                       key="run"
                       size="small"
                       type="link"
-                      disabled={running || !pipelineId || pipelineId !== item.pipeline_id || ['completed', 'cancelled', 'waiting_confirm'].includes(item.status)}
+                      disabled={running || !pipelineId || pipelineId !== item.pipeline_id || ['completed', 'cancelled'].includes(item.status)}
                       onClick={continueSelectedPipeline}
                     >
-                      {item.status === 'failed' ? '重新生成' : '继续'}
+                      {item.status === 'failed' ? '重新生成' : item.status === 'waiting_confirm' ? '确认继续' : '继续'}
                     </Button>,
                     <Button
                       key="delete"
@@ -865,9 +879,14 @@ export default function ProductPortal() {
                         选定此页面功能并重新生成
                       </Button>
                     ) : (
-                      <Button danger icon={<ReloadOutlined />} loading={running} onClick={submitFeedbackAndRegenerate}>
-                        提交反馈并重新生成
-                      </Button>
+                      <Space wrap>
+                        <Button type="primary" loading={running} onClick={() => resumePipeline(true)}>
+                          确认并继续
+                        </Button>
+                        <Button danger icon={<ReloadOutlined />} loading={running} onClick={submitFeedbackAndRegenerate}>
+                          提交反馈并重新生成
+                        </Button>
+                      </Space>
                     )}
                   </Space>
                 }
