@@ -1981,19 +1981,30 @@ const PipelinePage: React.FC = () => {
                     )}
                   </Space>
                   {sandboxPreviewUrl && (
-                    <iframe
-                      src={sandboxPreviewUrl}
+                    <div
                       style={{
                         width: '100%',
-                        minHeight: 520,
+                        overflow: 'auto',
                         marginTop: 12,
                         border: '1px solid rgba(148, 163, 184, 0.28)',
                         borderRadius: 8,
-                        background: '#fff',
+                        background: '#f8fafd',
                       }}
-                      sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
-                      title="真实前端预览"
-                    />
+                    >
+                      <iframe
+                        src={sandboxPreviewUrl}
+                        style={{
+                          display: 'block',
+                          width: '1280px',
+                          maxWidth: 'none',
+                          height: 720,
+                          border: 0,
+                          background: '#fff',
+                        }}
+                        sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+                        title="真实前端预览"
+                      />
+                    </div>
                   )}
                 </div>
               )}

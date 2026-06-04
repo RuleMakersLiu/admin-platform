@@ -922,12 +922,29 @@ export default function ProductPortal() {
               这里会把生成代码覆盖到匹配前端项目的沙箱副本中，并按项目脚本启动。
             </Text>
             {sandboxPreviewUrl ? (
-              <iframe
-                title="real-frontend-preview"
-                src={sandboxPreviewUrl}
-                sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
-                style={{ width: '100%', height: 520, border: '1px solid #e5eaf3', borderRadius: 6, background: '#fff' }}
-              />
+              <div
+                style={{
+                  width: '100%',
+                  overflow: 'auto',
+                  border: '1px solid #e5eaf3',
+                  borderRadius: 8,
+                  background: '#f8fafd',
+                }}
+              >
+                <iframe
+                  title="real-frontend-preview"
+                  src={sandboxPreviewUrl}
+                  sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+                  style={{
+                    display: 'block',
+                    width: '1280px',
+                    maxWidth: 'none',
+                    height: 720,
+                    border: 0,
+                    background: '#fff',
+                  }}
+                />
+              </div>
             ) : (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="等待前端预览代码生成后启动真实预览" />
             )}
