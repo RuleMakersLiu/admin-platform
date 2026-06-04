@@ -1,6 +1,7 @@
 """数据库配置"""
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy import text
 
 from app.core.config import settings
 
@@ -44,3 +45,11 @@ async def init_db():
     """初始化数据库"""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+
+async def ensure_runtime_schema():
+    """Ensure columns added during active development exist in local/runtime DB."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("ALTER TABLE agent_project ADD COLUMN IF NOT EXISTS pipeline_prompts TEXT")
+        )

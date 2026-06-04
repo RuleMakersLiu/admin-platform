@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import api_router
 from app.core.config import settings
-from app.core.database import init_db
+from app.core.database import ensure_runtime_schema, init_db
 
 # 配置日志
 logging.basicConfig(
@@ -60,7 +60,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"⚠️ 消息模块初始化失败: {e}")
 
-    # await init_db()  # 生产环境建议使用Alembic迁移
+    await ensure_runtime_schema()
 
     # 启动每日 AI 升级定时任务
     upgrade_task = asyncio.create_task(_daily_ai_upgrade_task())
