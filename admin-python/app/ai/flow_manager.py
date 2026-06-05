@@ -394,7 +394,8 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 2. 根据匹配项目的真实技术栈生成文件：Vue 后台通常生成 `src/views/**/*.vue` + `src/api/*.js`；React 后台通常生成 `src/pages/**/*.tsx|jsx` + service/api 文件；uni-app/小程序项目按项目现有 `pages/**`、`*.vue` 或 `*.wxml/*.js/*.json/*.wxss` 结构生成。不要把所有项目都当 Vue 后台。
    - 文件路径必须像目标项目里的真实业务模块路径，优先沿用 Project Skill 或代码参考里的目录命名。
    - 如果用户需求表达的是“现有/已有/当前/原有页面或功能上增加、修改、优化、补充筛选/字段/按钮/查询”，必须修改「与本需求相关的已确认前端页面路径」中的现有页面；禁止凭语义新建 `src/views/**/List.vue` 或 `src/pages/**/List.vue` 来冒充改造，禁止选择活动管理、营销活动等无关业务页面。
-   - 现有功能改造必须做最小增量：旧表格列、旧列表数据、旧查询接口、旧 mixin、旧组件、旧操作列都是既有能力，不要重写整页架构，不要重新生成整页 mock 数据或新建一套列表 API。比如“给现有零售商品列表增加商品ID筛选项”，只需要在现有页面新增查询控件、queryParam 和请求参数传递；除非需求明确要求新增接口/新增数据源，否则不要输出 `mockProductList`、`Mock.mock` 或完整假数据。
+   - 现有功能改造必须做最小增量：旧表格列、旧列表数据、旧查询接口、旧 mixin、旧组件、旧操作列都是既有能力，不要重写整页架构，不要重新生成整页 mock 数据或新建一套列表 API。比如“给现有零售商品列表增加商品ID筛选项”，只需要在现有页面新增查询控件、queryParam 和请求参数传递；已存在页面改造一律复用原 API/原数据流，不输出 `mockProductList`、`Mock.mock`、`mockRequestWrapper`、`Promise.resolve` 假接口或完整假数据。
+   - Mock 边界必须先判断页面来源：已存在页面不要 mock，只改现有页面和现有 API 调用参数；全新页面为了真实前端预览可用，需要在独立 API/service 模块提供与 API 契约一致的 mock 数据，但不能与真实请求函数同名重复导出。
    - 如果用户说“新增/增加/添加某个筛选项”，这是新增筛选项，不是把已有筛选项改名。必须保留原页面已有筛选控件及其 `queryParam` 字段，再为新增筛选项绑定 API 契约确认的独立请求字段。例如新增“商品ID”时，保留原“商品编号”及 `queryParam.productCode`，再新增“商品ID”及 `queryParam.id`。只有用户明确说“改名/调整文案/重命名”时，才允许修改旧 label/placeholder。
    - 修改现有 Vue 列表页时必须保留原页面的 `ListMixin`/`mixins`、`<s-table :data="loadData">`、`url.list` 接口、已有 columns/slots/操作按钮和已有导入；除非用户明确要求删除，否则不要用本地 `data()`、新 API 文件或新接口替代原列表加载方式。
    - 如果找不到与现有功能对应的已确认页面路径，本阶段不要编造新页面，应输出空 JSON 数组让系统失败并在修复反馈中暴露“缺少真实页面路径”。
@@ -402,11 +403,11 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
    - 禁止生成新的 `package.json`、`vite.config.*`、`main.*`、`App.*`、`index.html` 来伪造一个独立应用。
 3. 第一屏必须匹配需求页面类型：列表页要有搜索筛选、表格和批量/行操作；详情页要有分区详情、状态标签、返回/编辑/启停等操作；表单页要有校验、提交、取消和异常提示；配置/看板页要有对应业务控件和状态。
 4. 所有按钮必须有真实前端交互，不允许出现未定义函数、空 onclick、只展示不响应的控件。
-5. 可以使用 mock API 数据，但文件结构要能在真实项目中运行预览；小程序项目必须同时给出浏览器 HTML/H5 等效预览文件。
+5. Mock 只允许用于全新页面的预览数据；已存在页面改造禁止 mock，必须复用现有 API 封装和页面数据流。小程序项目必须同时给出浏览器 HTML/H5 等效预览文件。
 6. 代码要短而完整：页面组件控制在 260 行以内，API/mock 服务模块控制在 120 行以内。
 7. 只生成与本需求相关的新增/修改文件，不要输出说明文字。
 8. 代码必须体现页面设计中的权限、状态和边界；不要只做 happy path。
-9. API/service 文件中的 mock 数据必须与页面字段、交付 API 契约候选字段完全一致。
+9. 新页面 API/service 文件中的 mock 数据必须与页面字段、交付 API 契约候选字段完全一致；已存在页面不生成 mock 数据。
 10. 不允许用“占位按钮”“待实现方法”“console.log 替代业务逻辑”来冒充完成。
 
 ## 可预览硬约束
@@ -1031,6 +1032,13 @@ def _is_existing_feature_change_request(user_request: str) -> bool:
     return any(marker in text for marker in change_markers) and any(marker in text for marker in ("筛选", "查询", "搜索", "字段"))
 
 
+def _is_new_feature_page_request(user_request: str) -> bool:
+    text = (user_request or "").strip()
+    if not text or _is_existing_feature_change_request(text):
+        return False
+    return bool(re.search(r"(?:新增|新建|创建|搭建|生成|做一个|开发一个).*(?:页面|列表|详情|表单|管理|功能)", text))
+
+
 def _is_frontend_page_path(path: str) -> bool:
     return (
         path.startswith(("src/views/", "src/pages/", "pages/"))
@@ -1113,24 +1121,51 @@ def _validate_existing_feature_paths(
 def _validate_existing_feature_mock_scope(files: Dict[str, str], user_request: str = "") -> List[str]:
     if not _is_existing_feature_change_request(user_request):
         return []
-    if re.search(r"(mock|假数据|模拟数据|预览数据|新接口|新增接口|新增数据源)", user_request or "", re.I):
-        return []
 
     issues = []
     for path, content in files.items():
         safe_path = str(path).replace("\\", "/").lstrip("/")
         if not safe_path.startswith("src/api/") or not isinstance(content, str):
             continue
-        if re.search(r"\bmock[A-Za-z0-9_]*List\b|\bMock\.mock\b|const\s+mock[A-Za-z0-9_]*\s*=", content):
+        if re.search(
+            r"\bmock[A-Za-z0-9_]*List\b|\bMock\.mock\b|\bmockRequest(?:Wrapper)?\b|const\s+mock[A-Za-z0-9_]*\s*=",
+            content,
+        ):
             issues.append(
                 f"{safe_path} 为现有功能改造生成了 mock 列表数据；旧列表数据和旧接口应复用现有能力，"
-                "除非需求明确要求新增接口或 mock 数据"
+                "已存在页面不要生成 mock"
             )
-        if re.search(r"return\s+new\s+Promise\s*\(", content) and re.search(r"\b(list|data)\s*:", content):
+        if re.search(r"return\s+(?:new\s+Promise\s*\(|Promise\.resolve\s*\()", content) and re.search(r"\b(list|data)\s*:", content):
             issues.append(
                 f"{safe_path} 为现有功能改造生成了模拟接口 Promise；应只在必要时补充现有请求参数，不要重造旧列表数据"
             )
     return issues
+
+
+def _validate_new_feature_mock_scope(files: Dict[str, str], user_request: str = "") -> List[str]:
+    if not _is_new_feature_page_request(user_request):
+        return []
+    normalized_paths = [str(path).replace("\\", "/").lstrip("/") for path in files]
+    has_page = any(
+        path.startswith(("src/views/", "src/pages/"))
+        and path.endswith((".vue", ".tsx", ".jsx"))
+        for path in normalized_paths
+    )
+    api_contents = [
+        content
+        for path, content in files.items()
+        if str(path).replace("\\", "/").lstrip("/").startswith("src/api/") and isinstance(content, str)
+    ]
+    if not has_page or not api_contents:
+        return []
+    combined_api = "\n".join(api_contents)
+    has_mock = re.search(
+        r"\bMock\.mock\b|\bmock[A-Za-z0-9_]*\b|Promise\.resolve\s*\(|return\s+new\s+Promise\s*\(",
+        combined_api,
+    )
+    if has_mock:
+        return []
+    return ["全新页面需要提供与 API 契约一致的 mock 数据，确保真实前端预览首屏可用"]
 
 
 def _collect_api_endpoints(content: str) -> List[str]:
@@ -1304,6 +1339,7 @@ def _validate_frontend_preview_code_files(
 
     issues.extend(_validate_existing_feature_paths(files, user_request, existing_frontend_paths))
     issues.extend(_validate_existing_feature_mock_scope(files, user_request))
+    issues.extend(_validate_new_feature_mock_scope(files, user_request))
     issues.extend(
         _validate_existing_feature_preservation(
             files,
@@ -1419,6 +1455,11 @@ def _validate_frontend_preview_code_files(
             if "script" not in lowered:
                 issues.append(f"{safe_path} 必须包含可交互的预览脚本")
         if safe_path.startswith("src/api/"):
+            duplicate_exports = _duplicate_exported_function_names(content)
+            if duplicate_exports:
+                issues.append(
+                    f"{safe_path} 存在重复导出函数 {', '.join(duplicate_exports)}，会导致 Babel 编译失败"
+                )
             if "Mock.mock" in content and "/list" in content:
                 if not re.search(r"\blist\s*:", content):
                     issues.append(f"{safe_path} 的列表 mock 缺少 list 数组字段")
@@ -1550,6 +1591,74 @@ def _patch_stable_table_contract_content(content: str) -> str:
     return patched
 
 
+def _exported_function_names(content: str) -> List[str]:
+    return re.findall(r"(?m)^\s*export\s+function\s+([A-Za-z_$][\w$]*)\s*\(", content or "")
+
+
+def _duplicate_exported_function_names(content: str) -> List[str]:
+    seen = set()
+    duplicates: List[str] = []
+    for name in _exported_function_names(content):
+        if name in seen and name not in duplicates:
+            duplicates.append(name)
+        seen.add(name)
+    return duplicates
+
+
+def _export_function_block_end(lines: List[str], start: int) -> int:
+    balance = 0
+    saw_open = False
+    for index in range(start, len(lines)):
+        line = lines[index]
+        balance += line.count("{")
+        balance -= line.count("}")
+        if "{" in line:
+            saw_open = True
+        if saw_open and balance <= 0:
+            return index + 1
+    return start + 1
+
+
+def _patch_duplicate_exported_functions(content: str) -> Tuple[str, List[str]]:
+    if not content:
+        return content, []
+
+    lines = content.splitlines()
+    declarations: List[Tuple[int, str]] = []
+    for index, line in enumerate(lines):
+        match = re.match(r"\s*export\s+function\s+([A-Za-z_$][\w$]*)\s*\(", line)
+        if match:
+            declarations.append((index, match.group(1)))
+
+    last_index_by_name = {name: index for index, name in declarations}
+    duplicate_names = _duplicate_exported_function_names(content)
+    if not duplicate_names:
+        return content, []
+
+    remove_ranges: List[Tuple[int, int]] = []
+    duplicate_set = set(duplicate_names)
+    for index, name in declarations:
+        if name in duplicate_set and index != last_index_by_name[name]:
+            remove_ranges.append((index, _export_function_block_end(lines, index)))
+
+    if not remove_ranges:
+        return content, duplicate_names
+
+    patched_lines: List[str] = []
+    remove_index = 0
+    for index, line in enumerate(lines):
+        while remove_index < len(remove_ranges) and index >= remove_ranges[remove_index][1]:
+            remove_index += 1
+        if remove_index < len(remove_ranges):
+            start, end = remove_ranges[remove_index]
+            if start <= index < end:
+                continue
+        patched_lines.append(line)
+
+    trailing_newline = "\n" if content.endswith("\n") else ""
+    return "\n".join(patched_lines) + trailing_newline, duplicate_names
+
+
 def _auto_fix_frontend_preview_code_files(files: Dict[str, str]) -> Tuple[Dict[str, str], List[str]]:
     fixed: Dict[str, str] = {}
     fixes: List[str] = []
@@ -1560,9 +1669,15 @@ def _auto_fix_frontend_preview_code_files(files: Dict[str, str]) -> Tuple[Dict[s
         safe_path = str(path).replace("\\", "/").lstrip("/")
         patched = content
         if safe_path.startswith(("src/views/", "src/pages/")) and safe_path.endswith(".vue"):
-            patched = _patch_stable_table_contract_content(patched)
-        if patched != content:
-            fixes.append(f"{safe_path}: 自动补齐 STable 分页返回字段 page/count/list")
+            stable_patched = _patch_stable_table_contract_content(patched)
+            if stable_patched != patched:
+                fixes.append(f"{safe_path}: 自动补齐 STable 分页返回字段 page/count/list")
+            patched = stable_patched
+        if safe_path.startswith("src/api/") and safe_path.endswith((".js", ".ts")):
+            api_patched, duplicate_exports = _patch_duplicate_exported_functions(patched)
+            if api_patched != patched:
+                fixes.append(f"{safe_path}: 自动移除重复导出的 API 函数，保留最后一次实现：{', '.join(duplicate_exports)}")
+            patched = api_patched
         fixed[path] = patched
     return fixed, fixes
 

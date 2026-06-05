@@ -218,6 +218,60 @@ export function getProductRetailList () {
     assert _validate_frontend_preview_code_files(fixed) == []
 
 
+def test_preview_validator_rejects_duplicate_api_exports():
+    files = {
+        "src/views/activityManage/ActivityManageList.vue": """
+<template><div /></template>
+<script>
+export default {}
+</script>
+""",
+        "src/api/activityManage.js": """
+export function getActivityList (params) {
+  return request({ url: '/activity/list', method: 'get', params })
+}
+
+export function getActivityList (params) {
+  return mockRequestWrapper({ url: '/activity/list', method: 'get', params })
+}
+""",
+    }
+
+    issues = _validate_frontend_preview_code_files(files)
+
+    assert any("重复导出函数 getActivityList" in issue for issue in issues)
+
+
+def test_preview_auto_fix_removes_duplicate_api_exports_and_keeps_last_impl():
+    files = {
+        "src/api/activityManage.js": """
+import request from '@/utils/request'
+
+export function getActivityList (params) {
+  return request({ url: '/activity/list', method: 'get', params })
+}
+
+export function getActivityDetail (params) {
+  return request({ url: '/activity/detail', method: 'get', params })
+}
+
+export function getActivityList (params) {
+  return mockRequestWrapper({ url: '/activity/list', method: 'get', params })
+}
+""",
+    }
+
+    fixed, fixes = _auto_fix_frontend_preview_code_files(files)
+    content = fixed["src/api/activityManage.js"]
+
+    assert any("重复导出的 API 函数" in fix and "getActivityList" in fix for fix in fixes)
+    assert content.count("export function getActivityList") == 1
+    assert "mockRequestWrapper" in content
+    assert "return request({ url: '/activity/list'" not in content
+    assert "export function getActivityDetail" in content
+    assert not any("重复导出函数" in issue for issue in _validate_frontend_preview_code_files(fixed))
+
+
 def test_preview_validator_accepts_stable_with_consistent_list_contract():
     files = {
         "src/views/Product/RetailList.vue": """
@@ -338,11 +392,20 @@ def test_preview_validator_rejects_new_page_for_existing_feature_change():
         "src/views/product/retail/List.vue": """
 <template><s-table :data="loadData" /></template>
 <script>
+import { list } from '@/api/product'
 export default {
   data () {
     return {
-      loadData: () => Promise.resolve({
-        page: 1, pageNo: 1, pageSize: 10, count: 0, totalCount: 0, list: []
+      loadData: parameter => list({ ...parameter, id: this.queryParam.id }).then(res => {
+        const result = res.result || res.data || res || {}
+        return {
+          page: result.page || result.pageNo || 1,
+          pageNo: result.pageNo || result.page || 1,
+          pageSize: result.pageSize || 10,
+          count: result.count || result.totalCount || 0,
+          totalCount: result.totalCount || result.count || 0,
+          list: Array.isArray(result.list) ? result.list : []
+        }
       })
     }
   }
@@ -350,8 +413,9 @@ export default {
 </script>
 """,
         "src/api/product.js": """
-export function list () {
-  return Promise.resolve({ result: { page: 1, pageNo: 1, pageSize: 10, count: 0, totalCount: 0, list: [] } })
+import request from '@/utils/request'
+export function list (parameter) {
+  return request({ url: '/product/retail/list', method: 'get', params: parameter })
 }
 """,
     }
@@ -967,11 +1031,20 @@ def test_preview_validator_allows_existing_page_for_existing_feature_change():
         "src/views/mall/goods/RetailGoodsList.vue": """
 <template><s-table :data="loadData" /></template>
 <script>
+import { list } from '@/api/product'
 export default {
   data () {
     return {
-      loadData: () => Promise.resolve({
-        page: 1, pageNo: 1, pageSize: 10, count: 0, totalCount: 0, list: []
+      loadData: parameter => list({ ...parameter, id: this.queryParam.id }).then(res => {
+        const result = res.result || res.data || res || {}
+        return {
+          page: result.page || result.pageNo || 1,
+          pageNo: result.pageNo || result.page || 1,
+          pageSize: result.pageSize || 10,
+          count: result.count || result.totalCount || 0,
+          totalCount: result.totalCount || result.count || 0,
+          list: Array.isArray(result.list) ? result.list : []
+        }
       })
     }
   }
@@ -979,8 +1052,9 @@ export default {
 </script>
 """,
         "src/api/product.js": """
-export function list () {
-  return Promise.resolve({ result: { page: 1, pageNo: 1, pageSize: 10, count: 0, totalCount: 0, list: [] } })
+import request from '@/utils/request'
+export function list (parameter) {
+  return request({ url: '/product/retail/list', method: 'get', params: parameter })
 }
 """,
     }
@@ -1062,6 +1136,96 @@ export function list (parameter) {
         user_request="我想给商城管理平台现有的零售商品列表增加一个商品ID的筛选项",
         existing_frontend_paths=["src/views/product/RetailGoodsList.vue"],
     ) == []
+
+
+def test_preview_validator_rejects_existing_page_mock_wrapper_even_when_user_mentions_mock():
+    files = {
+        "src/views/product/RetailGoodsList.vue": """
+<template><s-table :data="loadData" /></template>
+<script>
+export default {
+  data () {
+    return {
+      loadData: parameter => list(parameter).then(res => res.result)
+    }
+  }
+}
+</script>
+""",
+        "src/api/product.js": """
+export function list (parameter) {
+  return mockRequestWrapper({
+    url: '/product/retail/list',
+    method: 'get',
+    params: parameter,
+    data: { result: { page: 1, pageNo: 1, pageSize: 10, count: 0, totalCount: 0, list: [] } }
+  })
+}
+""",
+    }
+
+    issues = _validate_frontend_preview_code_files(
+        files,
+        user_request="给现有零售商品列表增加商品ID筛选，预览可以 mock",
+        existing_frontend_paths=["src/views/product/RetailGoodsList.vue"],
+    )
+
+    assert any("已存在页面不要生成 mock" in issue for issue in issues)
+
+
+def test_preview_validator_requires_mock_for_new_page_preview_api():
+    files = {
+        "src/views/activityManage/ActivityManageList.vue": """
+<template><s-table :data="loadData" /></template>
+<script>
+export default {
+  data () {
+    return {
+      loadData: parameter => getActivityList(parameter).then(res => res.result)
+    }
+  }
+}
+</script>
+""",
+        "src/api/activityManage.js": """
+import request from '@/utils/request'
+export function getActivityList (parameter) {
+  return request({ url: '/activity/list', method: 'get', params: parameter })
+}
+""",
+    }
+
+    issues = _validate_frontend_preview_code_files(files, user_request="新增活动管理列表页面")
+
+    assert any("全新页面需要提供与 API 契约一致的 mock 数据" in issue for issue in issues)
+
+
+def test_preview_validator_allows_mock_for_new_page_preview_api():
+    files = {
+        "src/views/activityManage/ActivityManageList.vue": """
+<template><s-table :data="loadData" /></template>
+<script>
+export default {
+  data () {
+    return {
+      loadData: parameter => getActivityList(parameter).then(res => res.result)
+    }
+  }
+}
+</script>
+""",
+        "src/api/activityManage.js": """
+export function getActivityList (parameter) {
+  return Promise.resolve({
+    result: { page: 1, pageNo: 1, pageSize: 10, count: 0, totalCount: 0, list: [] }
+  })
+}
+""",
+    }
+
+    issues = _validate_frontend_preview_code_files(files, user_request="新增活动管理列表页面")
+
+    assert not any("全新页面需要提供与 API 契约一致的 mock 数据" in issue for issue in issues)
 
 
 def test_preview_validator_accepts_detail_page_without_table_contract():
