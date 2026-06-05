@@ -9,6 +9,7 @@ from app.ai.flow_manager import (
     _has_code_review_fix_loop,
     _init_stages_for_mode,
     _render_prompt_template,
+    _should_pause_for_stage,
     _validate_project_skill_ready,
     DEFAULT_STAGE_PROMPTS,
 )
@@ -91,6 +92,16 @@ def test_frontend_contract_review_has_no_frontend_dev_fix_loop():
     assert "frontend_dev" not in stage_keys
     assert "prototype" in stage_keys
     assert _has_code_review_fix_loop(list(stage_keys))
+
+
+def test_code_review_self_repair_skips_intermediate_confirmations():
+    assert _should_pause_for_stage("prototype") is True
+    assert _should_pause_for_stage("delivery") is True
+    assert _should_pause_for_stage("code_review") is True
+
+    assert _should_pause_for_stage("prototype", auto_review_fix_active=True) is False
+    assert _should_pause_for_stage("delivery", auto_review_fix_active=True) is False
+    assert _should_pause_for_stage("code_review", auto_review_fix_active=True) is True
 
 
 def test_project_skill_must_be_confirmed_before_pipeline_creation():

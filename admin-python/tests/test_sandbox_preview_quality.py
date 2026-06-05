@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from app.ai.flow_manager import (
@@ -518,7 +519,7 @@ export default {
     assert any("不能复用原有字段 queryParam.productCode" in issue for issue in issues)
 
 
-def test_existing_feature_validator_allows_additive_product_id_filter_on_selected_page():
+def test_existing_feature_validator_rejects_product_id_filter_without_validation_logic():
     original_page = """
 <template>
   <a-form>
@@ -553,7 +554,8 @@ export default {
         existing_frontend_files={"src/views/selfOperateCommodity/commodityList/List.vue": original_page},
     )
 
-    assert issues == []
+    assert any("缺少校验/重置实现" in issue for issue in issues)
+    assert any("缺少默认字段初始化" in issue for issue in issues)
 
 
 def test_existing_feature_auto_fix_reverts_to_original_equivalent_filter():
@@ -608,6 +610,11 @@ export default {
     assert "商品ID" in fixed["src/views/selfOperateCommodity/commodityList/List.vue"]
     assert "商品编号" in fixed["src/views/selfOperateCommodity/commodityList/List.vue"]
     assert "queryParam.id" in fixed["src/views/selfOperateCommodity/commodityList/List.vue"]
+    assert "id: undefined" in fixed["src/views/selfOperateCommodity/commodityList/List.vue"]
+    assert "productIdValidateStatus" in fixed["src/views/selfOperateCommodity/commodityList/List.vue"]
+    assert "productIdHelp" in fixed["src/views/selfOperateCommodity/commodityList/List.vue"]
+    assert "searchQuery()" in fixed["src/views/selfOperateCommodity/commodityList/List.vue"]
+    assert "searchReset()" in fixed["src/views/selfOperateCommodity/commodityList/List.vue"]
     assert "queryParam.productCode" in fixed["src/views/selfOperateCommodity/commodityList/List.vue"]
     assert "/api/product/glsw/product/selfOperatedList" in fixed["src/views/selfOperateCommodity/commodityList/List.vue"]
     assert _validate_frontend_preview_code_files(
@@ -647,6 +654,48 @@ export default {
     assert "queryParam.customerName" in content
     assert "状态" in content
     assert "queryParam.status" in content
+
+
+def test_existing_feature_auto_fix_initializes_filter_when_other_methods_reference_id():
+    original_page = """
+<template>
+  <a-form>
+    <a-form-item label="商品编号"><a-input placeholder="请输入商品编号" v-model="queryParam.productCode" /></a-form-item>
+  </a-form>
+</template>
+<script>
+export default {
+  data () {
+    return {
+      queryParam: {
+        onlineStatus: undefined
+      }
+    }
+  },
+  methods: {
+    handleDetail (record) {
+      this.$router.push({ query: { id: record.id } })
+    }
+  }
+}
+</script>
+"""
+
+    fixed, _fixes = _auto_fix_existing_feature_from_original(
+        {"src/views/product/List.vue": "<template><a-form /></template>"},
+        user_request="给现有商品列表新增商品ID筛选项",
+        existing_frontend_paths=["src/views/product/List.vue"],
+        existing_frontend_files={"src/views/product/List.vue": original_page},
+    )
+
+    content = fixed["src/views/product/List.vue"]
+    assert re.search(r"queryParam\s*:\s*\{[\s\S]*onlineStatus\s*:\s*undefined[\s\S]*\bid\s*:\s*undefined", content)
+    assert _validate_frontend_preview_code_files(
+        fixed,
+        user_request="给现有商品列表新增商品ID筛选项",
+        existing_frontend_paths=["src/views/product/List.vue"],
+        existing_frontend_files={"src/views/product/List.vue": original_page},
+    ) == []
 
 
 def test_existing_feature_auto_fix_handles_generated_stable_and_search_handlers():

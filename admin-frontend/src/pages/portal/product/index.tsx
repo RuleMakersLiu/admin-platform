@@ -97,6 +97,44 @@ const splitSuggestions = (text = '') => {
     .filter(Boolean)
 }
 
+const normalizedContractField = (value: unknown) => String(value || '')
+  .trim()
+  .replace(/^(?:this\.)?(?:queryParam|params|parameter|query|request|body|payload|form)\./, '')
+  .replace(/^(?:query|body|request|param|params|payload)[\s:：=]+/i, '')
+  .replace(/^[`'"]|[`'"]$/g, '')
+
+const reviewFieldMismatchIsEquivalent = (record: Record<string, any>) => {
+  const frontendField = normalizedContractField(record.frontend_field)
+  const contractField = normalizedContractField(record.contract_field)
+  return Boolean(frontendField && contractField && frontendField === contractField)
+}
+
+const normalizeReview = (review: Record<string, any>) => {
+  const mismatches = Array.isArray(review.field_mismatches) ? review.field_mismatches : []
+  const actionableMismatches = mismatches.filter((item) => !reviewFieldMismatchIsEquivalent(item))
+  if (actionableMismatches.length === mismatches.length) return review
+
+  return {
+    ...review,
+    review_passed: actionableMismatches.length ? review.review_passed : true,
+    contract_alignment: actionableMismatches.length
+      ? review.contract_alignment
+      : '前端 queryParam 字段已与 API 契约请求参数对齐，无字段名不一致问题。',
+    field_mismatches: actionableMismatches,
+    fix_suggestions: actionableMismatches.length ? review.fix_suggestions : '',
+  }
+}
+
+const reviewFailureDescription = (review: Record<string, any>, mismatches: Record<string, any>[]) => {
+  if (review.review_passed !== false) return review.contract_alignment || '未发现阻塞问题。'
+  const criticalIssue = mismatches.find((item) => String(item.severity || '').toLowerCase() === 'critical')
+  const issue = criticalIssue || mismatches[0]
+  if (issue?.fix) return issue.fix
+  if (issue?.frontend_field) return `需处理：${issue.frontend_field}`
+  if (review.fix_suggestions) return review.fix_suggestions
+  return '存在字段、接口或运行风险，请按下方建议修复。'
+}
+
 const ReviewSummary = ({
   artifact,
   regenerating,
@@ -110,11 +148,12 @@ const ReviewSummary = ({
     return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="等待自动审查输出" />
   }
 
-  const review = artifact.review || {}
+  const review = normalizeReview(artifact.review || {})
   const passed = review.review_passed !== false
   const mismatches = Array.isArray(review.field_mismatches) ? review.field_mismatches : []
   const suggestions = splitSuggestions(String(review.fix_suggestions || ''))
   const rawOutput = String(review.output || artifact.review_output || '')
+  const description = reviewFailureDescription(review, mismatches)
 
   return (
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
@@ -122,8 +161,17 @@ const ReviewSummary = ({
         type={passed ? 'success' : 'error'}
         showIcon
         message={passed ? '审查通过，可以继续' : '审查未通过，需要先调整'}
-        description={review.contract_alignment || (passed ? '未发现阻塞问题。' : '存在字段、接口或运行风险，请按下方建议修复。')}
+        description={description}
       />
+
+      {!passed && review.contract_alignment && review.contract_alignment !== description && (
+        <Alert
+          type="info"
+          showIcon
+          message="契约对齐结论"
+          description={review.contract_alignment}
+        />
+      )}
 
       <Space wrap>
         <Tag color={passed ? 'success' : 'error'}>{passed ? 'PASS' : 'FAIL'}</Tag>
@@ -470,7 +518,7 @@ export default function ProductPortal() {
 
   const regenerateFromReview = async () => {
     if (!pipelineId) return
-    const review = artifact?.review || {}
+    const review = normalizeReview(artifact?.review || {})
     const mismatches = Array.isArray(review.field_mismatches) ? review.field_mismatches : []
     const feedbackText = [
       '自动审查未通过，请按以下问题重新生成前端预览代码，生成后需要再次通过可运行性和契约审查。',
@@ -1146,24 +1194,22 @@ export default function ProductPortal() {
             )}
           </div>
 
-          <div className="workbench-two-column">
-            <div className="workbench-card" style={{ background: '#fff', border: '1px solid #e5eaf3', borderRadius: 8, padding: 20 }}>
-              <Space style={{ marginBottom: 12 }}>
-                <FileTextOutlined />
-                <Title level={4} style={{ margin: 0 }}>API 契约</Title>
-              </Space>
-              <pre style={{ minHeight: 220, maxHeight: 420, overflow: 'auto', whiteSpace: 'pre-wrap', margin: 0 }}>
-                {artifact?.api_contract || '等待 delivery 阶段生成 API 契约'}
-              </pre>
-            </div>
+          <div className="workbench-card" style={{ background: '#fff', border: '1px solid #e5eaf3', borderRadius: 8, padding: 20 }}>
+            <Space style={{ marginBottom: 12 }}>
+              <FileTextOutlined />
+              <Title level={4} style={{ margin: 0 }}>API 契约</Title>
+            </Space>
+            <pre style={{ minHeight: 220, maxHeight: 420, overflow: 'auto', whiteSpace: 'pre-wrap', margin: 0 }}>
+              {artifact?.api_contract || '等待 delivery 阶段生成 API 契约'}
+            </pre>
+          </div>
 
-            <div className="workbench-card" style={{ background: '#fff', border: '1px solid #e5eaf3', borderRadius: 8, padding: 20 }}>
-              <Space style={{ marginBottom: 12 }}>
-                <CheckCircleOutlined />
-                <Title level={4} style={{ margin: 0 }}>自动审查</Title>
-              </Space>
-              <ReviewSummary artifact={artifact} regenerating={running} onRegenerate={regenerateFromReview} />
-            </div>
+          <div className="workbench-card" style={{ background: '#fff', border: '1px solid #e5eaf3', borderRadius: 8, padding: 20 }}>
+            <Space style={{ marginBottom: 12 }}>
+              <CheckCircleOutlined />
+              <Title level={4} style={{ margin: 0 }}>自动审查</Title>
+            </Space>
+            <ReviewSummary artifact={artifact} regenerating={running} onRegenerate={regenerateFromReview} />
           </div>
         </div>
       </div>

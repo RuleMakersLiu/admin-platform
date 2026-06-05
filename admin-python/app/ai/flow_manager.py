@@ -94,6 +94,17 @@ def _stage_needs_confirm(stage_key: str) -> bool:
     return False
 
 
+def _should_pause_for_stage(stage_key: str, auto_review_fix_active: bool = False) -> bool:
+    if not _stage_needs_confirm(stage_key):
+        return False
+    # Code-review self-repair is an internal loop. After a failed review, the
+    # regenerated prototype and delivery contract must flow straight into the
+    # next review; otherwise the pipeline appears stuck before it can re-check.
+    if auto_review_fix_active and stage_key != "code_review":
+        return False
+    return True
+
+
 def _stage_keys_for_mode(pipeline_mode: str = "full") -> List[str]:
     return PIPELINE_MODE_STAGES.get(pipeline_mode or "full", STAGE_KEYS)
 
@@ -119,6 +130,35 @@ def _compact_context(text: str, limit: int = 4000) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + "\n...[context truncated]"
+
+
+def _compact_fix_feedback(text: str, limit: int = 1800) -> str:
+    text = re.sub(r"\n{3,}", "\n\n", (text or "").strip())
+    if len(text) <= limit:
+        return text
+
+    priority_lines: List[str] = []
+    markers = (
+        "自动审查未通过",
+        "审查结论",
+        "需修复",
+        "当前:",
+        "应为:",
+        "critical",
+        "major",
+        "修复建议",
+        "必须保留",
+        "目标",
+        "路径",
+        "queryParam",
+        "field_mismatches",
+    )
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped and any(marker in stripped for marker in markers):
+            priority_lines.append(stripped)
+    summary = "\n".join(priority_lines) or text
+    return summary[:limit] + "\n...[fix feedback compressed]"
 
 
 def _init_stages_for_mode(pipeline_mode: str = "full") -> Dict[str, Any]:
@@ -211,6 +251,8 @@ PIPELINE_GLOBAL_PROMPT_CONTRACT = """
 5. 项目边界：优先复用匹配项目的目录结构、组件、API 封装、权限约定、响应模型和命名风格；不知道是否存在的组件/工具不要引用。
 6. 输出边界：不要寒暄，不要解释自己如何工作；不要输出与当前阶段无关的散文。Markdown 阶段直接输出文档；JSON 阶段必须输出可解析 JSON；代码阶段必须给完整文件内容。
 7. 自检要求：输出前检查是否满足当前阶段清单、是否存在字段不一致、是否遗漏权限/异常/验收标准、是否有不可执行或不可验证内容。
+8. 文件上下文边界：涉及文件审查、比对、搜索或读取时，优先按 workspace_path 和相对路径使用文件搜索/文件读取 skill；prompt 中只传文件清单、路径、行数和关键符号摘要，避免粘贴完整文件正文。
+9. 多轮修复边界：重新生成或自动修复只携带压缩后的失败摘要、字段差异、目标文件路径和必要契约；禁止反复粘贴历史完整源码、完整日志或完整产物，防止上下文膨胀造成误判。
 """
 
 
@@ -551,6 +593,7 @@ JSON 格式如下:
 1. 真实前端代码审查：只审查实际生成的前端文件、预览代码和 API/service 文件；如果没有 frontend_dev，则审查 prototype 阶段的真实前端代码。
 2. API 契约对齐：逐项核对接口路径、HTTP 方法、query/body 参数名、必填字段、分页字段、详情字段、状态码/错误结构、鉴权和权限 key。
 3. 字段一致性：逐项核对页面表格列、详情字段、表单字段、搜索条件、mock 字段、API 请求字段、API 响应字段是否同名同类型；中英文 label 不算字段名一致。
+   - 前端请求对象前缀不算字段名差异：例如 `queryParam.id`、`params.id`、`parameter.id` 与 API 契约请求参数 `id` 是同一字段，不得因此判定字段名不一致。
 4. 页面形态一致性：列表页核对 list/page/count 等分页契约；详情页核对对象数据和空对象兜底；表单页核对校验规则、提交参数和错误提示；小程序核对源码和 HTML 预览是否表达同一字段和交互。
 5. Mock 与真实契约一致性：mock 数据不能用一套字段、真实 API/service 读另一套字段；mock 不能掩盖字段缺失。
 6. 代码合理性：组件拆分、状态管理、加载/空/异常态、错误处理、防 undefined、权限指令/按钮态、重复代码、不可达代码、硬编码、无效 import、未实现事件方法。
@@ -781,20 +824,36 @@ def _render_prompt_template(template: str, context: Dict[str, Any]) -> str:
     frontend_tech = context.get("frontend_tech", "")
     backend_project_name = context.get("backend_project_name", "")
     frontend_project_name = context.get("frontend_project_name", "")
+    workspace_path = context.get("workspace_path", "")
+    prototype_output = _stage_code_files_for_prompt(
+        prev_outputs.get("prototype", {}),
+        fallback=prev_outputs.get("prototype", {}).get("output", "未提供"),
+        workspace_path=workspace_path,
+    )
+    frontend_dev_stage = prev_outputs.get("frontend_dev", {})
+    if frontend_dev_stage:
+        frontend_dev_output = _stage_code_files_for_prompt(
+            frontend_dev_stage,
+            fallback=frontend_dev_stage.get("output") or "未提供",
+            workspace_path=workspace_path,
+        )
+    else:
+        frontend_dev_output = "未单独生成 frontend_dev；请审查上方 prototype 阶段的真实生成文件清单。"
+    backend_dev_output = _stage_code_files_for_prompt(
+        prev_outputs.get("backend_dev", {}),
+        fallback=prev_outputs.get("backend_dev", {}).get("output", "未提供"),
+        workspace_path=workspace_path,
+    )
 
     replacements = {
         "{{user_request}}": user_request[:2000],
         "{{requirement_output}}": prev_outputs.get("requirement", {}).get("output", "未提供")[:1800],
         "{{page_design_output}}": prev_outputs.get("page_design", {}).get("output", "未提供")[:2200],
-        "{{prototype_output}}": prev_outputs.get("prototype", {}).get("output", "未提供")[:3000],
+        "{{prototype_output}}": prototype_output,
         "{{delivery_output}}": prev_outputs.get("delivery", {}).get("output", "未提供")[:3000],
         "{{ui_preview_output}}": prev_outputs.get("ui_preview", {}).get("output", "未提供")[:3000],
-        "{{backend_dev_output}}": prev_outputs.get("backend_dev", {}).get("output", "未提供")[:3000],
-        "{{frontend_dev_output}}": (
-            prev_outputs.get("frontend_dev", {}).get("output")
-            or prev_outputs.get("prototype", {}).get("output")
-            or "未提供"
-        )[:3000],
+        "{{backend_dev_output}}": backend_dev_output,
+        "{{frontend_dev_output}}": frontend_dev_output,
         "{{development_output}}": prev_outputs.get("development", {}).get("output", "未提供")[:3000],
         "{{code_review_output}}": prev_outputs.get("code_review", {}).get("output", "未提供")[:2000],
         "{{testing_output}}": prev_outputs.get("testing", {}).get("output", "未提供")[:2000],
@@ -815,12 +874,52 @@ def _render_prompt_template(template: str, context: Dict[str, Any]) -> str:
     return result
 
 
+def _stage_code_files_for_prompt(
+    stage: Dict[str, Any],
+    fallback: str = "",
+    workspace_path: str = "",
+) -> str:
+    code_files = stage.get("code_files") if isinstance(stage, dict) else None
+    if not isinstance(code_files, dict) or not code_files:
+        return (fallback or "未提供")[:3000]
+
+    header = [
+        "以下是真实生成文件清单，不包含文件正文，用于降低 token 消耗。",
+        "审查时必须按这些路径通过文件搜索/文件读取能力查看真实文件内容，不要根据流式输出截断猜测缺失逻辑。",
+    ]
+    if workspace_path:
+        header.append(f"workspace_path: {workspace_path}")
+    parts: List[str] = ["\n".join(header)]
+    for path, content in code_files.items():
+        if not isinstance(content, str):
+            continue
+        safe_path = str(path).replace("\\", "/").lstrip("/")
+        symbol_hits = [
+            symbol
+            for symbol in (
+                "queryParam.id",
+                "productIdValidateStatus",
+                "productIdHelp",
+                "searchQuery",
+                "searchReset",
+                "loadData",
+                "STable",
+            )
+            if symbol in content
+        ]
+        parts.append(
+            f"\n- `{safe_path}` ({len(content.splitlines())} lines, {len(content)} chars)"
+            + (f"; key symbols: {', '.join(symbol_hits)}" if symbol_hits else "")
+        )
+    return "".join(parts)
+
+
 # ==================== Prompt 构建 ====================
 
 def _build_pipeline_prompt(stage_key: str, context: Dict[str, Any],
                             custom_prompts: Dict[str, str] = None) -> str:
     """根据阶段构建 Agent 的 prompt，注入记忆和修复反馈。支持自定义 prompt 覆盖。"""
-    fix_feedback = context.get("fix_feedback", "")
+    fix_feedback = _compact_fix_feedback(context.get("fix_feedback", ""))
     memories_text = context.get("memories_text", "")
 
     memory_section = ""
@@ -1117,6 +1216,26 @@ def _validate_existing_feature_preservation(
                 )
             if requested_label and requested_label in generated and not requested_fields:
                 issues.append(f"{safe_path} 新增“{requested_label}”筛选项没有绑定 queryParam 请求字段")
+            if requested_label and _is_identifier_filter_label(requested_label) and requested_fields:
+                query_param_match = re.search(r"\bqueryParam\s*:\s*\{(?P<body>[^{}]*)\}", generated)
+                query_param_body = query_param_match.group("body") if query_param_match else ""
+                for field in sorted(requested_fields):
+                    if not re.search(rf"\b{re.escape(field)}\s*:", query_param_body):
+                        issues.append(f"{safe_path} 新增“{requested_label}”筛选项绑定了 queryParam.{field}，但 data() 中缺少默认字段初始化")
+                missing_parts = []
+                if "productIdValidateStatus" not in generated:
+                    missing_parts.append("productIdValidateStatus")
+                if "productIdHelp" not in generated:
+                    missing_parts.append("productIdHelp")
+                if not re.search(r"\bsearchQuery\s*\(", generated):
+                    missing_parts.append("searchQuery")
+                if not re.search(r"\bsearchReset\s*\(", generated):
+                    missing_parts.append("searchReset")
+                if missing_parts:
+                    issues.append(
+                        f"{safe_path} 新增“{requested_label}”筛选项缺少校验/重置实现："
+                        + "、".join(missing_parts)
+                    )
 
         original_endpoints = _collect_api_endpoints(original)
         for endpoint in original_endpoints:
@@ -1422,6 +1541,127 @@ def _infer_new_filter_field(label: str, existing_fields: Optional[set] = None) -
     return f"{candidate}{index}"
 
 
+def _is_identifier_filter_label(label: str = "") -> bool:
+    return bool(re.search(r"(?:ID|id|Id|编号|编码)", label or ""))
+
+
+def _ensure_query_param_field(content: str, field: str) -> str:
+    if not field:
+        return content
+    match = re.search(r"(?P<indent>\s*)queryParam\s*:\s*\{(?P<body>[^{}]*)\}", content)
+    if match and re.search(rf"\b{re.escape(field)}\s*:", match.group("body")):
+        return content
+    if match:
+        indent = match.group("indent")
+        inner_indent = indent + "  "
+        prefix = content[:match.end() - 1]
+        if match.group("body").strip() and not match.group("body").rstrip().endswith(","):
+            prefix += ","
+        return prefix + f"\n{inner_indent}{field}: undefined,\n{indent}" + content[match.end() - 1:]
+
+    def inject(match: re.Match) -> str:
+        indent = match.group("indent")
+        inner_indent = indent + "  "
+        return f"{match.group(0)}\n{inner_indent}{field}: undefined,"
+
+    return re.sub(
+        r"(?P<indent>\s*)queryParam\s*:\s*\{",
+        inject,
+        content,
+        count=1,
+    )
+
+
+def _ensure_data_return_field(content: str, field: str, value: str) -> str:
+    if not field or re.search(rf"\b{re.escape(field)}\s*:", content):
+        return content
+    match = re.search(r"(?P<indent>\s*)queryParam\s*:", content)
+    if match:
+        indent = match.group("indent")
+        return content[:match.start()] + f"{indent}{field}: {value},\n" + content[match.start():]
+
+    return re.sub(
+        r"(?P<indent>\s*)return\s*\{",
+        lambda m: f"{m.group(0)}\n{m.group('indent')}  {field}: {value},",
+        content,
+        count=1,
+    )
+
+
+def _ensure_identifier_filter_template_contract(content: str, label: str, field: str) -> str:
+    if not _is_identifier_filter_label(label):
+        return content
+
+    patched = re.sub(
+        rf"(<a-form-item\b(?=[^>]*label=[\"']{re.escape(label)}[\"'])(?![^>]*validate-status)([^>]*)>)",
+        lambda match: f"<a-form-item{match.group(2)} :validate-status=\"productIdValidateStatus\" :help=\"productIdHelp\">",
+        content,
+        count=1,
+    )
+    patched = re.sub(
+        rf"(<a-input\b(?=[^>]*v-model(?:\.trim)?=[\"']queryParam\.{re.escape(field)}[\"'])(?![^>]*maxLength)([^>]*)/?>)",
+        lambda match: match.group(1).replace("/>", ' :maxLength="20" />')
+        if match.group(1).rstrip().endswith("/>")
+        else match.group(1).replace(">", ' :maxLength="20">'),
+        patched,
+        count=1,
+    )
+    return patched
+
+
+def _identifier_filter_methods(field: str) -> str:
+    return f"""searchQuery() {{
+      const value = (this.queryParam.{field} || '').trim()
+      if (value && !/^[A-Za-z0-9]{{1,20}}$/.test(value)) {{
+        this.productIdValidateStatus = 'error'
+        this.productIdHelp = '请输入正确的商品ID格式(字母数字组合)'
+        return false
+      }}
+      this.productIdValidateStatus = ''
+      this.productIdHelp = ''
+      this.queryParam.{field} = value || undefined
+      if (this.$refs.table && this.$refs.table.refresh) {{
+        this.$refs.table.refresh(true)
+      }}
+      return true
+    }},
+    searchReset() {{
+      this.queryParam = {{}}
+      this.productIdValidateStatus = ''
+      this.productIdHelp = ''
+      if (this.$refs.table && this.$refs.table.refresh) {{
+        this.$refs.table.refresh(true)
+      }}
+    }}"""
+
+
+def _ensure_identifier_filter_methods(content: str, label: str, field: str) -> str:
+    if not _is_identifier_filter_label(label):
+        return content
+    if "productIdValidateStatus" in content and "productIdHelp" in content and re.search(r"\bsearchQuery\s*\(", content) and re.search(r"\bsearchReset\s*\(", content):
+        return content
+
+    patched = _ensure_data_return_field(content, "productIdValidateStatus", "''")
+    patched = _ensure_data_return_field(patched, "productIdHelp", "''")
+    methods = _identifier_filter_methods(field)
+    if re.search(r"\bmethods\s*:\s*\{", patched):
+        return re.sub(r"(?P<indent>\s*)methods\s*:\s*\{", lambda m: f"{m.group(0)}\n{m.group('indent')}  {methods},", patched, count=1)
+    with_lifecycle_anchor = re.sub(
+        r"(?P<indent>\s*)(created|mounted|computed)\s*[:(]",
+        lambda m: f"{m.group('indent')}methods: {{\n{m.group('indent')}  {methods}\n{m.group('indent')}}},\n{m.group(0)}",
+        patched,
+        count=1,
+    )
+    if with_lifecycle_anchor != patched:
+        return with_lifecycle_anchor
+    return re.sub(
+        r"\n\s*}\s*</script>",
+        lambda m: f",\n  methods: {{\n    {methods}\n  }}\n}}\n</script>",
+        patched,
+        count=1,
+    )
+
+
 def _insert_requested_filter(content: str, label: str) -> str:
     if not isinstance(content, str) or not label:
         return content
@@ -1450,7 +1690,11 @@ def _insert_requested_filter(content: str, label: str) -> str:
                 f"{base_indent}  <a-input v-model=\"queryParam.{field}\" placeholder=\"请输入{label}\" />",
                 f"{base_indent}</a-form-item>",
             ]
-        return "\n".join(lines[:index] + filter_lines + lines[index:])
+        patched = "\n".join(lines[:index] + filter_lines + lines[index:])
+        patched = _ensure_query_param_field(patched, field)
+        patched = _ensure_identifier_filter_template_contract(patched, label, field)
+        patched = _ensure_identifier_filter_methods(patched, label, field)
+        return patched
     return content
 
 
@@ -1716,6 +1960,40 @@ def _coerce_bool(value: Any, fallback: bool) -> bool:
     return bool(value)
 
 
+def _normalized_contract_field_name(value: Any) -> str:
+    field = str(value or "").strip()
+    field = re.sub(r"^(?:this\.)?(?:queryParam|params|parameter|query|request|body|payload|form)\.", "", field)
+    field = re.sub(r"^(?:query|body|request|param|params|payload)[\s:：=]+", "", field, flags=re.I)
+    return field.strip("`'\" ")
+
+
+def _review_field_mismatch_is_equivalent(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return False
+    frontend_field = _normalized_contract_field_name(item.get("frontend_field"))
+    contract_field = _normalized_contract_field_name(item.get("contract_field"))
+    if not frontend_field or not contract_field:
+        return False
+    return frontend_field == contract_field
+
+
+def _normalize_code_review_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    mismatches = result.get("field_mismatches")
+    if not isinstance(mismatches, list):
+        return result
+
+    actionable = [item for item in mismatches if not _review_field_mismatch_is_equivalent(item)]
+    if len(actionable) == len(mismatches):
+        return result
+
+    result["field_mismatches"] = actionable
+    if not actionable:
+        result["contract_alignment"] = "前端 queryParam 字段已与 API 契约请求参数对齐，无字段名不一致问题。"
+        result["fix_suggestions"] = ""
+        result["review_passed"] = True
+    return result
+
+
 def _fallback_quality(
     raw_output: str,
     marker_groups: List[Tuple[str, str, List[str]]],
@@ -1948,6 +2226,7 @@ def _parse_agent_output(stage_key: str, raw_output: str) -> Dict[str, Any]:
                     suggestions.append(line)
             if suggestions:
                 result["fix_suggestions"] = "\n".join(suggestions[:10])
+        result = _normalize_code_review_result(result)
 
     if stage_key == "testing":
         json_result = _try_parse_json_block(raw_output, ["tests_passed", "bug_details"])
@@ -3187,6 +3466,7 @@ class DevPipelineManager:
             ]
             if part and part.strip()
         )
+        revision_feedback = _compact_fix_feedback(revision_feedback)
         context = {
             "user_request": user_request,
             "stage_outputs": {k: v for k, v in stages.items() if v.get("status") == "completed"},
@@ -3195,6 +3475,7 @@ class DevPipelineManager:
             "backend_tech": pipe_config.get("backend_tech", ""),
             "frontend_tech": pipe_config.get("frontend_tech", ""),
             "pipeline_mode": pipe_config.get("pipeline_mode", "full"),
+            "workspace_path": pipe.workspace_path or get_workspace_path(pipeline_id),
         }
         selected_frontend_page_path = str(pipe_config.get("selected_frontend_page_path") or "").strip()
 
@@ -3393,6 +3674,7 @@ class DevPipelineManager:
             pipe_config = json.loads(pipe.skill_config or "{}")
             stage_keys = _stage_keys_for_mode(pipe_config.get("pipeline_mode", "full"))
             fix_feedback = ""
+            auto_review_fix_active = False
 
             while True:
                 current_stage = pipe.current_stage
@@ -3811,6 +4093,7 @@ class DevPipelineManager:
                         if pipe.retry_count < MAX_FIX_ITERATIONS:
                             pipe.retry_count += 1
                             loop_stage = _fix_loop_stage_for_mode(stage_keys)
+                            auto_review_fix_active = True
                             mismatch_feedback = ""
                             field_mismatches = parsed.get("field_mismatches")
                             if isinstance(field_mismatches, list) and field_mismatches:
@@ -3919,7 +4202,7 @@ class DevPipelineManager:
                             }
 
                     # 分支 1: 需要用户确认 → 暂停
-                    if _stage_needs_confirm(current_stage):
+                    if _should_pause_for_stage(current_stage, auto_review_fix_active):
                         pipe.status = PipelineStatus.WAITING_CONFIRM.value
                         pipe.update_time = int(time.time() * 1000)
                         await session.commit()

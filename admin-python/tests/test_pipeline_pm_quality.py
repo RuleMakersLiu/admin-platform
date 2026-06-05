@@ -1,4 +1,4 @@
-from app.ai.flow_manager import _build_pipeline_prompt, _parse_agent_output
+from app.ai.flow_manager import _build_pipeline_prompt, _compact_fix_feedback, _parse_agent_output
 
 
 def test_requirement_parser_keeps_plain_markdown_and_quality_json():
@@ -215,6 +215,91 @@ def test_code_review_prompt_requires_real_frontend_api_contract_alignment():
     assert "Mock 与真实契约一致性" in prompt
     assert "小程序" in prompt
     assert "前端读取的响应字段与 API 契约不一致" in prompt
+    assert "`queryParam.id`、`params.id`、`parameter.id` 与 API 契约请求参数 `id` 是同一字段" in prompt
+
+
+def test_code_review_prompt_uses_file_manifest_instead_of_code_body():
+    context = {
+        "user_request": "给列表增加商品ID筛选",
+        "pipeline_mode": "frontend_contract_review",
+        "workspace_path": "/tmp/pipelines/pipe-001",
+        "stage_outputs": {
+            "prototype": {
+                "output": "<template>截断内容",
+                "code_files": {
+                    "src/views/List.vue": "<template></template>\n<script>\nexport default { data () { return { productIdValidateStatus: '', productIdHelp: '' } }, methods: { searchQuery () {}, searchReset () {} } }\n</script>",
+                },
+            },
+            "delivery": {"output": "请求参数 id"},
+        },
+    }
+
+    prompt = _build_pipeline_prompt("code_review", context)
+
+    assert "真实生成文件清单，不包含文件正文" in prompt
+    assert "workspace_path: /tmp/pipelines/pipe-001" in prompt
+    assert "`src/views/List.vue`" in prompt
+    assert "productIdValidateStatus" in prompt
+    assert "searchReset" in prompt
+    assert "export default" not in prompt
+    assert "通过文件搜索/文件读取能力查看真实文件内容" in prompt
+
+
+def test_global_prompt_requires_file_skills_and_context_compression():
+    prompt = _build_pipeline_prompt("code_review", {
+        "pipeline_mode": "frontend_contract_review",
+        "stage_outputs": {},
+    })
+
+    assert "优先按 workspace_path 和相对路径使用文件搜索/文件读取 skill" in prompt
+    assert "多轮修复边界" in prompt
+    assert "防止上下文膨胀造成误判" in prompt
+
+
+def test_fix_feedback_is_compressed_for_multi_round_regeneration():
+    feedback = "\n".join([
+        "普通长日志 " + ("x" * 2000),
+        "审查结论：字段需要对齐",
+        "critical src/views/List.vue 当前: queryParam.productCode 应为: queryParam.id",
+        "修复建议：只修目标路径",
+    ])
+
+    compacted = _compact_fix_feedback(feedback, limit=220)
+
+    assert len(compacted) < len(feedback)
+    assert "审查结论" in compacted
+    assert "critical" in compacted
+    assert "fix feedback compressed" in compacted
+
+
+def test_code_review_parser_treats_query_param_prefix_as_same_contract_field():
+    raw = """自动审查未通过，需要先调整。
+
+```json
+{
+  "review_passed": false,
+  "backend_score": "A",
+  "frontend_score": "B",
+  "contract_alignment": "前端 queryParam.id 与 API 契约请求参数 id 字段名不一致",
+  "field_mismatches": [
+    {
+      "severity": "major",
+      "location": "src/views/selfOperateCommodity/commodityList/List.vue",
+      "frontend_field": "queryParam.id",
+      "contract_field": "id",
+      "fix": "改成 id"
+    }
+  ],
+  "fix_suggestions": "调整字段名"
+}
+```"""
+
+    parsed = _parse_agent_output("code_review", raw)
+
+    assert parsed["review_passed"] is True
+    assert parsed["field_mismatches"] == []
+    assert parsed["fix_suggestions"] == ""
+    assert "无字段名不一致问题" in parsed["contract_alignment"]
 
 
 def test_preview_parser_scores_complete_admin_preview():
