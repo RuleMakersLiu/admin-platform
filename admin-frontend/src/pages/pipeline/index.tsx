@@ -64,6 +64,28 @@ const STAGE_NAMES: Record<string, string> = {
 const STAGE_KEYS = ['requirement', 'page_design', 'prototype', 'delivery', 'frontend_dev', 'backend_dev', 'code_review', 'testing', 'commit', 'deploy', 'report']
 const PRODUCT_STAGE_KEYS = ['requirement', 'page_design', 'prototype', 'delivery', 'code_review', 'report']
 
+const confirmActionLabel = (stage = '') => {
+  const labels: Record<string, string> = {
+    requirement: '确认需求，进入页面设计',
+    page_design: '确认页面设计，生成前端预览代码',
+    prototype: '确认前端预览，生成 API 契约',
+    delivery: '确认交付内容，进入下一阶段',
+    frontend_dev: '确认前端代码，进入下一阶段',
+    backend_dev: '确认后端代码，进入下一阶段',
+    code_review: '确认审查结果，生成报告',
+    testing: '确认测试结果，进入下一阶段',
+    commit: '确认提交结果，进入下一阶段',
+    deploy: '确认部署结果，生成报告',
+    report: '确认报告，完成流水线',
+  }
+  return labels[stage] || '确认当前阶段并继续'
+}
+
+const confirmDescription = (stage = '') => {
+  if (stage === 'report') return '确认后流水线将完成；退回时可在下方填写报告修订意见。'
+  return '确认后将自动推进到下一阶段；退回时可在下方填写修订意见。'
+}
+
 const STATUS_COLORS: Record<string, { bg: string; color: string; text: string }> = {
   running:           { bg: 'rgba(49,92,246,0.12)', color: '#315cf6', text: '执行中' },
   completed:         { bg: 'rgba(34,197,94,0.12)', color: '#86efac', text: '已完成' },
@@ -2013,8 +2035,8 @@ const PipelinePage: React.FC = () => {
               {isWaitingConfirm && isViewingCurrent && (
                 <div style={styles.confirmPanel}>
                   <Alert
-                    message="请确认当前阶段输出是否符合预期"
-                    description="确认后将自动推进到下一阶段；退回时可在下方填写修订意见。"
+                    message={`请确认${STAGE_NAMES[activeStageKey] || activeStageKey || '当前阶段'}输出是否符合预期`}
+                    description={confirmDescription(activeStageKey)}
                     type="warning"
                     showIcon
                     style={{
@@ -2039,7 +2061,7 @@ const PipelinePage: React.FC = () => {
                       loading={loading}
                       style={{ borderRadius: 8 }}
                     >
-                      确认并继续
+                      {confirmActionLabel(activeStageKey)}
                     </Button>
                     <Button
                       danger

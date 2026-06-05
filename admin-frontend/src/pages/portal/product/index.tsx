@@ -30,6 +30,33 @@ const stageLabel: Record<string, string> = {
 const stageOrder = ['requirement', 'page_design', 'prototype', 'delivery', 'code_review', 'report']
 const LAST_PRODUCT_PIPELINE_ID = 'lastProductPipelineId'
 
+const confirmActionLabel = (stage = '') => {
+  const labels: Record<string, string> = {
+    requirement: '确认需求，进入页面设计',
+    page_design: '确认页面设计，生成前端预览代码',
+    prototype: '确认前端预览，生成 API 契约',
+    delivery: '确认 API 契约，进入自动审查',
+    code_review: '确认审查结果，生成报告',
+    report: '确认报告，完成流水线',
+  }
+  return labels[stage] || '确认当前阶段并继续'
+}
+
+const confirmRejectLabel = (stage = '') => {
+  if (stage === 'report') return '提交反馈并重新生成报告'
+  return `提交反馈并重新生成${stageLabel[stage] || '当前阶段'}`
+}
+
+const confirmMessage = (stage = '') => {
+  if (stage === 'report') return '请确认报告，确认后流水线完成'
+  return `请确认${stageLabel[stage] || stage || '当前阶段'}，确认后进入下一阶段`
+}
+
+const feedbackPlaceholder = (stage = '') => {
+  if (stage === 'report') return '如果报告内容需要调整，请写明缺少哪些结论、风险或交付说明。'
+  return '例如：我要的是零售商品列表，不是商品池；不要新建页面；只增加商品ID筛选项。'
+}
+
 const formatMatchSource = (source: string) => {
   const sourceLabels: Record<string, string> = {
     llm: '大模型分析',
@@ -103,9 +130,29 @@ const normalizedContractField = (value: unknown) => String(value || '')
   .replace(/^(?:query|body|request|param|params|payload)[\s:：=]+/i, '')
   .replace(/^[`'"]|[`'"]$/g, '')
 
+const reviewFieldValue = (record: Record<string, any>, keys: string[]) => {
+  for (const key of keys) {
+    if (record[key]) return record[key]
+  }
+  return ''
+}
+
 const reviewFieldMismatchIsEquivalent = (record: Record<string, any>) => {
-  const frontendField = normalizedContractField(record.frontend_field)
-  const contractField = normalizedContractField(record.contract_field)
+  const frontendField = normalizedContractField(reviewFieldValue(record, [
+    'frontend_field',
+    'frontend_param',
+    'frontend_parameter',
+    'current_field',
+    'actual_field',
+  ]))
+  const contractField = normalizedContractField(reviewFieldValue(record, [
+    'contract_field',
+    'api_field',
+    'api_param',
+    'api_parameter',
+    'expected_field',
+    'request_field',
+  ]))
   return Boolean(frontendField && contractField && frontendField === contractField)
 }
 
@@ -966,51 +1013,58 @@ export default function ProductPortal() {
               loading={pipelineListLoading}
               dataSource={pipelines.slice(0, 8)}
               locale={{ emptyText: '暂无流水线' }}
-              renderItem={(item) => (
-                <List.Item
-                  actions={[
-                    <Button key="view" size="small" onClick={() => restorePipeline(item.pipeline_id)}>查看</Button>,
-                    <Button
-                      key="run"
-                      size="small"
-                      type="link"
-                      disabled={running || !pipelineId || pipelineId !== item.pipeline_id || ['completed', 'cancelled'].includes(item.status)}
-                      onClick={continueSelectedPipeline}
-                    >
-                      {item.status === 'failed' ? '重新生成' : item.status === 'waiting_confirm' ? '确认继续' : '继续'}
-                    </Button>,
-                    <Button
-                      key="delete"
-                      size="small"
-                      danger
-                      type="link"
-                      disabled={running && pipelineId === item.pipeline_id}
-                      onClick={() => {
-                        Modal.confirm({
-                          title: '删除流水线',
-                          content: `确定删除「${item.user_request || item.pipeline_id}」吗？删除后不会再出现在历史列表。`,
-                          okText: '删除',
-                          okButtonProps: { danger: true },
-                          cancelText: '取消',
-                          onOk: () => deletePipeline(item.pipeline_id),
-                        })
-                      }}
-                    >
-                      删除
-                    </Button>,
-                  ]}
-                >
-                  <List.Item.Meta
-                    title={
-                      <Space size={6} wrap>
-                        <Text strong ellipsis style={{ maxWidth: 220 }}>{item.user_request || item.pipeline_id}</Text>
-                        <Tag color={item.status === 'completed' ? 'success' : item.status === 'failed' ? 'error' : 'processing'}>{item.status}</Tag>
-                      </Space>
-                    }
-                    description={`${stageLabel[item.current_stage] || item.current_stage || '未开始'} · ${item.pipeline_id}`}
-                  />
-                </List.Item>
-              )}
+              renderItem={(item) => {
+                const runLabel = item.status === 'failed'
+                  ? '重新生成'
+                  : item.status === 'waiting_confirm'
+                    ? confirmActionLabel(item.current_stage)
+                    : '继续'
+                return (
+                  <List.Item
+                    actions={[
+                      <Button key="view" size="small" onClick={() => restorePipeline(item.pipeline_id)}>查看</Button>,
+                      <Button
+                        key="run"
+                        size="small"
+                        type="link"
+                        disabled={running || !pipelineId || pipelineId !== item.pipeline_id || ['completed', 'cancelled'].includes(item.status)}
+                        onClick={continueSelectedPipeline}
+                      >
+                        {runLabel}
+                      </Button>,
+                      <Button
+                        key="delete"
+                        size="small"
+                        danger
+                        type="link"
+                        disabled={running && pipelineId === item.pipeline_id}
+                        onClick={() => {
+                          Modal.confirm({
+                            title: '删除流水线',
+                            content: `确定删除「${item.user_request || item.pipeline_id}」吗？删除后不会再出现在历史列表。`,
+                            okText: '删除',
+                            okButtonProps: { danger: true },
+                            cancelText: '取消',
+                            onOk: () => deletePipeline(item.pipeline_id),
+                          })
+                        }}
+                      >
+                        删除
+                      </Button>,
+                    ]}
+                  >
+                    <List.Item.Meta
+                      title={
+                        <Space size={6} wrap>
+                          <Text strong ellipsis style={{ maxWidth: 220 }}>{item.user_request || item.pipeline_id}</Text>
+                          <Tag color={item.status === 'completed' ? 'success' : item.status === 'failed' ? 'error' : 'processing'}>{item.status}</Tag>
+                        </Space>
+                      }
+                      description={`${stageLabel[item.current_stage] || item.current_stage || '未开始'} · ${item.pipeline_id}`}
+                    />
+                  </List.Item>
+                )
+              }}
             />
           </div>
 
@@ -1079,7 +1133,7 @@ export default function ProductPortal() {
                 type="warning"
                 showIcon
                 style={{ marginTop: 16 }}
-                message={pendingPageSelection ? '请选择要修改的页面功能' : `需要补充反馈：${stageLabel[status.current_stage] || status.current_stage}`}
+                message={pendingPageSelection ? '请选择要修改的页面功能' : confirmMessage(status.current_stage)}
                 description={
                   <Space direction="vertical" style={{ width: '100%' }}>
                     {pendingPageSelection ? (
@@ -1096,7 +1150,7 @@ export default function ProductPortal() {
                         rows={3}
                         value={feedback}
                         onChange={(event) => setFeedback(event.target.value)}
-                        placeholder="例如：我要的是零售商品列表，不是商品池；不要新建页面；只增加商品ID筛选项。"
+                        placeholder={feedbackPlaceholder(status.current_stage)}
                       />
                     )}
                     {pendingPageSelection ? (
@@ -1106,10 +1160,10 @@ export default function ProductPortal() {
                     ) : (
                       <Space wrap>
                         <Button type="primary" loading={running} onClick={() => resumePipeline(true)}>
-                          确认并继续
+                          {confirmActionLabel(status.current_stage)}
                         </Button>
                         <Button danger icon={<ReloadOutlined />} loading={running} onClick={submitFeedbackAndRegenerate}>
-                          提交反馈并重新生成
+                          {confirmRejectLabel(status.current_stage)}
                         </Button>
                       </Space>
                     )}
