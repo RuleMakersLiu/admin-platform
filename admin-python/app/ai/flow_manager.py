@@ -168,6 +168,10 @@ def _is_product_preview_code_stage(stage_key: str, pipe_config: Dict[str, Any]) 
     return stage_key == "prototype" and pipe_config.get("pipeline_mode") == "frontend_contract_review"
 
 
+def _is_product_pm_design_stage(stage_key: str, pipe_config: Dict[str, Any]) -> bool:
+    return stage_key == "page_design" and pipe_config.get("pipeline_mode") == "frontend_contract_review"
+
+
 def _compact_context(text: str, limit: int = 4000) -> str:
     text = (text or "").strip()
     if len(text) <= limit:
@@ -2547,14 +2551,15 @@ async def _call_agent_with_retry_stream(
 
             except Exception as e:
                 last_error = e
+                error_label = "timeout waiting for final LLM reply" if isinstance(e, asyncio.TimeoutError) else str(e)
                 if emitted_any or not _is_retriable_error(e):
-                    logger.error(f"Agent stream failed: {e}")
+                    logger.error(f"Agent stream failed: {error_label}")
                     raise
 
                 delay = RETRY_BASE_DELAY * (2 ** attempt)
                 logger.warning(
                     f"Agent stream failed (retriable, attempt {attempt + 1}/{MAX_LLM_RETRIES}): "
-                    f"{e}. Retrying in {delay}s..."
+                    f"{error_label}. Retrying in {delay}s..."
                 )
                 await asyncio.sleep(delay)
 
@@ -3553,6 +3558,7 @@ class DevPipelineManager:
         # 加载技术栈配置
         pipe_config = json.loads(pipe.skill_config or "{}")
         compact_preview_stage = _is_product_preview_code_stage(stage_key, pipe_config)
+        compact_pm_design_stage = _is_product_pm_design_stage(stage_key, pipe_config)
 
         # 构建 context（先构建，后续语义搜索需要用到原始 user_request）
         # user_input 是阶段修订意见，不能替代原始需求，否则 PM 后续阶段会丢上下文。
@@ -3601,7 +3607,7 @@ class DevPipelineManager:
         )
         if project_skill_snapshot.get("skill_content"):
             frontend_skill_content = project_skill_snapshot.get("skill_content", "")
-            if compact_preview_stage:
+            if compact_preview_stage or compact_pm_design_stage:
                 frontend_skill_content = _compact_context(frontend_skill_content, 2500)
             ctx_parts.append(
                 "## Confirmed Frontend Project Skill Snapshot\n"
@@ -3611,7 +3617,6 @@ class DevPipelineManager:
             )
         backend_context_stages = (
             "requirement",
-            "page_design",
             "ui_preview",
             "delivery",
             "frontend_dev",
@@ -3623,11 +3628,14 @@ class DevPipelineManager:
         for snapshot in (backend_skill_snapshots or [backend_skill_snapshot]):
             if not snapshot.get("skill_content") or stage_key not in backend_context_stages:
                 continue
+            backend_skill_content = snapshot.get("skill_content", "")
+            if compact_preview_stage:
+                backend_skill_content = _compact_context(backend_skill_content, 2500)
             ctx_parts.append(
                 "## Confirmed Backend/API Project Skill Snapshot\n"
                 f"Project: {snapshot.get('project_name', '')}\n"
                 f"Version: {snapshot.get('skill_version', '')}\n\n"
-                f"{snapshot.get('skill_content', '')}"
+                f"{backend_skill_content}"
             )
         if fe_proj_id and stage_key in ("frontend_dev", "prototype", "page_design", "delivery", "code_review"):
             from app.services.knowledge_service import get_relevant_context
@@ -3648,7 +3656,7 @@ class DevPipelineManager:
                     "本次前端预览代码必须修改这个页面路径，不允许改成其他页面或新建替代页面。"
                 )
                 selected_content = frontend_files.get(selected_frontend_page_path)
-                if selected_content:
+                if selected_content and not compact_pm_design_stage:
                     selected_content = _compact_context(selected_content, 4500 if compact_preview_stage else 9000)
                     ctx_parts.append(
                         "## 已选择页面的原始代码（必须基于此文件做最小增量修改）\n"
@@ -3657,7 +3665,15 @@ class DevPipelineManager:
                         "只改用户明确要求的筛选/字段/交互。若已有等价字段，优先调整文案，不要重复添加字段。\n\n"
                         f"{selected_content}"
                     )
-            if compact_preview_stage:
+            if compact_pm_design_stage:
+                existing_path_block = "\n".join(f"- `{path}`" for path in frontend_existing_paths[:20])
+                if existing_path_block:
+                    ctx_parts.append(
+                        "## 前端页面路径参考（页面设计只需参考路径，不读取源码）\n"
+                        f"{existing_path_block}\n"
+                        "如需求是新增营销能力，优先设计活动管理/创建/详情页面；不要为了页面设计读取全量源码。"
+                    )
+            elif compact_preview_stage:
                 fe_ctx = await _load_project_context(fe_proj_id, "frontend", user_request)
                 if fe_ctx:
                     ctx_parts.append(f"## 前端项目关键文件参考\n{_compact_context(fe_ctx, 2500)}")
@@ -3690,7 +3706,9 @@ class DevPipelineManager:
                     ctx_parts.append(f"## 后端项目代码参考\n{be_ctx}")
         if ctx_parts:
             project_ctx_section = "\n\n".join(ctx_parts)
-            if compact_preview_stage:
+            if compact_pm_design_stage:
+                project_ctx_section = _compact_context(project_ctx_section, 3500)
+            elif compact_preview_stage:
                 project_ctx_section = _compact_context(project_ctx_section, 6000)
 
         # 构建 prompt。流水线级 prompt（来自前端本次编辑）优先，项目级 prompt 作为兜底。
@@ -3704,8 +3722,8 @@ class DevPipelineManager:
         # 调用 LLM
         session_id = f"{pipeline_id}_{stage_key}"
         html_stages = {"prototype", "ui_preview"}
-        max_tok = 32768 if compact_preview_stage else (16384 if stage_key in html_stages else None)
-        thinking_override = {"type": "disabled"} if compact_preview_stage else None
+        max_tok = 32768 if compact_preview_stage else (8192 if compact_pm_design_stage else (16384 if stage_key in html_stages else None))
+        thinking_override = {"type": "disabled"} if compact_preview_stage or compact_pm_design_stage else None
 
         if on_chunk:
             raw_output = await asyncio.wait_for(
