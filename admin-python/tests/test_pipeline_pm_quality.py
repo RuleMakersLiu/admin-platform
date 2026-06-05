@@ -1,4 +1,9 @@
-from app.ai.flow_manager import _build_pipeline_prompt, _compact_fix_feedback, _parse_agent_output
+from app.ai.flow_manager import (
+    _build_pipeline_prompt,
+    _compact_fix_feedback,
+    _parse_agent_output,
+    _prototype_focus_from_page_design,
+)
 
 
 def test_requirement_parser_keeps_plain_markdown_and_quality_json():
@@ -40,6 +45,52 @@ def test_requirement_parser_keeps_plain_markdown_and_quality_json():
     assert parsed["pm_quality"]["score"] == 88
     assert parsed["pm_quality"]["ready_for_review"] is True
     assert parsed["pm_quality"]["permission_points"] == ["user:list"]
+
+
+def test_prototype_prompt_locks_first_primary_page_from_page_design():
+    page_design_stage = {
+        "structured_output": {
+            "design_quality": {
+                "primary_pages": [
+                    "拼团活动列表页",
+                    "秒杀活动列表页",
+                    "活动审核列表页",
+                ]
+            }
+        },
+        "output": "# 页面设计",
+    }
+
+    focus = _prototype_focus_from_page_design(page_design_stage)
+
+    assert "固定只生成主验收页面：“拼团活动列表页”" in focus
+    assert "秒杀活动列表页" in focus
+    assert "不得作为本次主页面随机切换" in focus
+
+
+def test_prototype_prompt_includes_locked_page_scope():
+    prompt = _build_pipeline_prompt(
+        "prototype",
+        {
+            "user_request": "新增拼团秒杀活动管理",
+            "stage_outputs": {
+                "requirement": {"output": "需求"},
+                "page_design": {
+                    "output": "页面设计",
+                    "structured_output": {
+                        "design_quality": {
+                            "primary_pages": ["拼团活动列表页", "秒杀活动列表页"]
+                        }
+                    },
+                },
+            },
+            "frontend_tech": "vue2",
+        },
+    )
+
+    assert "## 本次预览固定范围" in prompt
+    assert "固定只生成主验收页面：“拼团活动列表页”" in prompt
+    assert "不要在多次生成/重试时切换到其他页面" in prompt
 
 
 def test_requirement_parser_keeps_permission_model_fields():

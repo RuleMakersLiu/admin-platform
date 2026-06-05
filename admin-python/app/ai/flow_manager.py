@@ -370,6 +370,9 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 ## 页面设计
 {{page_design_output}}
 
+## 本次预览固定范围
+{{prototype_focus}}
+
 ## 前端技术栈
 {{frontend_tech}}
 
@@ -387,7 +390,7 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 
 ## 产品经理验收目标
 产品经理不关心代码结构细节，只关心一个结果：点击“启动真实前端预览”后，能打开一个与需求匹配、首屏不报错、按钮能点、列表/详情/表单状态完整的可用页面。
-如果需求可以落成多个页面，也优先交付 1 个最核心、最能验收业务价值的完整页面；不要为了覆盖过多页面导致每个页面都不可用。
+如果需求可以落成多个页面，必须严格遵守“本次预览固定范围”：只交付其中固定的 1 个核心验收页面及其必要支撑组件，不要在多次生成/重试时切换到其他页面，也不要为了覆盖过多页面导致每个页面都不可用。
 
 ## 实现要求
 1. 根据目标技术栈生成真实项目代码，不要再输出纯静态 HTML mock。
@@ -873,6 +876,7 @@ def _render_prompt_template(template: str, context: Dict[str, Any]) -> str:
     backend_project_name = context.get("backend_project_name", "")
     frontend_project_name = context.get("frontend_project_name", "")
     workspace_path = context.get("workspace_path", "")
+    prototype_focus = _prototype_focus_from_page_design(prev_outputs.get("page_design", {}))
     prototype_output = _stage_code_files_for_prompt(
         prev_outputs.get("prototype", {}),
         fallback=prev_outputs.get("prototype", {}).get("output", "未提供"),
@@ -897,6 +901,7 @@ def _render_prompt_template(template: str, context: Dict[str, Any]) -> str:
         "{{user_request}}": user_request[:2000],
         "{{requirement_output}}": prev_outputs.get("requirement", {}).get("output", "未提供")[:1800],
         "{{page_design_output}}": prev_outputs.get("page_design", {}).get("output", "未提供")[:2200],
+        "{{prototype_focus}}": prototype_focus,
         "{{prototype_output}}": prototype_output,
         "{{delivery_output}}": prev_outputs.get("delivery", {}).get("output", "未提供")[:3000],
         "{{ui_preview_output}}": prev_outputs.get("ui_preview", {}).get("output", "未提供")[:3000],
@@ -2098,6 +2103,46 @@ def _coerce_string_list(value: Any, fallback: Optional[List[str]] = None) -> Lis
         parts = [part.strip(" -\t") for part in value.replace("；", "\n").replace(";", "\n").split("\n")]
         return [part for part in parts if part]
     return fallback or []
+
+
+def _prototype_focus_from_page_design(page_design_stage: Dict[str, Any]) -> str:
+    """Build a deterministic prototype scope from page design output."""
+    if not isinstance(page_design_stage, dict):
+        return "未识别到页面设计范围；只能生成与用户需求最直接相关的 1 个核心页面。"
+
+    structured = page_design_stage.get("structured_output")
+    if not isinstance(structured, dict):
+        structured = page_design_stage
+    design_quality = structured.get("design_quality") if isinstance(structured, dict) else None
+    primary_pages = _coerce_string_list(
+        design_quality.get("primary_pages") if isinstance(design_quality, dict) else None,
+        [],
+    )
+
+    document = str(page_design_stage.get("page_design_document") or page_design_stage.get("output") or "")
+    if not document and isinstance(structured, dict):
+        document = str(structured.get("output") or "")
+    if not primary_pages and document:
+        headings = re.findall(r"^#{2,4}\s+\d+(?:\.\d+)?\s+(.+?)(?:\s*$|\n)", document, re.M)
+        primary_pages = [
+            re.sub(r"^[页面清单及层级关系布局字段定义查询与筛选按钮和操作弹窗/抽屉/表单交互状态矩阵权限控制点API契约草案开发确认要点\s：:]+", "", item).strip()
+            for item in headings
+            if any(keyword in item for keyword in ("页", "弹窗", "抽屉", "列表", "详情", "表单", "审核"))
+        ]
+        primary_pages = [item for item in primary_pages if item][:5]
+
+    if not primary_pages:
+        return "页面设计未声明多个主页面；本次只生成与用户需求最直接相关的 1 个核心页面及必要支撑组件。"
+
+    primary = primary_pages[0]
+    remaining = "、".join(primary_pages[1:5])
+    if remaining:
+        return (
+            f"页面设计包含多个页面。本次 prototype 固定只生成主验收页面：“{primary}”。"
+            f"其他页面（{remaining}）不得作为本次主页面随机切换；只有当“{primary}”首屏交互必须依赖时，"
+            "才允许生成弹窗、抽屉、API/mock 等支撑文件。重试时必须继续修同一个主页面和同一组业务文件。"
+        )
+    return f"本次 prototype 固定生成主验收页面：“{primary}”；重试时必须继续修同一个主页面和同一组业务文件。"
 
 
 def _coerce_quality_score(value: Any, fallback: int) -> int:
@@ -4196,7 +4241,8 @@ class DevPipelineManager:
 
                         preview_validation_feedback = (
                             "上一版前端预览代码未通过可运行性约束，请重新生成完整 JSON 文件数组，"
-                            "不要解释，只修代码。必须修复以下问题：\n"
+                            "不要解释，只修代码。必须继续围绕“本次预览固定范围”中的同一个主页面和同一组业务文件修复，"
+                            "禁止切换到页面设计里的其他页面。必须修复以下问题：\n"
                             + "\n".join(f"- {issue}" for issue in preview_issues[:12])
                         )
                         await emit({
