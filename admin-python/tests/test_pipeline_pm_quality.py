@@ -302,6 +302,57 @@ def test_code_review_parser_treats_query_param_prefix_as_same_contract_field():
     assert "无字段名不一致问题" in parsed["contract_alignment"]
 
 
+def test_code_review_parser_keeps_failure_when_non_field_issue_remains():
+    raw = """```json
+{
+  "review_passed": false,
+  "contract_alignment": "前端 queryParam.id 与 API 契约请求参数 id 字段名不一致",
+  "field_mismatches": [
+    {
+      "severity": "major",
+      "location": "src/views/List.vue",
+      "frontend_field": "queryParam.id",
+      "contract_field": "id",
+      "fix": "改成 id"
+    }
+  ],
+  "fix_suggestions": "缺少加载态和接口异常兜底，运行失败时页面没有提示。"
+}
+```"""
+
+    parsed = _parse_agent_output("code_review", raw)
+
+    assert parsed["review_passed"] is False
+    assert parsed["field_mismatches"] == []
+    assert "加载态" in parsed["fix_suggestions"]
+    assert "无字段名不一致问题" in parsed["contract_alignment"]
+
+
+def test_code_review_parser_normalizes_field_aliases():
+    raw = """```json
+{
+  "review_passed": false,
+  "contract_alignment": "前端 current_field 与 API 字段不一致",
+  "field_mismatches": [
+    {
+      "severity": "major",
+      "location": "src/views/List.vue",
+      "current_field": "queryParam.id",
+      "api_field": "id",
+      "fix": "改成 id"
+    }
+  ],
+  "fix_suggestions": "调整字段名"
+}
+```"""
+
+    parsed = _parse_agent_output("code_review", raw)
+
+    assert parsed["review_passed"] is True
+    assert parsed["field_mismatches"] == []
+    assert parsed["fix_suggestions"] == ""
+
+
 def test_preview_parser_scores_complete_admin_preview():
     raw = """```html
 <!DOCTYPE html>

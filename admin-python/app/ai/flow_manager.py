@@ -38,6 +38,7 @@ MAX_LLM_RETRIES = 3
 RETRY_BASE_DELAY = 2  # seconds
 LLM_STAGE_TIMEOUT = 600  # 单阶段 LLM 调用最大超时（秒）
 LLM_STREAM_IDLE_TIMEOUT = 45  # seconds without stream chunks before fallback
+LLM_FINAL_REPLY_TIMEOUT = 90  # seconds to wait for non-stream fallback reply
 
 
 class PipelineStatus(str, Enum):
@@ -47,6 +48,48 @@ class PipelineStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+async def recover_stale_running_pipelines() -> int:
+    """Mark running pipelines from a previous process as failed on startup."""
+    from sqlalchemy import text
+
+    stale_error = "服务重启后上一轮执行已中断，请重新执行当前阶段。"
+    async with async_session_maker() as session:
+        result = await session.execute(
+            text(
+                """
+                UPDATE dev_pipeline
+                SET
+                  status = 'failed',
+                  stages_data = CASE
+                    WHEN stages_data IS NOT NULL AND current_stage IS NOT NULL THEN
+                      jsonb_set(
+                        jsonb_set(
+                          jsonb_set(
+                            stages_data::jsonb,
+                            ARRAY[current_stage, 'status'],
+                            to_jsonb('failed'::text),
+                            true
+                          ),
+                          ARRAY[current_stage, 'error'],
+                          to_jsonb(CAST(:stale_error AS text)),
+                          true
+                        ),
+                        ARRAY[current_stage, 'completed_at'],
+                        to_jsonb(to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SS.MS')),
+                        true
+                      )::text
+                    ELSE stages_data
+                  END,
+                  update_time = (extract(epoch from now()) * 1000)::bigint
+                WHERE status = 'running' AND is_deleted = 0
+                """
+            ),
+            {"stale_error": stale_error},
+        )
+        await session.commit()
+        return result.rowcount or 0
 
 
 STAGE_DEFINITIONS = [
@@ -1967,14 +2010,63 @@ def _normalized_contract_field_name(value: Any) -> str:
     return field.strip("`'\" ")
 
 
+def _first_review_field_value(item: Dict[str, Any], keys: List[str]) -> Any:
+    for key in keys:
+        if item.get(key):
+            return item.get(key)
+    return ""
+
+
 def _review_field_mismatch_is_equivalent(item: Any) -> bool:
     if not isinstance(item, dict):
         return False
-    frontend_field = _normalized_contract_field_name(item.get("frontend_field"))
-    contract_field = _normalized_contract_field_name(item.get("contract_field"))
+    frontend_field = _normalized_contract_field_name(_first_review_field_value(item, [
+        "frontend_field",
+        "frontend_param",
+        "frontend_parameter",
+        "current_field",
+        "actual_field",
+    ]))
+    contract_field = _normalized_contract_field_name(_first_review_field_value(item, [
+        "contract_field",
+        "api_field",
+        "api_param",
+        "api_parameter",
+        "expected_field",
+        "request_field",
+    ]))
     if not frontend_field or not contract_field:
         return False
     return frontend_field == contract_field
+
+
+def _review_suggestions_only_field_related(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return True
+    lowered = text.lower()
+    blocking_keywords = [
+        "依赖",
+        "异常",
+        "兜底",
+        "加载",
+        "空状态",
+        "页面形态",
+        "接口不存在",
+        "运行",
+        "报错",
+        "失败",
+        "mock",
+        "fallback",
+        "loading",
+        "empty",
+        "runtime",
+        "dependency",
+    ]
+    if any(keyword in lowered for keyword in blocking_keywords):
+        return False
+    field_keywords = ["字段", "参数", "param", "field", "queryparam", "contract", "api", "id"]
+    return any(keyword in lowered for keyword in field_keywords)
 
 
 def _normalize_code_review_result(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -1986,11 +2078,16 @@ def _normalize_code_review_result(result: Dict[str, Any]) -> Dict[str, Any]:
     if len(actionable) == len(mismatches):
         return result
 
+    failure_text = "\n".join(
+        str(part or "")
+        for part in (result.get("contract_alignment"), result.get("fix_suggestions"))
+    )
     result["field_mismatches"] = actionable
     if not actionable:
         result["contract_alignment"] = "前端 queryParam 字段已与 API 契约请求参数对齐，无字段名不一致问题。"
-        result["fix_suggestions"] = ""
-        result["review_passed"] = True
+        if _review_suggestions_only_field_related(failure_text):
+            result["fix_suggestions"] = ""
+            result["review_passed"] = True
     return result
 
 
@@ -2428,10 +2525,13 @@ async def _call_agent_with_retry_stream(
 
                 full_reply = "".join(chunks)
                 if not full_reply.strip():
-                    result = await agent_service.chat(
-                        session_id=session_id,
-                        message=message,
-                        agent_type=agent_type,
+                    result = await asyncio.wait_for(
+                        agent_service.chat(
+                            session_id=session_id,
+                            message=message,
+                            agent_type=agent_type,
+                        ),
+                        timeout=LLM_FINAL_REPLY_TIMEOUT,
                     )
                     full_reply = result.get("reply", "")
                     if full_reply:

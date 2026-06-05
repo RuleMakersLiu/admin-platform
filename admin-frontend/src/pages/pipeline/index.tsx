@@ -1174,9 +1174,15 @@ const PipelinePage: React.FC = () => {
     try {
       const submittedFeedback = feedback.trim()
       const result = await pipelineApi.confirm(pipelineId, confirmed, submittedFeedback)
-      message.success(confirmed ? '已确认，推进下一阶段' : '已退回，正在重新执行')
+      if (result?.error) {
+        throw new Error(result.error)
+      }
+      message.success(result?.status === 'completed' ? '流水线执行完成' : confirmed ? '已确认，推进下一阶段' : '已退回，正在重新执行')
       setFeedback('')
       await refreshStatus()
+      if (result?.status === 'completed') {
+        return
+      }
       if (confirmed && result?.stage) {
         // 确认后自动触发下一阶段
         runPipelineStream(pipelineId).catch(() => {})

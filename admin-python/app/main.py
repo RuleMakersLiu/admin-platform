@@ -61,6 +61,13 @@ async def lifespan(app: FastAPI):
         logger.warning(f"⚠️ 消息模块初始化失败: {e}")
 
     await ensure_runtime_schema()
+    try:
+        from app.ai.flow_manager import recover_stale_running_pipelines
+        recovered = await recover_stale_running_pipelines()
+        if recovered:
+            logger.warning(f"Recovered {recovered} stale running pipeline(s) after startup")
+    except Exception as e:
+        logger.warning(f"Failed to recover stale running pipelines: {e}")
 
     # 启动每日 AI 升级定时任务
     upgrade_task = asyncio.create_task(_daily_ai_upgrade_task())

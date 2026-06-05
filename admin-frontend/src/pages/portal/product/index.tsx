@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
-import { Alert, Button, Collapse, Empty, Input, List, Modal, Radio, Space, Steps, Table, Tag, Typography, message } from 'antd'
+import { Alert, Button, Collapse, Empty, Input, List, Modal, Radio, Space, Steps, Table, Tag, Tooltip, Typography, message } from 'antd'
 import {
   CheckCircleOutlined,
   CodeOutlined,
@@ -137,38 +137,73 @@ const reviewFieldValue = (record: Record<string, any>, keys: string[]) => {
   return ''
 }
 
-const reviewFieldMismatchIsEquivalent = (record: Record<string, any>) => {
-  const frontendField = normalizedContractField(reviewFieldValue(record, [
+const frontendReviewField = (record: Record<string, any>) => reviewFieldValue(record, [
     'frontend_field',
     'frontend_param',
     'frontend_parameter',
     'current_field',
     'actual_field',
-  ]))
-  const contractField = normalizedContractField(reviewFieldValue(record, [
+  ])
+
+const contractReviewField = (record: Record<string, any>) => reviewFieldValue(record, [
     'contract_field',
     'api_field',
     'api_param',
     'api_parameter',
     'expected_field',
     'request_field',
-  ]))
+  ])
+
+const reviewFieldMismatchIsEquivalent = (record: Record<string, any>) => {
+  const frontendField = normalizedContractField(frontendReviewField(record))
+  const contractField = normalizedContractField(contractReviewField(record))
   return Boolean(frontendField && contractField && frontendField === contractField)
+}
+
+const reviewSuggestionsOnlyFieldRelated = (value: unknown) => {
+  const text = String(value || '').trim().toLowerCase()
+  if (!text) return true
+  const blockingKeywords = [
+    '依赖',
+    '异常',
+    '兜底',
+    '加载',
+    '空状态',
+    '页面形态',
+    '接口不存在',
+    '运行',
+    '报错',
+    '失败',
+    'mock',
+    'fallback',
+    'loading',
+    'empty',
+    'runtime',
+    'dependency',
+  ]
+  if (blockingKeywords.some((keyword) => text.includes(keyword))) return false
+  return ['字段', '参数', 'param', 'field', 'queryparam', 'contract', 'api', 'id'].some((keyword) => text.includes(keyword))
 }
 
 const normalizeReview = (review: Record<string, any>) => {
   const mismatches = Array.isArray(review.field_mismatches) ? review.field_mismatches : []
   const actionableMismatches = mismatches.filter((item) => !reviewFieldMismatchIsEquivalent(item))
   if (actionableMismatches.length === mismatches.length) return review
+  const failureText = [review.contract_alignment, review.fix_suggestions].filter(Boolean).join('\n')
+  const onlyFieldRelatedFailure = reviewSuggestionsOnlyFieldRelated(failureText)
 
   return {
     ...review,
-    review_passed: actionableMismatches.length ? review.review_passed : true,
+    review_passed: actionableMismatches.length || !onlyFieldRelatedFailure
+      ? review.review_passed
+      : true,
     contract_alignment: actionableMismatches.length
       ? review.contract_alignment
       : '前端 queryParam 字段已与 API 契约请求参数对齐，无字段名不一致问题。',
     field_mismatches: actionableMismatches,
-    fix_suggestions: actionableMismatches.length ? review.fix_suggestions : '',
+    fix_suggestions: actionableMismatches.length || !onlyFieldRelatedFailure
+      ? review.fix_suggestions
+      : '',
   }
 }
 
@@ -237,6 +272,7 @@ const ReviewSummary = ({
         <Table
           size="small"
           pagination={false}
+          scroll={{ x: 560 }}
           rowKey={(record, index) => `${record.location || 'issue'}-${index}`}
           dataSource={mismatches}
           columns={[
@@ -256,8 +292,8 @@ const ReviewSummary = ({
               title: '问题',
               render: (_, record) => (
                 <Space direction="vertical" size={2}>
-                  {record.frontend_field && <Text>当前：<Text code>{record.frontend_field}</Text></Text>}
-                  {record.contract_field && record.contract_field !== '-' && <Text>应为：<Text code>{record.contract_field}</Text></Text>}
+                  {frontendReviewField(record) && <Text>当前：<Text code>{frontendReviewField(record)}</Text></Text>}
+                  {contractReviewField(record) && contractReviewField(record) !== '-' && <Text>应为：<Text code>{contractReviewField(record)}</Text></Text>}
                   {record.fix && <Text type="secondary">{record.fix}</Text>}
                 </Space>
               ),
@@ -532,7 +568,7 @@ export default function ProductPortal() {
         throw new Error(confirmResult.error)
       }
       const targetStage = awaitingConfirmStage || status?.current_stage || currentStage
-      appendLog(`${confirmed ? '确认通过' : '退回调整'}：${stageLabel[awaitingConfirmStage] || awaitingConfirmStage}`)
+      appendLog(`${confirmed ? '确认通过' : '退回调整'}：${stageLabel[targetStage] || targetStage}`)
       if (!confirmed) {
         appendLog(`本次修改意见：${note || '请按人工反馈调整后重新生成。'}`)
         if (targetStage) {
@@ -542,6 +578,13 @@ export default function ProductPortal() {
       }
       setAwaitingConfirmStage('')
       setFeedback('')
+      if (confirmResult?.status === 'completed') {
+        setRunning(false)
+        await refreshOutputs(pipelineId)
+        loadPipelines()
+        message.success('流水线执行完成')
+        return
+      }
       const finalStatus = await runUntilPause(pipelineId, confirmed ? '' : note)
       if (finalStatus?.status === 'failed') {
         message.error('流水线执行失败，请查看阶段输出')
@@ -573,8 +616,8 @@ export default function ProductPortal() {
       mismatches.length
         ? `需修复问题：${mismatches.map((item: any) => [
           item.location,
-          item.frontend_field ? `当前 ${item.frontend_field}` : '',
-          item.contract_field && item.contract_field !== '-' ? `应为 ${item.contract_field}` : '',
+          frontendReviewField(item) ? `当前 ${frontendReviewField(item)}` : '',
+          contractReviewField(item) && contractReviewField(item) !== '-' ? `应为 ${contractReviewField(item)}` : '',
           item.fix,
         ].filter(Boolean).join('，')).join('；')}`
         : '',
@@ -805,6 +848,15 @@ export default function ProductPortal() {
         appendLog(`确认通过：${stageLabel[confirmStage] || confirmStage}`)
         setFeedback('')
         setAwaitingConfirmStage('')
+        if (confirmResult?.status === 'completed') {
+          setRunning(false)
+          const finalStatus = await refreshOutputs(pipelineId)
+          loadPipelines()
+          if (finalStatus?.status === 'completed') {
+            message.success('流水线执行完成')
+          }
+          return
+        }
       }
       const finalStatus = await runUntilPause(pipelineId, note)
       loadPipelines()
@@ -1017,21 +1069,24 @@ export default function ProductPortal() {
                 const runLabel = item.status === 'failed'
                   ? '重新生成'
                   : item.status === 'waiting_confirm'
-                    ? confirmActionLabel(item.current_stage)
+                    ? item.current_stage === 'report'
+                      ? '确认完成'
+                      : `确认${stageLabel[item.current_stage] || '当前阶段'}`
                     : '继续'
                 return (
                   <List.Item
                     actions={[
                       <Button key="view" size="small" onClick={() => restorePipeline(item.pipeline_id)}>查看</Button>,
-                      <Button
-                        key="run"
-                        size="small"
-                        type="link"
-                        disabled={running || !pipelineId || pipelineId !== item.pipeline_id || ['completed', 'cancelled'].includes(item.status)}
-                        onClick={continueSelectedPipeline}
-                      >
-                        {runLabel}
-                      </Button>,
+                      <Tooltip key="run" title={item.status === 'waiting_confirm' ? confirmActionLabel(item.current_stage) : ''}>
+                        <Button
+                          size="small"
+                          type="link"
+                          disabled={running || !pipelineId || pipelineId !== item.pipeline_id || ['completed', 'cancelled'].includes(item.status)}
+                          onClick={continueSelectedPipeline}
+                        >
+                          {runLabel}
+                        </Button>
+                      </Tooltip>,
                       <Button
                         key="delete"
                         size="small"
