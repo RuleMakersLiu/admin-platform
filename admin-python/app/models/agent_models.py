@@ -307,6 +307,9 @@ class ProjectKnowledge(Base):
     permission_model: Mapped[Optional[str]] = mapped_column(Text)
     coding_style: Mapped[Optional[str]] = mapped_column(Text)
     key_files: Mapped[Optional[str]] = mapped_column(Text)
+    project_analysis_schema: Mapped[Optional[str]] = mapped_column(Text)
+    generation_contract: Mapped[Optional[str]] = mapped_column(Text)
+    verification_contract: Mapped[Optional[str]] = mapped_column(Text)
 
     analysis_status: Mapped[str] = mapped_column(String(20), default="pending")
     skill_content: Mapped[Optional[str]] = mapped_column(Text)

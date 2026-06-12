@@ -120,6 +120,18 @@ export default {
     assert "list," in patched
 
 
+def test_sandbox_preview_converts_html_comments_in_generated_scripts():
+    service = SandboxPreviewService()
+
+    patched = service._patch_generated_script_content(
+        "export const ok = true\n<!-- preview runtime guard: Array.isArray(list) || [] -->\n"
+    )
+
+    assert "<!--" not in patched
+    assert "-->" not in patched
+    assert "// preview runtime guard: Array.isArray(list) || []" in patched
+
+
 def test_preview_auto_fix_repairs_stable_missing_page_and_count_fields():
     files = {
         "src/views/Product/RetailList.vue": """
@@ -1375,6 +1387,80 @@ export function oldApi () {
     assert service._generated_api_probe_specs(files) == []
 
 
+def test_sandbox_preview_derives_generated_vue_routes_for_group_buy_pages():
+    service = SandboxPreviewService()
+    files = {
+        "src/views/activityManage/ActivityGroupDetail.vue": "<template />",
+        "src/views/activityManage/ActivityGroupEdit.vue": "<template />",
+        "src/views/activityManage/ActivityGroupList.vue": "<template />",
+        "src/views/activityManage/ActivityGroupTeamList.vue": "<template />",
+        "src/components/ProductSelectorModal.vue": "<template />",
+    }
+
+    specs = service._generated_vue_route_specs(files)
+
+    assert [item["path"] for item in specs] == [
+        "/activity/group/list",
+        "/activity/group/team/list",
+        "/activity/group/edit",
+        "/activity/group/detail",
+    ]
+    assert specs[0]["componentPath"] == "activityManage/ActivityGroupList"
+
+
+def test_sandbox_preview_installs_generated_vue_routes_into_dynamic_router(tmp_path: Path):
+    service = SandboxPreviewService()
+    router_file = tmp_path / "src" / "router" / "generator-routers.js"
+    router_file.parent.mkdir(parents=True)
+    config_file = tmp_path / "src" / "config" / "router.config.js"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text(
+        "import { BasicLayout } from '@/layouts'\nexport const constantRouterMap = [\n]\n",
+        encoding="utf-8",
+    )
+    permission_file = tmp_path / "src" / "permission.js"
+    permission_file.write_text("const whiteList = ['login']\n", encoding="utf-8")
+    router_file.write_text(
+        """
+const rootRouter = {
+  path: '/',
+  component: 'BasicLayout',
+  redirect: '/admins/main',
+  children: []
+}
+
+/**
+ * 动态生成菜单
+ */
+export const generatorDynamicRouter = ({ token }) => {
+  const childrenNav = []
+      // rootRouter.children = childrenNav
+      rootRouter.children = rootRouter.children.concat(childrenNav)
+}
+""",
+        encoding="utf-8",
+    )
+
+    default_path = service._install_generated_vue_routes(
+        tmp_path,
+        {
+            "src/views/activityManage/ActivityGroupList.vue": "<template />",
+            "src/views/activityManage/ActivityGroupEdit.vue": "<template />",
+        },
+    )
+
+    patched = router_file.read_text(encoding="utf-8")
+    assert default_path == "/activity/group/list"
+    assert "SANDBOX_PREVIEW_GENERATED_ROUTES_PATCH_V1" in patched
+    assert '"componentPath": "activityManage/ActivityGroupList"' in patched
+    assert '"path": "/activity/group/list"' in patched
+    assert "rootRouter.redirect = sandboxPreviewGeneratedRoutes[0].redirect" in patched
+    assert "childrenNav.unshift(...sandboxPreviewGeneratedRoutes)" in patched
+    assert "SANDBOX_PREVIEW_STATIC_ROUTES_PATCH_V1" in config_file.read_text(encoding="utf-8")
+    assert "...sandboxPreviewGeneratedRoutes" in config_file.read_text(encoding="utf-8")
+    assert "ActivityGroupList" in permission_file.read_text(encoding="utf-8")
+
+
 def test_vue_cli_preview_keeps_original_dev_server_and_routes_wds_resources(tmp_path: Path):
     service = SandboxPreviewService()
     root = tmp_path / "web-product-agent"
@@ -1423,6 +1509,34 @@ function serve () {
     patched = serve_js.read_text(encoding="utf-8")
     assert "SANDBOX_PREVIEW_DISABLE_WDS_CLIENT_PATCH" in patched
     assert "if (!isProduction && !process.env.VUE_APP_SANDBOX_PREVIEW_DISABLE_WDS_CLIENT)" in patched
+
+
+def test_generated_vue_patch_fixes_invalid_bound_pixel_dimensions():
+    service = SandboxPreviewService()
+
+    patched = service._patch_generated_vue_content(
+        '<template><a-modal :width="800px" :height="480px" :min-width="320px" /></template>'
+    )
+
+    assert 'width="800px"' in patched
+    assert 'height="480px"' in patched
+    assert 'min-width="320px"' in patched
+    assert ':width="800px"' not in patched
+
+
+def test_generated_vue_patch_replaces_missing_moment_instance():
+    service = SandboxPreviewService()
+
+    patched = service._patch_generated_vue_content(
+        "<template><div /></template>\n"
+        "<script>\n"
+        "export default { created() { this.form.time = this.$moment('2026-06-11') } }\n"
+        "</script>\n"
+    )
+
+    assert "import moment from 'moment'" in patched
+    assert "this.$moment" not in patched
+    assert "moment('2026-06-11')" in patched
 
 
 def test_preview_api_base_does_not_double_api_prefix_for_original_project(tmp_path: Path):

@@ -63,6 +63,23 @@ const STAGE_NAMES: Record<string, string> = {
 
 const STAGE_KEYS = ['requirement', 'page_design', 'prototype', 'delivery', 'frontend_dev', 'backend_dev', 'code_review', 'testing', 'commit', 'deploy', 'report']
 const PRODUCT_STAGE_KEYS = ['requirement', 'page_design', 'prototype', 'delivery', 'code_review', 'report']
+const LIVE_STREAM_OUTPUT_LIMIT = 60000
+const STAGE_RENDER_OUTPUT_LIMIT = 120000
+
+const clipOutput = (value: string, limit: number, label: string) => {
+  if (value.length <= limit) return value
+  return [
+    `【${label}过长，已仅保留最近 ${Math.round(limit / 1000)}K 字符，完整内容会在阶段完成后保存到阶段结果。】`,
+    '',
+    value.slice(-limit),
+  ].join('\n')
+}
+
+const appendLiveOutput = (current: string, chunk: string) =>
+  clipOutput(`${current || ''}${chunk || ''}`, LIVE_STREAM_OUTPUT_LIMIT, '实时输出')
+
+const renderSafeOutput = (value: string) =>
+  clipOutput(value || '', STAGE_RENDER_OUTPUT_LIMIT, '阶段输出')
 
 const confirmActionLabel = (stage = '') => {
   const labels: Record<string, string> = {
@@ -964,26 +981,27 @@ const PipelinePage: React.FC = () => {
       setStreamingStage(event.stage)
     }
 
-    if (event.type === 'stage_started' && event.stage) {
+    if ((event.type === 'stage_started' || event.type === 'stage_retry') && event.stage) {
       setExecutionActive(true)
-      setStreamOutputByStage((prev) => ({ ...prev, [event.stage as string]: '' }))
+      const stageKey = event.stage as string
+      setStreamOutputByStage({ [stageKey]: '' })
       setPipeline((prev) => {
         if (!prev) {
           return createPipelineShell(
             event.pipeline_id || pipelineId || '',
             userRequest,
-            event.stage as string,
+            stageKey,
           )
         }
-        const stage = prev.stages?.[event.stage as string]
-        if (!stage) return { ...prev, status: 'running', current_stage: event.stage as string }
+        const stage = prev.stages?.[stageKey]
+        if (!stage) return { ...prev, status: 'running', current_stage: stageKey }
         return {
           ...prev,
           status: 'running',
-          current_stage: event.stage as string,
+          current_stage: stageKey,
           stages: {
             ...prev.stages,
-            [event.stage as string]: { ...stage, status: 'running', output: '' },
+            [stageKey]: { ...stage, status: 'running', output: '' },
           },
         }
       })
@@ -995,7 +1013,7 @@ const PipelinePage: React.FC = () => {
       setExecutionActive(true)
       setStreamOutputByStage((prev) => ({
         ...prev,
-        [stageKey]: `${prev[stageKey] || ''}${event.content || ''}`,
+        [stageKey]: appendLiveOutput(prev[stageKey] || '', event.content || ''),
       }))
       setPipeline((prev) => {
         if (!prev) return prev
@@ -1010,7 +1028,7 @@ const PipelinePage: React.FC = () => {
             [stageKey]: {
               ...stage,
               status: 'running',
-              output: `${stage.output || ''}${event.content || ''}`,
+              output: appendLiveOutput(stage.output || '', event.content || ''),
             },
           },
         }
@@ -1020,6 +1038,11 @@ const PipelinePage: React.FC = () => {
 
     if (event.type === 'stage_completed' && event.stage) {
       const stageKey = event.stage
+      setStreamOutputByStage((prev) => {
+        const next = { ...prev }
+        delete next[stageKey]
+        return next
+      })
       setPipeline((prev) => {
         if (!prev) return prev
         const stage = prev.stages?.[stageKey]
@@ -1044,6 +1067,13 @@ const PipelinePage: React.FC = () => {
     if (['waiting_confirm', 'completed', 'failed', 'done', 'error'].includes(event.type)) {
       setExecutionActive(false)
       streamReconnectKeyRef.current = ''
+      if ((event.type === 'failed' || event.type === 'error') && event.stage) {
+        setStreamOutputByStage((prev) => {
+          const next = { ...prev }
+          delete next[event.stage as string]
+          return next
+        })
+      }
     }
   }, [pipelineId, userRequest])
 
@@ -1052,6 +1082,23 @@ const PipelinePage: React.FC = () => {
     const controller = new AbortController()
     streamAbortRef.current = controller
     setExecutionActive(true)
+    setStreamOutputByStage({})
+    setPipeline((prev) => {
+      const stageKey = prev?.current_stage
+      if (!prev || !stageKey || !prev.stages?.[stageKey]) return prev
+      return {
+        ...prev,
+        status: 'running',
+        stages: {
+          ...prev.stages,
+          [stageKey]: {
+            ...prev.stages[stageKey],
+            status: 'running',
+            output: '',
+          },
+        },
+      }
+    })
     let receivedEvent = false
 
     try {
@@ -1080,7 +1127,7 @@ const PipelinePage: React.FC = () => {
       }
       setExecutionActive(false)
     }
-  }, [applyStreamEvent, refreshStatus])
+  }, [applyStreamEvent, pipeline?.current_stage, refreshStatus])
 
   useEffect(() => {
     if (!pipelineId || !pipeline || pipeline.status !== 'running') return
@@ -1286,7 +1333,9 @@ const PipelinePage: React.FC = () => {
   const activeStageKey = selectedStage || pipeline?.current_stage || ''
   const currentStage = pipeline?.stages?.[activeStageKey]
   const isViewingCurrent = activeStageKey === pipeline?.current_stage
-  const liveStageOutput = (isViewingCurrent && streamOutputByStage[activeStageKey]) || currentStage?.output || ''
+  const hasLiveStageOutput = isViewingCurrent && Object.prototype.hasOwnProperty.call(streamOutputByStage, activeStageKey)
+  const liveStageOutput = hasLiveStageOutput ? streamOutputByStage[activeStageKey] : currentStage?.output || ''
+  const isLiveStreamingOutput = hasLiveStageOutput && executionActive && isViewingCurrent
   const isEditingStageOutput = editingStage === activeStageKey
   const pmQuality = activeStageKey === 'requirement'
     ? currentStage?.structured_output?.pm_quality
@@ -1300,7 +1349,7 @@ const PipelinePage: React.FC = () => {
   // Strip markdown/prg code block wrappers for text stages
   const displayOutput = useMemo(() => {
     if (!liveStageOutput) return ''
-    const raw = String(liveStageOutput)
+    const raw = renderSafeOutput(String(liveStageOutput))
     // If this is a code-heavy stage, return as-is
     if (['development', 'testing', 'code_review'].includes(activeStageKey)) return raw
     // Strip ```markdown, ```prg, ```md wrappers
@@ -1921,7 +1970,20 @@ const PipelinePage: React.FC = () => {
                       }}
                     />
                   ) : (
-                    <MarkdownRenderer content={displayOutput} className="pipeline-markdown" />
+                    isLiveStreamingOutput ? (
+                      <pre style={{
+                        margin: 0,
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                        fontSize: 12,
+                        lineHeight: 1.65,
+                      }}>
+                        {displayOutput}
+                      </pre>
+                    ) : (
+                      <MarkdownRenderer content={displayOutput} className="pipeline-markdown" />
+                    )
                   )}
                 </div>
               )}

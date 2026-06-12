@@ -53,3 +53,12 @@ async def ensure_runtime_schema():
         await conn.execute(
             text("ALTER TABLE agent_project ADD COLUMN IF NOT EXISTS pipeline_prompts TEXT")
         )
+        await conn.execute(
+            text("ALTER TABLE project_knowledge ADD COLUMN IF NOT EXISTS project_analysis_schema TEXT")
+        )
+        await conn.execute(
+            text("ALTER TABLE project_knowledge ADD COLUMN IF NOT EXISTS generation_contract TEXT")
+        )
+        await conn.execute(
+            text("ALTER TABLE project_knowledge ADD COLUMN IF NOT EXISTS verification_contract TEXT")
+        )

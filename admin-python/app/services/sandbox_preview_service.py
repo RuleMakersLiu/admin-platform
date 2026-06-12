@@ -95,10 +95,17 @@ class SandboxPreviewService:
             text_content = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False, indent=2)
             if safe_path.startswith("src/views/") and safe_path.endswith(".vue"):
                 text_content = self._patch_generated_vue_content(text_content)
+            if safe_path.startswith("src/") and safe_path.endswith((".js", ".ts", ".jsx", ".tsx")):
+                text_content = self._patch_generated_script_content(text_content)
             target.write_text(text_content, encoding="utf-8")
+
+    def _patch_generated_script_content(self, content: str) -> str:
+        return re.sub(r"<!--\s*(.*?)\s*-->", lambda match: f"// {match.group(1).strip()}", content, flags=re.S)
 
     def _patch_generated_vue_content(self, content: str) -> str:
         patched = self._patch_stable_contract(content)
+        patched = self._patch_invalid_vue_dimension_bindings(patched)
+        patched = self._patch_missing_moment_instance(patched)
         if "JDictSelectTag" not in patched:
             return patched
         replacements = {
@@ -118,10 +125,189 @@ class SandboxPreviewService:
             patched = patched.replace(source, target)
         return patched
 
+    def _patch_invalid_vue_dimension_bindings(self, content: str) -> str:
+        return re.sub(
+            r":(width|height|min-width|min-height|max-width|max-height)=\"(\d+(?:\.\d+)?px)\"",
+            lambda match: f'{match.group(1)}="{match.group(2)}"',
+            content,
+        )
+
+    def _patch_missing_moment_instance(self, content: str) -> str:
+        if "this.$moment" not in content:
+            return content
+        patched = content.replace("this.$moment", "moment")
+        if re.search(r"import\s+moment\s+from\s+['\"]moment['\"]", patched):
+            return patched
+        script_match = re.search(r"<script[^>]*>", patched)
+        if not script_match:
+            return patched
+        insert_at = script_match.end()
+        return patched[:insert_at] + "\nimport moment from 'moment'\n" + patched[insert_at:]
+
     def _patch_stable_contract(self, content: str) -> str:
         from app.ai.flow_manager import _patch_stable_table_contract_content
 
         return _patch_stable_table_contract_content(content)
+
+    def _generated_vue_route_specs(self, frontend_files: Dict[str, str]) -> list[Dict[str, str]]:
+        specs: list[Dict[str, str]] = []
+
+        for raw_path in sorted(frontend_files):
+            safe_path = str(raw_path).replace("\\", "/").lstrip("/")
+            if not safe_path.startswith("src/views/") or not safe_path.endswith(".vue"):
+                continue
+            component_path = safe_path.removeprefix("src/views/").removesuffix(".vue")
+            component_name = Path(component_path).name
+            tokens = re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+", component_name)
+            route_path = "/" + "/".join(token.lower() for token in tokens if token)
+            if route_path == "/":
+                route_path = "/" + component_path.replace("\\", "/").replace("_", "-").lower()
+            specs.append({
+                "path": route_path,
+                "name": component_name,
+                "componentPath": component_path,
+                "title": component_name,
+                "isNav": 1 if component_name.lower().endswith("list") else 0,
+            })
+
+        def route_rank(spec: Dict[str, str]) -> tuple[int, int, str]:
+            name = spec.get("name", "").lower()
+            path = spec.get("path", "")
+            is_secondary_list = 1 if any(word in name for word in ("team", "record", "log")) else 0
+            is_list = 0 if name.endswith("list") else 1
+            return (is_list, is_secondary_list, len(path), path)
+
+        return sorted(specs, key=route_rank)
+
+    def _install_generated_vue_routes(self, root: Path, frontend_files: Dict[str, str]) -> str:
+        specs = self._generated_vue_route_specs(frontend_files)
+        if not specs:
+            return ""
+
+        self._install_generated_static_routes(root, specs)
+        self._patch_preview_permission_whitelist(root, specs)
+
+        router_file = root / "src" / "router" / "generator-routers.js"
+        if not router_file.exists():
+            return specs[0]["path"]
+
+        marker = "SANDBOX_PREVIEW_GENERATED_ROUTES_PATCH_V1"
+        content = router_file.read_text(encoding="utf-8")
+        if marker in content:
+            return specs[0]["path"]
+
+        route_items = []
+        for index, spec in enumerate(specs, start=1):
+            route_items.append({
+                "id": 900000 + index,
+                "fid": 900000,
+                "type": 1,
+                "isNav": spec["isNav"],
+                "name": spec["path"],
+                "path": spec["path"],
+                "link": spec["path"],
+                "componentPath": spec["componentPath"],
+                "title": spec["title"],
+                "key": spec["name"],
+                "meta": {
+                    "title": spec["title"],
+                    "show": spec["isNav"] == 1,
+                },
+            })
+
+        sandbox_routes = [{
+            "id": 900000,
+            "fid": 0,
+            "type": 1,
+            "isNav": 1,
+            "name": "sandbox-generated-preview",
+            "path": "/sandbox-generated-preview",
+            "component": "RouteView",
+            "componentPath": "RouteView",
+            "title": "生成预览",
+            "redirect": specs[0]["path"],
+            "meta": {
+                "title": "生成预览",
+                "icon": "experiment",
+                "redirectPath": specs[0]["path"],
+            },
+            "son": route_items,
+        }]
+
+        declaration = (
+            f"\n// {marker}\n"
+            f"const sandboxPreviewGeneratedRoutes = {json.dumps(sandbox_routes, ensure_ascii=False, indent=2)}\n"
+        )
+        root_marker = "const rootRouter = {"
+        insert_at = content.find(root_marker)
+        if insert_at == -1:
+            return specs[0]["path"]
+        dynamic_marker = "/**\n * 动态生成菜单"
+        dynamic_at = content.find(dynamic_marker, insert_at)
+        if dynamic_at == -1:
+            return specs[0]["path"]
+        content = content[:dynamic_at] + declaration + "\n" + content[dynamic_at:]
+
+        old = "      // rootRouter.children = childrenNav\n      rootRouter.children = rootRouter.children.concat(childrenNav)\n"
+        new = (
+            "      // rootRouter.children = childrenNav\n"
+            "      if (sandboxPreviewGeneratedRoutes.length) {\n"
+            "        rootRouter.redirect = sandboxPreviewGeneratedRoutes[0].redirect || sandboxPreviewGeneratedRoutes[0].path\n"
+            "        childrenNav.unshift(...sandboxPreviewGeneratedRoutes)\n"
+            "      }\n"
+            "      rootRouter.children = rootRouter.children.concat(childrenNav)\n"
+        )
+        if old not in content:
+            return specs[0]["path"]
+        router_file.write_text(content.replace(old, new, 1), encoding="utf-8")
+        return specs[0]["path"]
+
+    def _install_generated_static_routes(self, root: Path, specs: list[Dict[str, str]]) -> None:
+        router_config = root / "src" / "config" / "router.config.js"
+        if not router_config.exists() or not specs:
+            return
+        marker = "SANDBOX_PREVIEW_STATIC_ROUTES_PATCH_V1"
+        content = router_config.read_text(encoding="utf-8")
+        if marker in content:
+            return
+
+        routes_source = ",\n".join(
+            "  {\n"
+            f"    path: {json.dumps(spec['path'])},\n"
+            f"    name: {json.dumps(spec['name'])},\n"
+            f"    component: () => import('@/views/{spec['componentPath']}.vue'),\n"
+            f"    meta: {{ title: {json.dumps(spec['title'])}, keepAlive: false }}\n"
+            "  }"
+            for spec in specs
+        )
+        declaration = (
+            f"// {marker}\n"
+            "const sandboxPreviewGeneratedRoutes = [\n"
+            f"{routes_source}\n"
+            "]\n\n"
+        )
+        export_marker = "export const constantRouterMap = ["
+        if export_marker not in content:
+            return
+        content = content.replace(export_marker, declaration + export_marker + "\n  ...sandboxPreviewGeneratedRoutes,", 1)
+        router_config.write_text(content, encoding="utf-8")
+
+    def _patch_preview_permission_whitelist(self, root: Path, specs: list[Dict[str, str]]) -> None:
+        permission_file = root / "src" / "permission.js"
+        if not permission_file.exists() or not specs:
+            return
+        marker = "SANDBOX_PREVIEW_WHITELIST_PATCH_V1"
+        content = permission_file.read_text(encoding="utf-8")
+        if marker in content:
+            return
+        names = [spec["name"] for spec in specs]
+        names_source = ", ".join(json.dumps(name) for name in names)
+        content = content.replace(
+            "const whiteList = [",
+            f"// {marker}\nconst whiteList = [{names_source}, ",
+            1,
+        )
+        permission_file.write_text(content, encoding="utf-8")
 
     def _files_hash(self, frontend_files: Dict[str, str]) -> str:
         payload = json.dumps(frontend_files, ensure_ascii=False, sort_keys=True)
@@ -694,6 +880,7 @@ class SandboxPreviewService:
                     await self._prepare_project_root(root, project_info)
                     self._safe_write_files(root, frontend_files)
                     html_preview_path = self._install_miniapp_html_preview(root, frontend_files)
+                    generated_preview_path = self._install_generated_vue_routes(root, frontend_files)
                     self._patch_vue_cli_preview_base(root)
 
                     port = await self._allocate_port()
@@ -732,6 +919,7 @@ class SandboxPreviewService:
                         "VUE_APP_PROXY_LOG": proxy_targets["log"],
                         "VUE_APP_API_BASE_URL": api_base_url,
                         "VUE_APP_SANDBOX_PREVIEW_BASE": self._preview_base(pipeline_id),
+                        "VUE_APP_SANDBOX_PREVIEW_DEFAULT_ROUTE": generated_preview_path,
                         "VUE_APP_SANDBOX_PREVIEW_PUBLIC": env.get("VUE_APP_SANDBOX_PREVIEW_PUBLIC") or "localhost",
                         "VUE_APP_SANDBOX_PREVIEW_DISABLE_WDS_CLIENT": "1",
                     })
@@ -750,6 +938,7 @@ class SandboxPreviewService:
                         "files_hash": files_hash,
                         "tokens": {},
                         "html_preview_path": html_preview_path or "",
+                        "generated_preview_path": generated_preview_path,
                         "project_info": project_info,
                         "proxy_targets": proxy_targets,
                     }
@@ -793,6 +982,7 @@ class SandboxPreviewService:
             "preview_url": self._preview_base(pipeline_id),
             "preview_token": entry["token"],
             "started_at": entry["started_at"],
+            "generated_preview_path": entry.get("generated_preview_path") or "",
             "project": {
                 "project_id": project_info.get("project_id") or marker_info.get("project_id") or "",
                 "project_name": project_info.get("project_name") or marker_info.get("project_name") or "",
@@ -812,6 +1002,10 @@ class SandboxPreviewService:
     def is_running(self, pipeline_id: str) -> bool:
         entry = self._processes.get(pipeline_id)
         return bool(entry and entry["process"].returncode is None)
+
+    def generated_preview_path(self, pipeline_id: str) -> str:
+        entry = self._processes.get(pipeline_id) or {}
+        return str(entry.get("generated_preview_path") or "").lstrip("/")
 
     async def proxy(
         self,
@@ -833,7 +1027,9 @@ class SandboxPreviewService:
             target = f"http://{settings.pipeline_preview_host}:{entry['port']}/{path}"
         else:
             preview_path = entry.get("html_preview_path") if not path else ""
-            target = f"http://{settings.pipeline_preview_host}:{entry['port']}{self._preview_base(pipeline_id)}{path or preview_path or ''}"
+            generated_path = entry.get("generated_preview_path") if not path else ""
+            fallback_path = path or str(preview_path or generated_path or "").lstrip("/")
+            target = f"http://{settings.pipeline_preview_host}:{entry['port']}{self._preview_base(pipeline_id)}{fallback_path}"
         if query_string:
             target = f"{target}?{query_string}"
         headers = {k: v for k, v in request_headers.items() if k.lower() not in {"host", "connection", "content-length"}}

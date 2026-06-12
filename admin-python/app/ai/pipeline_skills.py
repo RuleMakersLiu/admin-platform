@@ -40,6 +40,180 @@ def cleanup_workspace(pipeline_id: str) -> None:
     shutil.rmtree(path, ignore_errors=True)
 
 
+# ==================== Skill: file_writer / file_reader / file_cleaner ====================
+
+@skill_registry.register(
+    skill_id="file_writer",
+    name="文件写入",
+    description="在指定根目录内安全写入文件映射",
+    category="development",
+    agent_type="SYSTEM",
+    input_schema={
+        "root_path": {"type": "string"},
+        "files": {"type": "object", "description": "{relative_path: content}"},
+    },
+    output_schema={
+        "files_written": {"type": "array"},
+        "root_path": {"type": "string"},
+    },
+)
+async def file_writer(root_path: str, files: Dict[str, str], **kwargs) -> Dict[str, Any]:
+    """Write files under root_path without allowing path traversal."""
+    root = Path(root_path).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    written = []
+
+    for filepath, content in (files or {}).items():
+        relative = str(filepath).replace("\\", "/").lstrip("/")
+        parts = [part for part in relative.split("/") if part not in ("", ".", "..")]
+        if not parts:
+            continue
+        target = (root / Path(*parts)).resolve()
+        if root not in target.parents and target != root:
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(str(content), encoding="utf-8")
+        written.append("/".join(parts))
+
+    logger.info(f"file_writer: wrote {len(written)} files to {root}")
+    return {"files_written": written, "root_path": str(root)}
+
+
+_DEFAULT_READ_EXCLUDE_DIRS = {
+    ".git", "node_modules", "dist", ".nuxt", ".next", "__pycache__",
+    "vendor", "target", "build",
+}
+_DEFAULT_BINARY_EXTENSIONS = {
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2",
+    ".ttf", ".eot", ".mp4", ".mp3", ".zip", ".tar", ".gz",
+}
+
+
+@skill_registry.register(
+    skill_id="file_reader",
+    name="文件读取",
+    description="在指定根目录内安全读取文件或扫描目录文件",
+    category="development",
+    agent_type="SYSTEM",
+    input_schema={
+        "root_path": {"type": "string"},
+        "paths": {"type": "array", "description": "相对路径列表；为空则扫描 root_path"},
+        "max_bytes": {"type": "integer", "default": 20000},
+        "path_limits": {"type": "array", "description": "按路径前缀/后缀设置读取上限"},
+        "exclude_dirs": {"type": "array"},
+        "binary_extensions": {"type": "array"},
+    },
+    output_schema={
+        "files": {"type": "object"},
+        "files_read": {"type": "array"},
+    },
+)
+async def file_reader(
+    root_path: str,
+    paths: Optional[List[str]] = None,
+    max_bytes: int = 20000,
+    path_limits: Optional[List[Dict[str, Any]]] = None,
+    exclude_dirs: Optional[List[str]] = None,
+    binary_extensions: Optional[List[str]] = None,
+    **kwargs,
+) -> Dict[str, Any]:
+    """Read text files under root_path without allowing path traversal."""
+    root = Path(root_path).resolve()
+    if not root.exists() or not root.is_dir():
+        return {"files": {}, "files_read": [], "error": "root_path does not exist or is not a directory"}
+
+    excludes = set(exclude_dirs or _DEFAULT_READ_EXCLUDE_DIRS)
+    binary_exts = set(binary_extensions or _DEFAULT_BINARY_EXTENSIONS)
+    default_limit = max(0, int(max_bytes or 0))
+    files: Dict[str, str] = {}
+
+    def safe_relative_path(raw_path: str) -> Optional[Path]:
+        relative = str(raw_path).replace("\\", "/").lstrip("/")
+        parts = [part for part in relative.split("/") if part not in ("", ".", "..")]
+        if not parts:
+            return None
+        candidate = (root / Path(*parts)).resolve()
+        if root not in candidate.parents and candidate != root:
+            return None
+        return candidate
+
+    def read_file(path: Path) -> None:
+        if path.suffix.lower() in binary_exts or not path.is_file():
+            return
+        rel = path.relative_to(root).as_posix()
+        limit = default_limit
+        for rule in path_limits or []:
+            prefixes = tuple(rule.get("prefixes") or [])
+            suffixes = tuple(rule.get("suffixes") or [])
+            if prefixes and not rel.startswith(prefixes):
+                continue
+            if suffixes and not rel.endswith(suffixes):
+                continue
+            try:
+                limit = max(0, int(rule.get("max_bytes", limit)))
+            except (TypeError, ValueError):
+                pass
+            break
+        try:
+            with path.open("r", encoding="utf-8", errors="ignore") as handle:
+                files[rel] = handle.read(limit)
+        except Exception:
+            return
+
+    if paths:
+        for raw_path in paths:
+            candidate = safe_relative_path(raw_path)
+            if candidate:
+                read_file(candidate)
+    else:
+        for current_root, dirs, filenames in os.walk(root):
+            dirs[:] = [name for name in dirs if name not in excludes]
+            for filename in filenames:
+                read_file(Path(current_root) / filename)
+
+    return {"files": files, "files_read": sorted(files)}
+
+
+@skill_registry.register(
+    skill_id="file_cleaner",
+    name="文件清理",
+    description="在指定根目录内安全删除临时文件或目录",
+    category="development",
+    agent_type="SYSTEM",
+    input_schema={
+        "root_path": {"type": "string"},
+        "paths": {"type": "array", "description": "需要删除的相对路径列表"},
+    },
+    output_schema={
+        "files_deleted": {"type": "array"},
+        "root_path": {"type": "string"},
+    },
+)
+async def file_cleaner(root_path: str, paths: Optional[List[str]] = None, **kwargs) -> Dict[str, Any]:
+    """Delete files or directories under root_path without allowing path traversal."""
+    root = Path(root_path).resolve()
+    if not root.exists() or not root.is_dir():
+        return {"files_deleted": [], "root_path": str(root)}
+
+    deleted = []
+    for raw_path in paths or []:
+        relative = str(raw_path).replace("\\", "/").lstrip("/")
+        parts = [part for part in relative.split("/") if part not in ("", ".", "..")]
+        if not parts:
+            continue
+        target = (root / Path(*parts)).resolve()
+        if root not in target.parents and target != root:
+            continue
+        if target.is_dir():
+            shutil.rmtree(target, ignore_errors=True)
+            deleted.append("/".join(parts))
+        elif target.exists():
+            target.unlink()
+            deleted.append("/".join(parts))
+
+    return {"files_deleted": deleted, "root_path": str(root)}
+
+
 # ==================== Skill: code_writer ====================
 
 @skill_registry.register(
@@ -60,15 +234,8 @@ def cleanup_workspace(pipeline_id: str) -> None:
 async def code_writer(pipeline_id: str, code_files: Dict[str, str], **kwargs) -> Dict[str, Any]:
     """将 LLM 生成的代码写入工作区"""
     workspace = ensure_workspace(pipeline_id)
-    written = []
-
-    for filepath, content in code_files.items():
-        full_path = os.path.join(workspace, filepath)
-        os.makedirs(os.path.dirname(full_path), exist_ok=True)
-        with open(full_path, "w", encoding="utf-8") as f:
-            f.write(content)
-        written.append(filepath)
-
+    result = await file_writer(workspace, code_files)
+    written = result.get("files_written", [])
     logger.info(f"code_writer: wrote {len(written)} files to {workspace}")
     return {"files_written": written, "workspace_path": workspace}
 
@@ -221,14 +388,15 @@ async def test_runner(
 _SSH_KEY_DIR = "/tmp/pipeline_ssh"
 
 
-def _prepare_ssh_key(git_config: Any) -> Optional[str]:
-    """将 SSH key 写入临时文件，返回路径"""
+async def _write_ssh_key_via_skill(git_config: Any) -> Optional[str]:
+    """将 SSH key 通过文件写入 Skill 写入临时文件，返回路径。"""
     if not git_config or not git_config.ssh_key:
         return None
-    os.makedirs(_SSH_KEY_DIR, exist_ok=True)
-    key_path = os.path.join(_SSH_KEY_DIR, f"gitconfig_{git_config.id}.key")
-    with open(key_path, "w") as f:
-        f.write(git_config.ssh_key)
+    filename = f"gitconfig_{git_config.id}.key"
+    result = await file_writer(_SSH_KEY_DIR, {filename: git_config.ssh_key})
+    if filename not in result.get("files_written", []):
+        return None
+    key_path = os.path.join(_SSH_KEY_DIR, filename)
     os.chmod(key_path, 0o600)
     return key_path
 
@@ -261,11 +429,11 @@ def _do_git_operations(
     repo_url: str,
     branch: str,
     git_config: Any,
+    ssh_key_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """同步 Git 操作（在 asyncio.to_thread 中执行）"""
     import git as gitpython
 
-    ssh_key_path = _prepare_ssh_key(git_config)
     env = os.environ.copy()
     if ssh_key_path:
         env["GIT_SSH_COMMAND"] = f"ssh -i {ssh_key_path} -o StrictHostKeyChecking=no"
@@ -378,9 +546,10 @@ async def git_commit(
         return {"commit_sha": "local", "pushed": False, "skipped": True, "message": "无 Git 配置，仅本地提交"}
 
     try:
+        ssh_key_path = await _write_ssh_key_via_skill(git_config)
         result = await asyncio.to_thread(
             _do_git_operations,
-            workspace_path, commit_message, repo_url, branch, git_config,
+            workspace_path, commit_message, repo_url, branch, git_config, ssh_key_path,
         )
         return result
     except Exception as e:
@@ -533,7 +702,6 @@ async def dockerfile_generator(workspace_path: str, project_type: str = None, **
     # 写入工作区
     df_path = os.path.join(workspace_path, "Dockerfile")
     if not os.path.isfile(df_path):
-        with open(df_path, "w") as f:
-            f.write(dockerfile)
+        await file_writer(workspace_path, {"Dockerfile": dockerfile})
 
     return {"dockerfile": dockerfile, "project_type": project_type}

@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
-import { Alert, Button, Collapse, Empty, Input, List, Modal, Radio, Space, Steps, Table, Tag, Tooltip, Typography, message } from 'antd'
+import { Alert, Button, Collapse, Empty, Input, List, Modal, Radio, Select, Space, Steps, Table, Tag, Tooltip, Typography, message } from 'antd'
 import {
   CheckCircleOutlined,
   CodeOutlined,
@@ -7,6 +7,7 @@ import {
   FileSearchOutlined,
   FileTextOutlined,
   FullscreenOutlined,
+  PlusOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
   RocketOutlined,
@@ -29,6 +30,27 @@ const stageLabel: Record<string, string> = {
 
 const stageOrder = ['requirement', 'page_design', 'prototype', 'delivery', 'code_review', 'report']
 const LAST_PRODUCT_PIPELINE_ID = 'lastProductPipelineId'
+const LIVE_STREAM_OUTPUT_LIMIT = 60000
+const STAGE_RENDER_OUTPUT_LIMIT = 120000
+const CODE_FILE_RENDER_LIMIT = 80000
+
+const clipOutput = (value: string, limit: number, label: string) => {
+  if (value.length <= limit) return value
+  return [
+    `【${label}过长，已仅保留最近 ${Math.round(limit / 1000)}K 字符，完整内容已保存在流水线阶段结果中。】`,
+    '',
+    value.slice(-limit),
+  ].join('\n')
+}
+
+const appendLiveOutput = (current: string, chunk: string) =>
+  clipOutput(`${current || ''}${chunk || ''}`, LIVE_STREAM_OUTPUT_LIMIT, '实时输出')
+
+const renderStageOutput = (value: string) =>
+  clipOutput(value || '', STAGE_RENDER_OUTPUT_LIMIT, '阶段输出')
+
+const renderCodeFile = (value: string) =>
+  clipOutput(value || '', CODE_FILE_RENDER_LIMIT, '代码文件预览')
 
 const confirmActionLabel = (stage = '') => {
   const labels: Record<string, string> = {
@@ -350,6 +372,7 @@ export default function ProductPortal() {
   const [pipelineListLoading, setPipelineListLoading] = useState(false)
   const [sandboxPreviewUrl, setSandboxPreviewUrl] = useState('')
   const [sandboxPreviewLoading, setSandboxPreviewLoading] = useState(false)
+  const [adjustStage, setAdjustStage] = useState('prototype')
   const autoResumeKeyRef = useRef('')
   const streamActiveRef = useRef(false)
 
@@ -381,7 +404,7 @@ export default function ProductPortal() {
     if (!stage || !content) return
     setStreamOutputByStage((prev) => ({
       ...prev,
-      [stage]: `${prev[stage] || ''}${content}`.slice(-20000),
+      [stage]: appendLiveOutput(prev[stage] || '', content),
     }))
   }
 
@@ -477,6 +500,25 @@ export default function ProductPortal() {
     }
   }
 
+  const startNewRequirement = () => {
+    setPipelineId('')
+    localStorage.removeItem(LAST_PRODUCT_PIPELINE_ID)
+    setRequirement('')
+    setRunning(false)
+    setStatus(null)
+    setArtifact(null)
+    setMatchedSkill(null)
+    setMatchedRequirement('')
+    setSelectedPagePath('')
+    setLogs([])
+    setCurrentStage('')
+    setStreamOutputByStage({})
+    setAwaitingConfirmStage('')
+    setFeedback('')
+    setSandboxPreviewUrl('')
+    autoResumeKeyRef.current = ''
+  }
+
   useEffect(() => {
     const lastId = localStorage.getItem(LAST_PRODUCT_PIPELINE_ID)
     if (lastId) {
@@ -487,11 +529,30 @@ export default function ProductPortal() {
   const runUntilPause = async (id: string, userInput = '') => {
     streamActiveRef.current = true
     setRunning(true)
+    setStreamOutputByStage({})
     try {
       for (let i = 0; i < 16; i += 1) {
         await pipelineApi.executeStream(id, userInput, (event) => {
-          if (event.type === 'stage_started' && event.stage) {
+          if ((event.type === 'stage_started' || event.type === 'stage_retry') && event.stage) {
             setCurrentStage(event.stage)
+            setStreamOutputByStage({ [event.stage]: '' })
+            setStatus((prev) => {
+              const stage = prev?.stages?.[event.stage as string]
+              if (!prev || !stage) return prev
+              return {
+                ...prev,
+                status: 'running',
+                current_stage: event.stage as string,
+                stages: {
+                  ...prev.stages,
+                  [event.stage as string]: {
+                    ...stage,
+                    status: 'running',
+                    output: '',
+                  },
+                },
+              }
+            })
             appendLog(`开始执行：${stageLabel[event.stage] || event.stage}`)
           }
           if (event.type === 'chunk' && event.stage && event.content) {
@@ -499,6 +560,11 @@ export default function ProductPortal() {
             appendStreamOutput(event.stage, event.content)
           }
           if (event.type === 'stage_completed' && event.stage) {
+            setStreamOutputByStage((prev) => {
+              const next = { ...prev }
+              delete next[event.stage as string]
+              return next
+            })
             appendLog(`完成：${stageLabel[event.stage] || event.stage}`)
           }
           if (event.type === 'waiting_confirm' && event.stage) {
@@ -661,6 +727,62 @@ export default function ProductPortal() {
       loadPipelines()
     } catch (error: unknown) {
       message.error(error instanceof Error ? error.message : '按审查意见重新生成失败')
+      setRunning(false)
+    }
+  }
+
+  const adjustCompletedPipeline = async () => {
+    if (!pipelineId) return
+    const note = feedback.trim()
+    if (!note) {
+      message.warning('请先填写这次要调整的问题')
+      return
+    }
+    const targetStage = adjustStage || 'prototype'
+    setRunning(true)
+    try {
+      await pipelineApi.rollback(
+        pipelineId,
+        targetStage,
+        [
+          '流水线完成后人工验收发现问题，请基于以下反馈调整后重新生成。',
+          note,
+        ].join('\n'),
+      )
+      appendLog(`完成后调整：回到${stageLabel[targetStage] || targetStage}`)
+      setAwaitingConfirmStage('')
+      setCurrentStage(targetStage)
+      setFeedback('')
+      setSandboxPreviewUrl('')
+      setStreamOutputByStage((prev) => {
+        const next = { ...prev }
+        const startIndex = Math.max(stageOrder.indexOf(targetStage), 0)
+        stageOrder.slice(startIndex).forEach((stage) => {
+          next[stage] = ''
+        })
+        return next
+      })
+      setArtifact((prev) => prev ? {
+        ...prev,
+        frontend_files: targetStage === 'prototype' || stageOrder.indexOf(targetStage) <= stageOrder.indexOf('prototype') ? {} : prev.frontend_files,
+        preview_html: targetStage === 'prototype' || stageOrder.indexOf(targetStage) <= stageOrder.indexOf('prototype') ? '' : prev.preview_html,
+        preview_url: targetStage === 'prototype' || stageOrder.indexOf(targetStage) <= stageOrder.indexOf('prototype') ? '' : prev.preview_url,
+        review: {},
+        review_output: '',
+        review_status: 'pending',
+      } : prev)
+
+      const finalStatus = await runUntilPause(pipelineId, note)
+      loadPipelines()
+      if (finalStatus?.status === 'failed') {
+        message.error('调整后重新生成失败，请查看阶段输出')
+      } else if (finalStatus?.status === 'waiting_confirm') {
+        message.success('已按反馈重新生成，等待确认')
+      } else if (finalStatus?.status === 'completed') {
+        message.success('已按反馈调整完成')
+      }
+    } catch (error: unknown) {
+      message.error(error instanceof Error ? error.message : '提交调整失败')
       setRunning(false)
     }
   }
@@ -929,10 +1051,15 @@ export default function ProductPortal() {
   const fileItems = Object.entries(artifact?.frontend_files || {}).map(([path, content]) => ({
     key: path,
     label: path,
-    children: <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 12 }}>{content}</pre>,
+    children: (
+      <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12, maxHeight: 420, overflow: 'auto' }}>
+        {renderCodeFile(String(content || ''))}
+      </pre>
+    ),
   }))
 
   const activeStage = currentStage || status?.current_stage || ''
+  const isViewingPipeline = Boolean(pipelineId && status)
   const pendingPageSelection = getPendingPageSelection()
   const pendingPageCandidates = pendingPageSelection?.candidates || []
   const stageItems = stageOrder.map((stage) => {
@@ -949,13 +1076,18 @@ export default function ProductPortal() {
     }
   })
   const streamItems = stageOrder
-    .filter((stage) => streamOutputByStage[stage] || status?.stages?.[stage]?.output)
-    .map((stage) => ({
+    .map((stage) => {
+      const hasLiveOutput = Object.prototype.hasOwnProperty.call(streamOutputByStage, stage)
+      const output = hasLiveOutput ? streamOutputByStage[stage] : status?.stages?.[stage]?.output || ''
+      return { stage, output }
+    })
+    .filter(({ output }) => Boolean(output))
+    .map(({ stage, output }) => ({
       key: stage,
       label: stageLabel[stage] || stage,
       children: (
-        <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 12, maxHeight: 360, overflow: 'auto' }}>
-          {streamOutputByStage[stage] || status?.stages?.[stage]?.output || ''}
+        <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12, maxHeight: 360, overflow: 'auto' }}>
+          {renderStageOutput(output)}
         </pre>
       ),
     }))
@@ -971,14 +1103,32 @@ export default function ProductPortal() {
 
       <div className="workbench-grid">
         <div className="workbench-card" style={{ background: '#fff', border: '1px solid #e5eaf3', borderRadius: 8, padding: 20 }}>
-          <Space style={{ marginBottom: 12 }}>
-            <FileSearchOutlined />
-            <Title level={4} style={{ margin: 0 }}>输入需求</Title>
+          <Space style={{ marginBottom: 12, justifyContent: 'space-between', width: '100%' }}>
+            <Space>
+              <FileSearchOutlined />
+              <Title level={4} style={{ margin: 0 }}>输入需求</Title>
+            </Space>
+            {isViewingPipeline && (
+              <Button size="small" icon={<PlusOutlined />} onClick={startNewRequirement}>
+                新建需求
+              </Button>
+            )}
           </Space>
+
+          {isViewingPipeline && (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="正在查看已有流水线"
+              description="当前需求已进入流水线，不能再次执行需求分析和项目匹配。需要发起新需求时，请先点击新建需求。"
+            />
+          )}
 
           <TextArea
             rows={12}
             value={requirement}
+            disabled={isViewingPipeline}
             onChange={(event) => {
               const nextValue = event.target.value
               setRequirement(nextValue)
@@ -1047,7 +1197,7 @@ export default function ProductPortal() {
             type="primary"
             icon={<PlayCircleOutlined />}
             loading={running && !awaitingConfirmStage}
-            disabled={running || Boolean(awaitingConfirmStage)}
+            disabled={isViewingPipeline || running || Boolean(awaitingConfirmStage)}
             block
             style={{ marginTop: 16 }}
             onClick={handleCreatePipeline}
@@ -1076,17 +1226,21 @@ export default function ProductPortal() {
                 return (
                   <List.Item
                     actions={[
-                      <Button key="view" size="small" onClick={() => restorePipeline(item.pipeline_id)}>查看</Button>,
-                      <Tooltip key="run" title={item.status === 'waiting_confirm' ? confirmActionLabel(item.current_stage) : ''}>
-                        <Button
-                          size="small"
-                          type="link"
-                          disabled={running || !pipelineId || pipelineId !== item.pipeline_id || ['completed', 'cancelled'].includes(item.status)}
-                          onClick={continueSelectedPipeline}
-                        >
-                          {runLabel}
-                        </Button>
-                      </Tooltip>,
+                      <Button key="view" size="small" onClick={() => restorePipeline(item.pipeline_id)}>
+                        {item.status === 'completed' ? '查看/调整' : '查看'}
+                      </Button>,
+                      ...(item.status !== 'completed' && item.status !== 'cancelled' ? [(
+                        <Tooltip key="run" title={item.status === 'waiting_confirm' ? confirmActionLabel(item.current_stage) : ''}>
+                          <Button
+                            size="small"
+                            type="link"
+                            disabled={running || !pipelineId || pipelineId !== item.pipeline_id}
+                            onClick={continueSelectedPipeline}
+                          >
+                            {runLabel}
+                          </Button>
+                        </Tooltip>
+                      )] : []),
                       <Button
                         key="delete"
                         size="small"
@@ -1222,6 +1376,47 @@ export default function ProductPortal() {
                         </Button>
                       </Space>
                     )}
+                  </Space>
+                }
+              />
+            )}
+            {status?.status === 'completed' && (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginTop: 16 }}
+                message="验收后需要调整"
+                description={
+                  <Space direction="vertical" style={{ width: '100%' }}>
+                    <Text type="secondary">
+                      发现预览、页面设计、API 契约或报告不符合预期时，可以带着反馈回到指定阶段重新生成。
+                    </Text>
+                    <Space wrap>
+                      <Text>从</Text>
+                      <Select
+                        value={adjustStage}
+                        style={{ width: 180 }}
+                        onChange={setAdjustStage}
+                        options={[
+                          { value: 'prototype', label: '前端预览代码' },
+                          { value: 'page_design', label: '页面设计' },
+                          { value: 'requirement', label: '需求分析' },
+                          { value: 'delivery', label: 'API 契约' },
+                          { value: 'code_review', label: '自动审查' },
+                          { value: 'report', label: '报告' },
+                        ]}
+                      />
+                      <Text>阶段重新调整</Text>
+                    </Space>
+                    <TextArea
+                      rows={3}
+                      value={feedback}
+                      onChange={(event) => setFeedback(event.target.value)}
+                      placeholder="例如：真实预览里新增和编辑都不能打开/保存；请修复创建页路由、编辑回填、SKU 选择和保存成功态，并用 Playwright 跑通新增和编辑。"
+                    />
+                    <Button type="primary" icon={<ReloadOutlined />} loading={running} onClick={adjustCompletedPipeline}>
+                      提交反馈并重新调整
+                    </Button>
                   </Space>
                 }
               />

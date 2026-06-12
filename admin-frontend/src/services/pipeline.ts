@@ -140,7 +140,7 @@ export interface PipelineListItem {
 }
 
 export interface PipelineStreamEvent {
-  type: 'stage_started' | 'chunk' | 'stage_completed' | 'waiting_confirm' | 'stage_advanced' | 'completed' | 'failed' | 'done' | 'error' | 'heartbeat'
+  type: 'stage_started' | 'stage_retry' | 'stage_auto_fixed' | 'chunk' | 'stage_completed' | 'waiting_confirm' | 'stage_advanced' | 'completed' | 'failed' | 'done' | 'error' | 'heartbeat'
   pipeline_id?: string
   stage?: string
   status?: string
@@ -150,9 +150,16 @@ export interface PipelineStreamEvent {
   need_confirm?: boolean
   error?: string
   result?: Record<string, any>
+  attempt?: number
+  max_attempts?: number
+  reason?: string
+  issues?: string[]
+  fixes?: string[]
+  repair_tasks?: Array<Record<string, any>>
 }
 
 const BASE = '/flow/pipeline'
+const SSE_BUFFER_LIMIT = 1024 * 1024
 
 const parseSseFrame = (frame: string): PipelineStreamEvent | null => {
   const dataLines = frame
@@ -235,6 +242,9 @@ export const pipelineApi = {
       }
 
       buffer += decoder.decode(value, { stream: true })
+      if (buffer.length > SSE_BUFFER_LIMIT) {
+        buffer = buffer.slice(-SSE_BUFFER_LIMIT)
+      }
       const frames = buffer.split(/\r?\n\r?\n/)
       buffer = frames.pop() || ''
 
