@@ -1,14 +1,14 @@
-# Admin Platform - AI 驱动的项目生命周期管理平台
+# Admin Platform - AI 驱动的项目生命周期工作台
 
 > 通过 6 个 AI Agent 协作，自动完成从需求分析、代码生成、测试到部署的完整开发流程。
-> 支持 Java/PHP/Go/Python/Node.js 等多语言项目。
+> 支持多语言项目接入、项目级 Skill 沉淀、知识库检索、项目关系图谱和可验证的开发流水线。
 
 ## 架构概览
 
 ```
 ┌──────────────────────────────────────────────────────┐
 │            React Frontend (3000)                      │
-│   Vite + Ant Design 5 + Zustand | 暗色科技风 UI       │
+│   Vite + Ant Design 5 + Zustand | 管理工作台 UI       │
 └──────────────────────────────────────────────────────┘
                         │
                         ▼
@@ -35,10 +35,10 @@
 
 | 服务 | 技术 | 端口 | 说明 |
 |------|------|------|------|
-| React 前端 | Vite + Ant Design 5 + Zustand | 3000 | 暗色科技风管理后台 |
+| React 前端 | Vite + Ant Design 5 + Zustand | 3000 | 项目、流水线、知识库管理工作台 |
 | Go 网关 | Gin + JWT + Redis | 8080 | 统一入口，认证鉴权 |
 | Python 后端 | FastAPI + SQLAlchemy | 8081 | 核心业务，AI Agent 编排 |
-| Go 代码生成 | Gin + Claude API | 8082 | 项目模板，代码生成 |
+| Go 代码生成 | Gin + LLM API | 8082 | 项目模板，代码生成 |
 | Go 部署 | Gin + Docker SDK | 8083 | 容器化部署流水线 |
 | Go 配置中心 | Gin | 8085 | 系统配置管理 |
 | PostgreSQL | 15+ | 5432 | 主数据库 |
