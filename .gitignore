@@ -17,6 +17,8 @@ Thumbs.db
 node_modules/
 dist/
 *.tsbuildinfo
+playwright-report/
+test-results/
 
 # Python
 __pycache__/
