@@ -33,6 +33,7 @@ const ProjectListPage: React.FC = () => {
   const [langEditProject, setLangEditProject] = useState<any>(null)
   const [editLang, setEditLang] = useState<string>('')
   const [editFw, setEditFw] = useState<string>('')
+  const [graphRebuilding, setGraphRebuilding] = useState(false)
 
   const fetchProjects = async (p = page) => {
     setLoading(true)
@@ -75,6 +76,22 @@ const ProjectListPage: React.FC = () => {
       message.error(e?.message || '分析失败')
     } finally {
       setAnalyzingIds(prev => { const s = new Set(prev); s.delete(id); return s })
+    }
+  }
+
+  const handleRebuildGraph = async () => {
+    setGraphRebuilding(true)
+    try {
+      const result: any = await api.post('/flow/projects/knowledge-graph/rebuild')
+      const review = result?.review || result?.data?.review
+      const graph = result?.graph || result?.data?.graph
+      const passed = review?.passed
+      message.success(`项目图谱维护完成：${graph?.nodes?.length || 0} 个项目，${graph?.edges?.length || 0} 条关系${passed ? '，审查通过' : ''}`)
+      if (projects.length > 0) loadKnowledge(projects.map((p: any) => p.id))
+    } catch (e: any) {
+      message.error(e?.message || '项目图谱维护失败')
+    } finally {
+      setGraphRebuilding(false)
     }
   }
 
@@ -289,6 +306,9 @@ const ProjectListPage: React.FC = () => {
           </Button>
           <Button icon={<ReloadOutlined />} onClick={() => fetchProjects()}>
             刷新
+          </Button>
+          <Button icon={<BranchesOutlined />} loading={graphRebuilding} onClick={handleRebuildGraph}>
+            重建图谱
           </Button>
         </Space>
       </div>

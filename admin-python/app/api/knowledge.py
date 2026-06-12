@@ -139,14 +139,21 @@ async def get_graph(
     http_request: Request,
     category: Optional[str] = None,
     max_nodes: int = 50,
+    scope: str = "project",
 ):
-    """获取知识图谱"""
+    """获取图谱。默认返回项目关系图谱。"""
     tenant_id = _get_tenant_id(http_request)
-    graph = await knowledge_service.get_graph(
-        tenant_id=tenant_id,
-        category=category,
-        max_nodes=max_nodes,
-    )
+    if scope == "knowledge":
+        graph = await knowledge_service.get_graph(
+            tenant_id=tenant_id,
+            category=category,
+            max_nodes=max_nodes,
+        )
+    else:
+        graph = await knowledge_service.get_project_graph(
+            tenant_id=tenant_id,
+            max_nodes=max_nodes,
+        )
     return {"code": 200, "data": graph}
 
 

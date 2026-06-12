@@ -3,6 +3,7 @@ import time
 import uuid
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select, update, delete, func, and_, or_
@@ -33,6 +34,162 @@ PROJECT_SKILL_MATCH_PROMPT = """你是需求入口的项目 Skill 路由器。�
 输出格式：
 {{"project_id": 123, "confidence": 0.82, "match_reason": "选择原因，简明说明匹配到的业务关键词和 Skill 能力"}}
 """
+
+
+def _parse_knowledge_tags(raw_tags: Any) -> List[str]:
+    """Parse legacy tag payloads without letting bad data break search."""
+    if raw_tags is None:
+        return []
+
+    if isinstance(raw_tags, list):
+        values = raw_tags
+    else:
+        text = str(raw_tags).strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            parsed = [
+                part.strip()
+                for part in re.split(r"[,，;；\s]+", text)
+                if part.strip()
+            ]
+        values = parsed if isinstance(parsed, list) else [parsed]
+    return [str(item).strip() for item in values if str(item).strip()]
+
+
+def _knowledge_graph_dedupe_key(record: AgentKnowledge) -> str:
+    """Collapse recurring operational snapshots that otherwise flood the graph."""
+    title = (record.title or "").strip()
+    source = (record.source or "").strip()
+    category = (record.category or "").strip()
+    tags = _parse_knowledge_tags(record.tags)
+    project_tag = next((tag for tag in tags if tag.startswith("project:")), "")
+
+    if category == "ai_upgrade":
+        return f"category:{category}:source:{source or 'auto_upgrade'}"
+    if category == "project_analysis":
+        normalized_title = re.sub(r"\s+", " ", title)
+        return f"category:{category}:title:{normalized_title}"
+    if category == "pipeline_delivery" and project_tag:
+        request_tag = next((tag for tag in tags if tag.startswith("request:")), "")
+        return f"category:{category}:{project_tag}:{request_tag}"
+    if source:
+        return f"source:{source}"
+    return f"id:{record.knowledge_id}"
+
+
+def _knowledge_graph_inferred_edges(nodes: List[AgentKnowledge], existing_edges: List[KnowledgeEdge]) -> List[Dict[str, Any]]:
+    """Infer lightweight view-only graph edges from project ids and tags."""
+    existing_pairs = {
+        tuple(sorted((edge.source_id, edge.target_id)))
+        for edge in existing_edges
+    }
+    generic_tags = {
+        "ai", "upgrade", "frontier", "daily", "auto-analysis", "unknown",
+        "pipeline_delivery", "project_profile", "project_knowledge", "skill",
+    }
+    inferred: List[Dict[str, Any]] = []
+    per_node_count: Dict[str, int] = {}
+
+    def tags_for(item: AgentKnowledge) -> set[str]:
+        return {
+            tag
+            for tag in _parse_knowledge_tags(item.tags)
+            if tag and tag not in generic_tags and not tag.startswith("stage:")
+        }
+
+    node_tags = {item.knowledge_id: tags_for(item) for item in nodes}
+
+    for index, source in enumerate(nodes):
+        source_tags = node_tags[source.knowledge_id]
+        scored: List[tuple[float, AgentKnowledge, str]] = []
+        for target in nodes[index + 1:]:
+            pair = tuple(sorted((source.knowledge_id, target.knowledge_id)))
+            if pair in existing_pairs:
+                continue
+
+            target_tags = node_tags[target.knowledge_id]
+            shared_tags = source_tags & target_tags
+            score = 0.0
+            reason = "标签相关"
+
+            if source.project_id and source.project_id == target.project_id:
+                score += 0.5
+                reason = "同项目"
+            project_tags = {tag for tag in source_tags if tag.startswith("project:")} & {
+                tag for tag in target_tags if tag.startswith("project:")
+            }
+            if project_tags:
+                score += 0.45
+                reason = "同项目"
+            if shared_tags:
+                score += min(0.45, len(shared_tags) * 0.12)
+                reason = "共享标签"
+            if source.category == target.category and source.category not in {"ai_upgrade"}:
+                score += 0.12
+
+            if score < 0.45:
+                continue
+            scored.append((min(score, 0.95), target, reason))
+
+        for score, target, reason in sorted(scored, key=lambda item: item[0], reverse=True):
+            if per_node_count.get(source.knowledge_id, 0) >= 3 or per_node_count.get(target.knowledge_id, 0) >= 3:
+                continue
+            inferred.append({
+                "id": f"INFER-{source.knowledge_id}-{target.knowledge_id}",
+                "source": source.knowledge_id,
+                "target": target.knowledge_id,
+                "relation": "related_to",
+                "weight": round(score, 2),
+                "description": f"Inferred: {reason}",
+                "inferred": True,
+            })
+            per_node_count[source.knowledge_id] = per_node_count.get(source.knowledge_id, 0) + 1
+            per_node_count[target.knowledge_id] = per_node_count.get(target.knowledge_id, 0) + 1
+
+    return inferred
+
+
+def _project_graph_role(project: ProjectKnowledge) -> str:
+    name = (project.project_name or "").lower()
+    if name.startswith("web-") or name.startswith("web_"):
+        return "frontend"
+    if "core" in name:
+        return "core"
+    if "service" in name:
+        return "service"
+    if name.endswith("-home") or name.endswith("_home") or "admin-home" in name:
+        return "api"
+
+    text = " ".join([
+        project.project_name or "",
+        project.project_brief or "",
+        project.tech_summary or "",
+        project.architecture or "",
+    ]).lower()
+    if any(term in text for term in ("core层", "model", "数据模型", "-core", "core")):
+        return "core"
+    if any(term in text for term in ("service层", "service layer", "-service", "service")):
+        return "service"
+    if any(term in text for term in ("controller", "接口", "api", "admin-home", "-home")):
+        return "api"
+    if any(term in text for term in ("前端", "frontend", "vue", "react", "web-")):
+        return "frontend"
+    return "project"
+
+
+def _project_graph_edge(source: ProjectKnowledge, target: ProjectKnowledge, relation: str, weight: float, reason: str) -> Dict[str, Any]:
+    return {
+        "id": f"PROJECT-{source.project_id}-{relation}-{target.project_id}",
+        "source": f"PROJECT-{source.project_id}",
+        "target": f"PROJECT-{target.project_id}",
+        "relation": relation,
+        "weight": weight,
+        "description": reason,
+        "inferred": True,
+    }
 
 
 async def resolve_project_skill_tenant_scope(admin_id: int, tenant_id: int) -> Dict:
@@ -94,6 +251,51 @@ def _stringify_list(value: Any) -> List[str]:
     return [str(value)]
 
 
+def _json_contract_text(value: Any) -> str:
+    """Store structured project-analysis contracts as stable JSON text."""
+    if value is None or value == "":
+        return ""
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return ""
+        try:
+            parsed = json.loads(stripped)
+        except (json.JSONDecodeError, TypeError):
+            return stripped
+        return json.dumps(parsed, ensure_ascii=False, indent=2)
+    return json.dumps(value, ensure_ascii=False, indent=2)
+
+
+def _format_contract_block(value: Any, fallback: str) -> str:
+    text = _json_contract_text(value)
+    return text or fallback
+
+
+def _classify_requirement_for_knowledge(text: str) -> str:
+    """Classify delivery knowledge for search/graph context without routing a live pipeline."""
+    normalized = (text or "").strip()
+    if not normalized:
+        return "unknown"
+    explicit_existing = bool(
+        re.search(r"(现有|已有|原有|既有)(?:的)?(?:页面|列表|详情|表单|功能)", normalized)
+        or re.search(r"当前(?:页面|列表|详情|表单|功能)", normalized)
+    )
+    page_creation_signal = any(
+        marker in normalized
+        for marker in ("页面位置建议", "页面位置", "页面功能", "菜单入口", "路由路径", "默认落点")
+    )
+    if page_creation_signal and not explicit_existing:
+        return "new_page"
+    if explicit_existing:
+        return "existing_page_change"
+    if re.search(r"(新增|新建|创建|搭建|生成|做一个|开发一个).{0,80}(页面|列表|详情|表单|管理|配置|功能|工作台|看板)", normalized):
+        return "new_page"
+    if re.search(r"(增加|添加|新增|补充|优化|调整|修改).{0,40}(筛选|查询|搜索|字段|按钮|表格|列)", normalized):
+        return "existing_page_change"
+    return "unknown"
+
+
 def _attr(obj: Any, name: str, default: Any = "") -> Any:
     """Read object or dict values with one small helper for testability."""
     if isinstance(obj, dict):
@@ -146,6 +348,66 @@ def _build_project_skill_content(project: Any) -> str:
 ## Key Files
 {key_file_lines}
 
+## Structured Project Analysis Schema
+{_format_contract_block(_attr(project, "project_analysis_schema"), "No structured analysis schema captured.")}
+
+## Structured Generation Contract
+{_format_contract_block(_attr(project, "generation_contract"), "No structured generation contract captured.")}
+
+## Structured Verification Contract
+{_format_contract_block(_attr(project, "verification_contract"), "No structured verification contract captured.")}
+
+## Pipeline Execution Contract
+Use this section as the source of truth when requirement, page design, prototype, delivery, code review, and report stages run.
+
+### Project Analysis Checklist
+- Identify whether the request is a new page, an existing-page change, or a shared component/API change before designing pages.
+- Treat "页面位置建议", "页面功能", new menu placement, route/default-landing suggestions, and new management/configuration capability requests as new-page signals unless the user explicitly says an existing page must be changed.
+- Existing page candidates are target files only for explicit existing/current/original page changes. For new pages, existing list/detail/form pages are style references only and must not be auto-selected as the implementation target.
+- For ordinary admin/configuration CRUD pages, classify create/edit as a modal, drawer, or shared form component by default. Do not turn "新增/编辑" wording into separate primary create and edit route pages unless the requirement explicitly asks for independent routes, breadcrumbs, or multi-step forms.
+- In action matrices, record user-visible commands only. Do not make drawer/modal/component names such as "新建/编辑抽屉" or "编辑弹窗" required button labels; those are support containers opened by visible commands like "新建批次" and row-level "编辑".
+- Map business terms to repository terms: route names, menu names, component names, API module names, permission keys, and domain model names.
+- Inspect existing examples for list pages, create/edit pages, detail pages, selector modals, export flows, and status actions before generating a new pattern.
+- Record the exact response envelope, pagination fields, error-code shape, and auth/tenant headers used by this project.
+- Record the command set needed to verify generated work: unit tests, lint/build, preview server, Playwright/e2e path, and known sandbox caveats.
+
+### Frontend Generation Contract
+- Follow existing route and directory conventions; do not invent unrelated `src/views/**/List.vue` or `src/pages/**/index.tsx` paths when a matching module already exists.
+- Existing-page changes must preserve the original API flow, table columns, query params, mixins/hooks, permissions, and state handling unless the requirement explicitly asks to replace them.
+- New page requests must create project-appropriate page paths from the requested menu/route/module semantics. Do not reuse an unrelated order/product/activity list page merely because it has similar CRUD controls.
+- New admin/configuration CRUD pages should usually generate one list page plus create/edit modal/drawer support. A combined "新增/编辑" action is covered by one shared form component unless independent create/edit pages are explicitly required.
+- Visible actions must use command labels, not container labels. Implement "新建/编辑抽屉" as a drawer/modal opened by "新建" and "编辑" controls instead of requiring a literal "新建/编辑抽屉" button.
+- New pages must include preview-safe mock/fallback data in service/API files, but the mock shape must match the project API contract exactly.
+- Every primary page from page design must have a corresponding page file. Support components, selector modals, and shared services may be reused across pages.
+- List pages must follow the project table contract, including pagination input/output field names, empty list fallback, loading state, error state, and refresh behavior.
+- Create/edit pages must define validation, submit loading, duplicate-submit protection, cancel/return path, and edit-mode data hydration.
+- Detail pages must define missing-id handling, loading/error states, field fallback rendering, and links back to the source list.
+- Selector modals must use real project component patterns, search/reset behavior, row selection, confirm/cancel behavior, and safe empty data.
+
+### API And Data Contract
+- Never relax the project response envelope into a generic `{{code, msg, data}}` or `{{code, message, data}}` unless that exact shape is confirmed in this skill.
+- Page, list, count, total, records, current, size, and tenant/auth header names must match project conventions.
+- Every page field used in UI must map to request/response/API-contract fields; equivalent aliases must be documented instead of silently invented.
+- API modules must cover every page action declared in page design, including list/detail/save/update/status/export/manual actions.
+- Mock data must include success, empty, and failure-safe examples that preserve the same field names as real responses.
+
+### Permission And State Contract
+- Map menu, route, button, row action, API, and data-scope permissions separately.
+- Generated UI must use the project permission directive/helper exactly as existing pages do.
+- For each status action, document visible/enabled/disabled rules, confirm copy, request payload, success refresh scope, and failure message.
+- Do not hide missing permissions by removing actions from the design; record them as explicit permission requirements.
+
+### Review Gates
+- Requirement analysis must name the matched frontend and backend projects and list assumptions that affect design or development.
+- Page design must include route/menu/default landing, primary-page list, support components, field tables, action matrix, state matrix, and API draft.
+- Prototype must parse as structured file output and pass deterministic checks before human review.
+- Code review must verify project conventions, field alignment, API coverage, permission coverage, page coverage, mock boundaries, and runnable preview assumptions.
+
+## AGENTS.md Handoff Notes
+- Keep this project skill concise enough to inject into prompts, but concrete enough that an agent can generate code without rereading the whole repository.
+- If an agent discovers a repeated convention while fixing a pipeline failure, update the project analysis fields or this skill before rerunning future pipelines.
+- Prefer adding deterministic validation for durable project rules instead of only adding prose to prompts.
+
 ## Development Guardrails
 - Generate preview HTML, frontend code, and API contract first.
 - Do not generate backend implementation in the first-version pipeline.
@@ -181,6 +443,9 @@ def _project_skill_to_dict(project: Any) -> Dict:
         data.setdefault("permission_model", "")
         data.setdefault("coding_style", "")
         data.setdefault("key_files", [])
+        data.setdefault("project_analysis_schema", "")
+        data.setdefault("generation_contract", "")
+        data.setdefault("verification_contract", "")
         data.setdefault("analysis_status", "")
         data.setdefault("skill_content", "")
         data.setdefault("skill_status", "")
@@ -558,6 +823,301 @@ class KnowledgeService:
     # ---- CRUD ----
 
     @staticmethod
+    async def get_project_graph(
+        tenant_id: int = 1,
+        max_nodes: int = 50,
+    ) -> Dict[str, Any]:
+        """获取项目关系图谱，不混入流水线交付或日报知识条目。"""
+        async with async_session_maker() as session:
+            result = await session.execute(
+                select(ProjectKnowledge)
+                .where(ProjectKnowledge.tenant_id.in_([tenant_id, 0]))
+                .order_by(ProjectKnowledge.update_time.desc())
+                .limit(max_nodes)
+            )
+            projects = result.scalars().all()
+
+        if not projects:
+            return {"nodes": [], "edges": []}
+
+        roles = {project.project_id: _project_graph_role(project) for project in projects}
+        api_projects = [project for project in projects if roles[project.project_id] == "api"]
+        service_projects = [project for project in projects if roles[project.project_id] == "service"]
+        core_projects = [project for project in projects if roles[project.project_id] == "core"]
+        frontend_projects = [project for project in projects if roles[project.project_id] == "frontend"]
+
+        edges: List[Dict[str, Any]] = []
+        seen_edges: set[tuple[int, int, str]] = set()
+
+        def add_edge(source: ProjectKnowledge, target: ProjectKnowledge, relation: str, weight: float, reason: str) -> None:
+            key = (source.project_id, target.project_id, relation)
+            if source.project_id == target.project_id or key in seen_edges:
+                return
+            seen_edges.add(key)
+            edges.append(_project_graph_edge(source, target, relation, weight, reason))
+
+        for frontend in frontend_projects:
+            for api_project in api_projects:
+                add_edge(frontend, api_project, "uses_api", 0.9, "前端项目调用接口项目")
+
+        for api_project in api_projects:
+            for service in service_projects:
+                add_edge(api_project, service, "depends_on", 0.9, "接口项目依赖服务层")
+
+        for service in service_projects:
+            for core in core_projects:
+                add_edge(service, core, "depends_on", 0.9, "服务层依赖 core 层")
+
+        ignored_tokens = {"web", "agent", "wealth", "glsw"}
+        for left_index, left in enumerate(projects):
+            left_tokens = {
+                item
+                for item in re.split(r"[-_\\s]+", (left.project_name or "").lower())
+                if item and item not in ignored_tokens
+            }
+            for right in projects[left_index + 1:]:
+                if any(
+                    (left.project_id, right.project_id, relation) in seen_edges
+                    or (right.project_id, left.project_id, relation) in seen_edges
+                    for relation in ("uses_api", "depends_on", "related_to")
+                ):
+                    continue
+                right_tokens = {
+                    item
+                    for item in re.split(r"[-_\\s]+", (right.project_name or "").lower())
+                    if item and item not in ignored_tokens
+                }
+                if left_tokens & right_tokens:
+                    add_edge(left, right, "related_to", 0.45, "项目名称或业务域相关")
+
+        role_labels = {
+            "frontend": "前端项目",
+            "api": "接口项目",
+            "service": "服务层项目",
+            "core": "Core 项目",
+            "project": "项目",
+        }
+        return {
+            "nodes": [
+                {
+                    "id": f"PROJECT-{project.project_id}",
+                    "title": project.project_name,
+                    "category": roles[project.project_id],
+                    "tags": [
+                        role_labels.get(roles[project.project_id], "项目"),
+                        project.language or "",
+                        project.framework or "",
+                        f"skill:{project.skill_status or 'draft'}",
+                    ],
+                    "project_id": project.project_id,
+                }
+                for project in projects
+            ],
+            "edges": edges,
+        }
+
+    @staticmethod
+    def review_project_graph(graph: Dict[str, Any]) -> Dict[str, Any]:
+        """Review project graph quality from multiple agent perspectives."""
+        nodes = graph.get("nodes") or []
+        edges = graph.get("edges") or []
+        node_ids = {node.get("id") for node in nodes}
+        degree: Dict[str, int] = {str(node.get("id")): 0 for node in nodes}
+        for edge in edges:
+            if edge.get("source") in degree:
+                degree[str(edge.get("source"))] += 1
+            if edge.get("target") in degree:
+                degree[str(edge.get("target"))] += 1
+
+        roles: Dict[str, List[Dict[str, Any]]] = {}
+        for node in nodes:
+            roles.setdefault(str(node.get("category") or "project"), []).append(node)
+
+        findings: List[Dict[str, str]] = []
+        warnings: List[Dict[str, str]] = []
+
+        def add(agent: str, message: str, severity: str = "blocker") -> None:
+            target = warnings if severity == "warning" else findings
+            target.append({"agent": agent, "message": message, "severity": severity})
+
+        if not nodes:
+            add("PM", "Project graph has no project nodes.")
+        if any(not str(node.get("id", "")).startswith("PROJECT-") for node in nodes):
+            add("Architect", "Project graph contains non-project nodes.")
+        if len(node_ids) != len(nodes):
+            add("Architect", "Project graph contains duplicate project node ids.")
+        if nodes and not edges:
+            add("Architect", "Project graph has project nodes but no relationships.")
+
+        for node in nodes:
+            if len(nodes) > 1 and degree.get(str(node.get("id")), 0) == 0:
+                add("Architect", f"Project node is isolated: {node.get('title')}")
+            if any(str(tag).startswith("skill:draft") for tag in (node.get("tags") or [])):
+                add("PM", f"Project Skill is still draft: {node.get('title')}", severity="warning")
+
+        frontend_ids = {node.get("id") for node in roles.get("frontend", [])}
+        api_ids = {node.get("id") for node in roles.get("api", [])}
+        service_ids = {node.get("id") for node in roles.get("service", [])}
+        core_ids = {node.get("id") for node in roles.get("core", [])}
+
+        for frontend_id in frontend_ids:
+            if not any(edge.get("source") == frontend_id and edge.get("target") in api_ids for edge in edges):
+                title = next((node.get("title") for node in nodes if node.get("id") == frontend_id), frontend_id)
+                add("FE", f"Frontend project is not connected to an API project: {title}")
+
+        for api_id in api_ids:
+            if service_ids and not any(edge.get("source") == api_id and edge.get("target") in service_ids for edge in edges):
+                title = next((node.get("title") for node in nodes if node.get("id") == api_id), api_id)
+                add("BE", f"API project is not connected to a service project: {title}")
+
+        for service_id in service_ids:
+            if core_ids and not any(edge.get("source") == service_id and edge.get("target") in core_ids for edge in edges):
+                title = next((node.get("title") for node in nodes if node.get("id") == service_id), service_id)
+                add("BE", f"Service project is not connected to a core project: {title}")
+
+        return {
+            "passed": not findings,
+            "findings": findings,
+            "warnings": warnings,
+            "summary": {
+                "nodes": len(nodes),
+                "edges": len(edges),
+                "roles": {role: len(items) for role, items in roles.items()},
+                "isolated": sum(1 for value in degree.values() if value == 0),
+            },
+        }
+
+    @staticmethod
+    async def record_project_graph_review(
+        graph: Dict[str, Any],
+        review: Dict[str, Any],
+        tenant_id: int = 1,
+    ) -> Optional[AgentKnowledge]:
+        """Persist the latest project graph review into the knowledge base."""
+        source = f"project_graph_review:{tenant_id}"
+        now = int(time.time() * 1000)
+        content = json.dumps(
+            {
+                "graph": graph,
+                "review": review,
+                "updated_at": now,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        async with async_session_maker() as session:
+            result = await session.execute(
+                select(AgentKnowledge).where(
+                    AgentKnowledge.source == source,
+                    AgentKnowledge.tenant_id == tenant_id,
+                    AgentKnowledge.is_deleted == 0,
+                )
+            )
+            knowledge = result.scalar_one_or_none()
+            if knowledge:
+                knowledge.title = "项目关系图谱维护报告"
+                knowledge.content = content
+                knowledge.category = "project_graph"
+                knowledge.tags = json.dumps(["project_graph", "project_relation", "multi_agent_review"], ensure_ascii=False)
+                knowledge.update_time = now
+                knowledge.version = (knowledge.version or 1) + 1
+                knowledge.embedding_status = "pending"
+            else:
+                knowledge = AgentKnowledge(
+                    knowledge_id=f"KN-{uuid.uuid4().hex[:12].upper()}",
+                    title="项目关系图谱维护报告",
+                    content=content,
+                    category="project_graph",
+                    tags=json.dumps(["project_graph", "project_relation", "multi_agent_review"], ensure_ascii=False),
+                    source=source,
+                    tenant_id=tenant_id,
+                    version=1,
+                    embedding_status="pending",
+                    status=1,
+                    create_time=now,
+                    update_time=now,
+                    is_deleted=0,
+                )
+                session.add(knowledge)
+            await session.commit()
+            await session.refresh(knowledge)
+            return knowledge
+
+    @staticmethod
+    async def rebuild_project_graph_with_review(
+        project_ids: Optional[List[int]] = None,
+        tenant_id: int = 1,
+        max_iterations: int = 3,
+        force_analyze: bool = True,
+    ) -> Dict[str, Any]:
+        """Analyze projects, rebuild the project graph, and iterate review until clean."""
+        if project_ids is None:
+            project_ids = []
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=15) as client:
+                    resp = await client.get("http://admin-generator:8082/generator/projects", params={"page": 1, "page_size": 200})
+                    if resp.status_code == 200:
+                        payload = resp.json().get("data") or {}
+                        if isinstance(payload, list):
+                            items = payload
+                        else:
+                            items = payload.get("list") or payload.get("items") or []
+                        project_ids = [
+                            int(item.get("id"))
+                            for item in items
+                            if item.get("id") is not None and item.get("repo_url")
+                        ]
+            except Exception as exc:
+                logger.warning("Failed to list generator projects for graph rebuild: %s", exc)
+
+            if not project_ids:
+                async with async_session_maker() as session:
+                    result = await session.execute(
+                        select(ProjectKnowledge.project_id).where(
+                            ProjectKnowledge.tenant_id.in_([tenant_id, 0])
+                        )
+                    )
+                    project_ids = [int(row[0]) for row in result.all()]
+
+        analyzed: List[Dict[str, Any]] = []
+        for project_id in project_ids:
+            try:
+                analyzed_item = await analyze_project(str(project_id), force=force_analyze)
+                if analyzed_item:
+                    analyzed.append(analyzed_item)
+            except Exception as exc:
+                logger.warning("Project graph rebuild analysis failed for project %s: %s", project_id, exc)
+
+        iterations: List[Dict[str, Any]] = []
+        graph: Dict[str, Any] = {"nodes": [], "edges": []}
+        review: Dict[str, Any] = {"passed": False, "findings": [], "warnings": []}
+        for iteration in range(1, max(1, max_iterations) + 1):
+            graph = await KnowledgeService.get_project_graph(
+                tenant_id=tenant_id,
+                max_nodes=max(len(project_ids or []) + 10, 50),
+            )
+            review = KnowledgeService.review_project_graph(graph)
+            iterations.append({
+                "iteration": iteration,
+                "passed": review["passed"],
+                "findings": review.get("findings", []),
+                "warnings": review.get("warnings", []),
+                "summary": review.get("summary", {}),
+            })
+            if review["passed"]:
+                break
+
+        await KnowledgeService.record_project_graph_review(graph, review, tenant_id=tenant_id)
+        return {
+            "project_ids": project_ids,
+            "analyzed_count": len(analyzed),
+            "graph": graph,
+            "review": review,
+            "iterations": iterations,
+        }
+
+    @staticmethod
     async def create_knowledge(
         title: str,
         content: str,
@@ -601,6 +1161,222 @@ class KnowledgeService:
             await session.refresh(knowledge)
             logger.info(f"创建知识条目: {knowledge.knowledge_id}, title={title}")
             return knowledge
+
+    @staticmethod
+    async def record_pipeline_delivery(
+        pipeline_id: str,
+        user_request: str,
+        stages: Dict[str, Any],
+        skill_config: Optional[Dict[str, Any]] = None,
+        tenant_id: int = 1,
+        creator_id: Optional[int] = None,
+    ) -> Optional[AgentKnowledge]:
+        """Create/update delivery knowledge and graph links for a completed pipeline.
+
+        Pipeline delivery knowledge is evidence from one completed workflow. It
+        should enrich search and graph context without overwriting confirmed
+        Project Skill content.
+        """
+        pipeline_id = str(pipeline_id or "").strip()
+        if not pipeline_id:
+            return None
+
+        skill_config = skill_config or {}
+        project_snapshot = skill_config.get("project_skill_snapshot") or {}
+        backend_snapshots = skill_config.get("backend_project_skill_snapshots") or []
+        if not backend_snapshots and skill_config.get("backend_project_skill_snapshot"):
+            backend_snapshots = [skill_config.get("backend_project_skill_snapshot") or {}]
+
+        project_id_raw = (
+            skill_config.get("frontend_project_id")
+            or project_snapshot.get("project_id")
+            or skill_config.get("project_id")
+        )
+        try:
+            project_id = int(project_id_raw) if project_id_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            project_id = None
+
+        def clip(value: Any, limit: int = 1800) -> str:
+            text = value if isinstance(value, str) else json.dumps(value or {}, ensure_ascii=False, indent=2)
+            text = text.strip()
+            return text if len(text) <= limit else text[:limit] + "\n...（已截断）"
+
+        stage_sections: List[str] = []
+        for stage in ("requirement", "page_design", "prototype", "delivery", "code_review", "report"):
+            data = stages.get(stage) or {}
+            output = str(data.get("output") or "").strip()
+            structured = data.get("structured_output") or {}
+            if not output and not structured:
+                continue
+            section = [
+                f"## {stage}",
+                f"status: {data.get('status') or ''}",
+            ]
+            if output:
+                section.append(clip(output))
+            if structured:
+                keys = [key for key in ("files", "code_files", "review_passed", "fix_suggestions", "api_contract") if key in structured]
+                if keys:
+                    section.append("structured keys: " + ", ".join(keys))
+            stage_sections.append("\n".join(section))
+
+        frontend_files = (
+            (stages.get("prototype") or {}).get("structured_output", {}).get("code_files")
+            or (stages.get("prototype") or {}).get("code_files")
+            or {}
+        )
+        file_paths = sorted(str(path) for path in (frontend_files or {}).keys())[:30]
+        project_name = project_snapshot.get("project_name") or f"project-{project_id or 'unknown'}"
+        source = f"pipeline_delivery:{pipeline_id}"
+        title = f"流水线交付: {pipeline_id} - {clip(user_request, 60).replace(chr(10), ' ')}"
+        request_classification = _classify_requirement_for_knowledge(user_request)
+        tags = [
+            "pipeline_delivery",
+            f"pipeline:{pipeline_id}",
+            f"project:{project_id}" if project_id else "project:unknown",
+            f"request:{request_classification}",
+            str(project_name),
+        ]
+        for stage in stages:
+            tags.append(f"stage:{stage}")
+        for snapshot in backend_snapshots[:5]:
+            if snapshot.get("project_id"):
+                tags.append(f"backend_project:{snapshot.get('project_id')}")
+            if snapshot.get("project_name"):
+                tags.append(str(snapshot.get("project_name")))
+        tags = list(dict.fromkeys([tag for tag in tags if tag]))
+        while tags and len(json.dumps(tags, ensure_ascii=False)) > 240:
+            tags.pop()
+
+        content_parts = [
+            f"# 流水线交付知识\n",
+            f"- pipeline_id: {pipeline_id}",
+            f"- frontend_project: {project_name} ({project_id or '-'})",
+            f"- request_classification: {request_classification}",
+            f"- creator_id: {creator_id or '-'}",
+            "",
+            "## 原始需求",
+            clip(user_request, 1200),
+            "",
+            "## 生成/修改文件",
+            "\n".join(f"- {path}" for path in file_paths) if file_paths else "- 暂无前端文件",
+            "",
+            "## 阶段摘要",
+            "\n\n".join(stage_sections) if stage_sections else "暂无阶段摘要",
+        ]
+        content = "\n".join(content_parts)
+
+        async with async_session_maker() as session:
+            existing_result = await session.execute(
+                select(AgentKnowledge).where(
+                    AgentKnowledge.source == source,
+                    AgentKnowledge.tenant_id == tenant_id,
+                    AgentKnowledge.is_deleted == 0,
+                )
+            )
+            knowledge = existing_result.scalar_one_or_none()
+            now = int(time.time() * 1000)
+            if knowledge:
+                knowledge.title = title
+                knowledge.content = content
+                knowledge.category = "pipeline_delivery"
+                knowledge.tags = json.dumps(tags, ensure_ascii=False)
+                knowledge.project_id = project_id
+                knowledge.update_time = now
+                knowledge.version = (knowledge.version or 1) + 1
+                knowledge.embedding_status = "pending"
+            else:
+                knowledge = AgentKnowledge(
+                    knowledge_id=f"KN-{uuid.uuid4().hex[:12].upper()}",
+                    title=title,
+                    content=content,
+                    category="pipeline_delivery",
+                    tags=json.dumps(tags, ensure_ascii=False),
+                    source=source,
+                    project_id=project_id,
+                    tenant_id=tenant_id,
+                    version=1,
+                    embedding_status="pending",
+                    status=1,
+                )
+                session.add(knowledge)
+            await session.commit()
+            await session.refresh(knowledge)
+
+        await KnowledgeService._link_pipeline_delivery_knowledge(
+            knowledge.knowledge_id,
+            project_id=project_id,
+            pipeline_id=pipeline_id,
+            tenant_id=tenant_id,
+        )
+        try:
+            await KnowledgeService.auto_link(knowledge.knowledge_id, tenant_id=tenant_id)
+        except Exception as exc:
+            logger.warning("Pipeline delivery auto_link failed for %s: %s", pipeline_id, exc)
+        return knowledge
+
+    @staticmethod
+    async def _link_pipeline_delivery_knowledge(
+        knowledge_id: str,
+        project_id: Optional[int],
+        pipeline_id: str,
+        tenant_id: int,
+    ) -> None:
+        async with async_session_maker() as session:
+            targets: List[tuple[str, str, float, str]] = []
+            if project_id:
+                project_result = await session.execute(
+                    select(AgentKnowledge)
+                    .where(
+                        AgentKnowledge.is_deleted == 0,
+                        AgentKnowledge.tenant_id == tenant_id,
+                        AgentKnowledge.project_id == project_id,
+                        AgentKnowledge.category == "project_analysis",
+                    )
+                    .order_by(AgentKnowledge.update_time.desc())
+                    .limit(3)
+                )
+                for item in project_result.scalars().all():
+                    targets.append((item.knowledge_id, "derived_from", 0.9, "交付知识来源于项目分析上下文"))
+
+                history_result = await session.execute(
+                    select(AgentKnowledge)
+                    .where(
+                        AgentKnowledge.is_deleted == 0,
+                        AgentKnowledge.tenant_id == tenant_id,
+                        AgentKnowledge.project_id == project_id,
+                        AgentKnowledge.category == "pipeline_delivery",
+                        AgentKnowledge.knowledge_id != knowledge_id,
+                    )
+                    .order_by(AgentKnowledge.update_time.desc())
+                    .limit(8)
+                )
+                for item in history_result.scalars().all():
+                    targets.append((item.knowledge_id, "related_to", 0.65, "同一项目的历史流水线交付"))
+
+            for target_id, relation_type, weight, description in targets:
+                existing = await session.execute(
+                    select(KnowledgeEdge).where(
+                        KnowledgeEdge.is_deleted == 0,
+                        KnowledgeEdge.source_id == knowledge_id,
+                        KnowledgeEdge.target_id == target_id,
+                        KnowledgeEdge.relation_type == relation_type,
+                    )
+                )
+                if existing.scalar_one_or_none():
+                    continue
+                session.add(KnowledgeEdge(
+                    edge_id=f"KE-{uuid.uuid4().hex[:12].upper()}",
+                    source_id=knowledge_id,
+                    target_id=target_id,
+                    relation_type=relation_type,
+                    weight=weight,
+                    description=description,
+                    tenant_id=tenant_id,
+                ))
+            await session.commit()
+            logger.info("Recorded delivery knowledge graph links for pipeline %s", pipeline_id)
 
     @staticmethod
     async def get_knowledge(knowledge_id: str) -> Optional[AgentKnowledge]:
@@ -772,7 +1548,7 @@ class KnowledgeService:
                     "knowledge_id": r.knowledge_id,
                     "title": r.title,
                     "category": r.category,
-                    "tags": json.loads(r.tags) if r.tags else [],
+                    "tags": _parse_knowledge_tags(r.tags),
                     "source": r.source,
                     "status": r.status,
                     "version": r.version,
@@ -834,9 +1610,8 @@ class KnowledgeService:
             all_tags = set()
             for (tags_str,) in result.all():
                 try:
-                    tags_list = json.loads(tags_str)
-                    all_tags.update(tags_list)
-                except (json.JSONDecodeError, TypeError):
+                    all_tags.update(_parse_knowledge_tags(tags_str))
+                except TypeError:
                     pass
             return sorted(all_tags)
 
@@ -1002,7 +1777,8 @@ class KnowledgeService:
             包含nodes和edges列表的字典
         """
         async with async_session_maker() as session:
-            # Fetch nodes
+            # Fetch a wider candidate pool, then collapse recurring snapshots so
+            # the graph reads as knowledge relationships instead of an activity feed.
             node_conditions = [
                 AgentKnowledge.is_deleted == 0,
                 AgentKnowledge.tenant_id == tenant_id,
@@ -1014,21 +1790,61 @@ class KnowledgeService:
                 select(AgentKnowledge)
                 .where(*node_conditions)
                 .order_by(AgentKnowledge.update_time.desc())
-                .limit(max_nodes)
+                .limit(max(max_nodes * 4, 120))
             )
-            nodes = nodes_result.scalars().all()
-            node_ids = {n.knowledge_id for n in nodes}
+            candidates = nodes_result.scalars().all()
+            if not candidates:
+                return {"nodes": [], "edges": []}
 
-            # Fetch edges between these nodes
-            edges_result = await session.execute(
+            candidate_ids = {n.knowledge_id for n in candidates}
+            all_edges_result = await session.execute(
                 select(KnowledgeEdge).where(
                     KnowledgeEdge.is_deleted == 0,
                     KnowledgeEdge.tenant_id == tenant_id,
-                    KnowledgeEdge.source_id.in_(node_ids),
-                    KnowledgeEdge.target_id.in_(node_ids),
+                    or_(
+                        KnowledgeEdge.source_id.in_(candidate_ids),
+                        KnowledgeEdge.target_id.in_(candidate_ids),
+                    ),
                 )
             )
-            edges = edges_result.scalars().all()
+            all_edges = all_edges_result.scalars().all()
+            degree: Dict[str, int] = {}
+            for edge in all_edges:
+                degree[edge.source_id] = degree.get(edge.source_id, 0) + 1
+                degree[edge.target_id] = degree.get(edge.target_id, 0) + 1
+
+            deduped: Dict[str, AgentKnowledge] = {}
+            for item in candidates:
+                key = _knowledge_graph_dedupe_key(item)
+                current = deduped.get(key)
+                if not current:
+                    deduped[key] = item
+                    continue
+                current_score = (degree.get(current.knowledge_id, 0), current.update_time or 0)
+                item_score = (degree.get(item.knowledge_id, 0), item.update_time or 0)
+                if item_score > current_score:
+                    deduped[key] = item
+
+            ranked_nodes = sorted(
+                deduped.values(),
+                key=lambda item: (
+                    1 if degree.get(item.knowledge_id, 0) else 0,
+                    degree.get(item.knowledge_id, 0),
+                    item.update_time or 0,
+                ),
+                reverse=True,
+            )
+            connected = [item for item in ranked_nodes if degree.get(item.knowledge_id, 0) > 0]
+            isolated = [item for item in ranked_nodes if degree.get(item.knowledge_id, 0) == 0]
+            isolated_limit = max(3, max_nodes // 5)
+            nodes = (connected + isolated[:isolated_limit])[:max_nodes]
+            node_ids = {n.knowledge_id for n in nodes}
+            edges = [
+                edge
+                for edge in all_edges
+                if edge.source_id in node_ids and edge.target_id in node_ids
+            ]
+            inferred_edges = _knowledge_graph_inferred_edges(nodes, edges)
 
             return {
                 "nodes": [
@@ -1036,7 +1852,7 @@ class KnowledgeService:
                         "id": n.knowledge_id,
                         "title": n.title,
                         "category": n.category,
-                        "tags": json.loads(n.tags) if n.tags else [],
+                        "tags": _parse_knowledge_tags(n.tags),
                     }
                     for n in nodes
                 ],
@@ -1049,7 +1865,7 @@ class KnowledgeService:
                         "weight": float(e.weight) if e.weight else 1.0,
                     }
                     for e in edges
-                ],
+                ] + inferred_edges,
             }
 
     @staticmethod
@@ -1081,9 +1897,7 @@ class KnowledgeService:
             if not source:
                 return 0
 
-            source_tags = (
-                set(json.loads(source.tags)) if source.tags else set()
-            )
+            source_tags = set(_parse_knowledge_tags(source.tags))
             created = 0
 
             # Find knowledge with overlapping tags or same category
@@ -1097,11 +1911,7 @@ class KnowledgeService:
                 .limit(100)
             )
             for candidate in candidates.scalars().all():
-                cand_tags = (
-                    set(json.loads(candidate.tags))
-                    if candidate.tags
-                    else set()
-                )
+                cand_tags = set(_parse_knowledge_tags(candidate.tags))
                 overlap = source_tags & cand_tags
                 same_category = (
                     source.category
@@ -1231,13 +2041,41 @@ ANALYSIS_PROMPT = """你是一个资深的技术架构分析师。请分析以�
   "api_patterns": "接口规范（接口路径风格、请求/响应格式、错误码规范、认证方式、转发目标地址模式）",
   "permission_model": "权限模型（路由权限、按钮权限、角色体系的实现方式）",
   "coding_style": "编码风格（命名规范、注释风格、文件组织习惯、状态管理方式）",
-  "key_files": ["关键文件路径1", "关键文件路径2"]
+  "key_files": ["关键文件路径1", "关键文件路径2"],
+  "project_analysis_schema": {{
+    "request_classification": ["Explain how to distinguish a new page request, an existing page modification, a shared component change, and an API/backend change."],
+    "new_page_signals": ["List signals that indicate a new page or new capability, such as suggested menu location, page functions, route/default landing, or a new management/configuration feature."],
+    "existing_page_selection_policy": ["Only select an existing page when the requirement explicitly says to modify an existing/current/original page. For a new page, use similar pages only as style/reference material, never as the target file."],
+    "business_to_repo_mapping": ["Map business terms to directories, routes, menus, APIs, permissions, models, and naming conventions in this repository."],
+    "negative_page_matches": ["List existing pages that may look semantically similar but must not be selected as target pages for new requirements."],
+    "primary_artifacts": ["List files, folders, configs, API definitions, menu definitions, and permission definitions that downstream pipelines must read or reference."],
+    "unknowns_to_confirm": ["List remaining unknowns from project onboarding that can affect generation or validation."]
+  }},
+  "generation_contract": {{
+    "routing": ["Describe route, menu, lazy loading, breadcrumb, and default landing conventions."],
+    "frontend_pages": ["Describe how to create list pages, detail pages, create/edit flows, modals/drawers, and support components."],
+    "primary_page_policy": ["Define how primary pages are identified. Create/edit forms are support components by default unless the requirement explicitly asks for a standalone route."],
+    "action_label_policy": ["For button/action matrices, include only user-visible commands. Do not treat drawer/modal/component names as buttons."],
+    "api_and_data": ["Describe request wrappers, response envelopes, pagination fields, error handling, and mock/fallback boundaries."],
+    "permissions": ["Describe menu, route, button, API, and data-scope permission conventions with repository-specific examples."],
+    "state_handling": ["Describe loading, empty state, unauthorized state, API failure, submitting, and invalid state handling."]
+  }},
+  "verification_contract": {{
+    "commands": ["List repository-specific verification commands, such as npm run build, pytest, Playwright, or framework-specific checks."],
+    "preview_checks": ["List browser validation points for first screen, route access, buttons, lists, details, forms, and mock/fallback behavior."],
+    "review_gates": ["List hard review gates that generated code must satisfy for this repository."],
+    "sandbox_notes": ["Document local sandbox, port, container, network, and preview constraints."]
+  }}
 }}"""
 
 
 async def analyze_project(project_id: str, force: bool = False) -> Optional[Dict]:
     """分析项目并存储到知识库。后台任务，不阻塞调用方。"""
     import httpx
+
+    was_confirmed = False
+    previous_confirmed_by: Optional[int] = None
+    previous_confirmed_at: Optional[int] = None
 
     # 检查是否已分析过
     async with async_session_maker() as session:
@@ -1249,6 +2087,9 @@ async def analyze_project(project_id: str, force: bool = False) -> Optional[Dict
             logger.info(f"Project {project_id} already analyzed")
             return _knowledge_to_dict(existing)
         if existing:
+            was_confirmed = existing.skill_status == "confirmed"
+            previous_confirmed_by = existing.confirmed_by
+            previous_confirmed_at = existing.confirmed_at
             existing.analysis_status = "analyzing"
             existing.skill_status = "analyzing"
             existing.analysis_error = None
@@ -1355,14 +2196,17 @@ async def analyze_project(project_id: str, force: bool = False) -> Optional[Dict
             k.permission_model = analysis.get("permission_model", "")
             k.coding_style = analysis.get("coding_style", "")
             k.key_files = json.dumps(analysis.get("key_files", []), ensure_ascii=False)
+            k.project_analysis_schema = _json_contract_text(analysis.get("project_analysis_schema"))
+            k.generation_contract = _json_contract_text(analysis.get("generation_contract"))
+            k.verification_contract = _json_contract_text(analysis.get("verification_contract"))
             k.raw_files = files_text[:8000]
             k.analysis_status = "done"
             next_skill_version = (k.skill_version or 0) + 1 if k.skill_content else 1
             k.skill_content = _build_project_skill_content(k)
-            k.skill_status = "draft"
+            k.skill_status = "confirmed" if was_confirmed else "draft"
             k.skill_version = next_skill_version
-            k.confirmed_by = None
-            k.confirmed_at = None
+            k.confirmed_by = previous_confirmed_by if was_confirmed else None
+            k.confirmed_at = previous_confirmed_at if was_confirmed else None
             k.analysis_error = None
             k.update_time = int(time.time() * 1000)
             await session.commit()
@@ -1535,6 +2379,9 @@ def _knowledge_to_dict(k) -> Dict:
         "permission_model": k.permission_model or "",
         "coding_style": k.coding_style or "",
         "key_files": json.loads(k.key_files or "[]"),
+        "project_analysis_schema": k.project_analysis_schema or "",
+        "generation_contract": k.generation_contract or "",
+        "verification_contract": k.verification_contract or "",
         "analysis_status": k.analysis_status or "",
         "skill_content": k.skill_content or "",
         "skill_status": k.skill_status or "",
@@ -1911,7 +2758,7 @@ async def semantic_search(query: str, tenant_id: int = 1, top_k: int = 5,
             "content": record.content[:500],
             "category": record.category,
             "score": round(score, 4),
-            "tags": json.loads(record.tags) if record.tags else [],
+            "tags": _parse_knowledge_tags(record.tags),
         })
     return results
 

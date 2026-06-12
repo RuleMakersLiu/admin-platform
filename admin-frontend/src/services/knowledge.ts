@@ -23,6 +23,37 @@ export interface KnowledgeForm {
   status?: number
 }
 
+export interface KnowledgeGraphNode {
+  id: string
+  title: string
+  category?: string
+  tags?: string[]
+  project_id?: number
+}
+
+export interface KnowledgeGraphEdge {
+  id: string
+  source: string
+  target: string
+  relation: string
+  weight: number
+}
+
+export interface KnowledgeGraph {
+  nodes: KnowledgeGraphNode[]
+  edges: KnowledgeGraphEdge[]
+}
+
+export interface KnowledgeRelatedEdge {
+  edge_id: string
+  direction: 'outgoing' | 'incoming'
+  source_id?: string
+  target_id?: string
+  relation_type: string
+  weight: number
+  description?: string
+}
+
 // 知识库服务
 export const knowledgeService = {
   list: (params?: { keyword?: string; category?: string; agent_type?: string }) =>
@@ -36,10 +67,18 @@ export const knowledgeService = {
   create: (data: KnowledgeForm) => api.post('/knowledge/create', data),
   update: (id: string, data: Partial<KnowledgeForm>) => api.put(`/knowledge/${id}`, data),
   delete: (id: string) => api.delete(`/knowledge/${id}`),
+  graph: (params?: { category?: string; max_nodes?: number }) =>
+    api.get('/knowledge/graph/view', { params: { scope: 'project', ...params } }),
+  related: (id: string, params?: { relation_type?: string; direction?: 'both' | 'outgoing' | 'incoming'; limit?: number }) =>
+    api.get(`/knowledge/graph/related/${id}`, { params }),
+  autoLink: (id: string) => api.post(`/knowledge/graph/auto-link/${id}`),
 }
 
 // 知识分类选项
 export const knowledgeCategories = [
+  { value: 'ai_upgrade', label: 'AI 升级报告' },
+  { value: 'project_analysis', label: '项目分析' },
+  { value: 'pipeline_delivery', label: '流水线交付' },
   { value: 'product', label: '产品需求' },
   { value: 'technical', label: '技术规范' },
   { value: 'business', label: '业务规则' },

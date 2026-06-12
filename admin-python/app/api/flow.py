@@ -2,8 +2,8 @@
 import asyncio
 import json
 import logging
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import Response as FastAPIResponse, StreamingResponse
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import RedirectResponse, Response as FastAPIResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, List, Any, Set
 
@@ -434,6 +434,21 @@ async def start_sandbox_preview(pipeline_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.api_route("/pipeline/{pipeline_id}/sandbox-preview/", methods=["GET", "POST", "OPTIONS"])
+async def proxy_sandbox_preview_root(pipeline_id: str, request: Request = None):
+    """Proxy sandbox preview root to the generated page entry when available."""
+    from app.services.sandbox_preview_service import sandbox_preview_service
+
+    generated_path = sandbox_preview_service.generated_preview_path(pipeline_id)
+    if generated_path and request and request.method == "GET":
+        query = request.url.query
+        redirect_url = f"/api/flow/pipeline/{pipeline_id}/sandbox-preview/{generated_path}"
+        if query:
+            redirect_url = f"{redirect_url}?{query}"
+        return RedirectResponse(url=redirect_url, status_code=307)
+    return await proxy_sandbox_preview(pipeline_id, generated_path, request)
+
+
 @router.api_route("/pipeline/{pipeline_id}/sandbox-preview/{path:path}", methods=["GET", "POST", "OPTIONS"])
 async def proxy_sandbox_preview(pipeline_id: str, path: str = "", request: Request = None):
     """Proxy sandbox preview assets to the per-pipeline frontend dev server."""
@@ -794,9 +809,8 @@ async def update_project_prompts(project_code: str, request: UpdatePromptsReques
 
 @router.post("/projects/{project_id}/analyze")
 async def analyze_project_api(project_id: str):
-    """触发项目知识库分析（后台异步执行）"""
+    """触发项目知识库分析，并维护项目关系图谱（后台异步执行）"""
     import asyncio
-    from app.services.knowledge_service import analyze_project
 
     # 后台执行，不阻塞 API 响应
     asyncio.create_task(_do_analyze(project_id))
@@ -804,13 +818,38 @@ async def analyze_project_api(project_id: str):
 
 
 async def _do_analyze(project_id: str):
-    """后台执行项目分析"""
+    """后台执行项目分析和项目图谱维护"""
     try:
-        from app.services.knowledge_service import analyze_project
-        result = await analyze_project(project_id, force=True)
-        logger.info(f"Project {project_id} analysis done: {bool(result)}")
+        from app.services.knowledge_service import KnowledgeService
+        result = await KnowledgeService.rebuild_project_graph_with_review(
+            project_ids=[int(project_id)],
+            tenant_id=1,
+            max_iterations=3,
+            force_analyze=True,
+        )
+        logger.info(
+            "Project %s analysis/graph rebuild done: passed=%s",
+            project_id,
+            (result.get("review") or {}).get("passed"),
+        )
     except Exception as e:
         logging.getLogger(__name__).error(f"Project analysis failed: {e}")
+
+
+@router.post("/projects/knowledge-graph/rebuild")
+async def rebuild_project_knowledge_graph(
+    force_analyze: bool = Query(default=False, description="是否强制重新分析项目源码"),
+):
+    """维护当前关联项目关系图谱。默认快速复核，显式 force_analyze 才重新分析源码。"""
+    from app.services.knowledge_service import KnowledgeService
+
+    result = await KnowledgeService.rebuild_project_graph_with_review(
+        project_ids=None,
+        tenant_id=1,
+        max_iterations=3,
+        force_analyze=force_analyze,
+    )
+    return {"code": 200, "message": "项目关系图谱已维护", "data": result}
 
 
 @router.get("/projects/{project_id}/knowledge")
