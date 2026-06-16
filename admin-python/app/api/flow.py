@@ -3,7 +3,7 @@ import asyncio
 import json
 import logging
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import RedirectResponse, Response as FastAPIResponse, StreamingResponse
+from fastapi.responses import Response as FastAPIResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, List, Any, Set
 
@@ -440,13 +440,16 @@ async def proxy_sandbox_preview_root(pipeline_id: str, request: Request = None):
     from app.services.sandbox_preview_service import sandbox_preview_service
 
     generated_path = sandbox_preview_service.generated_preview_path(pipeline_id)
-    if generated_path and request and request.method == "GET":
+    is_uniapp_page = generated_path.lstrip("/").startswith("pages/")
+    if generated_path and not is_uniapp_page and request and request.method == "GET":
         query = request.url.query
         redirect_url = f"/api/flow/pipeline/{pipeline_id}/sandbox-preview/{generated_path}"
         if query:
             redirect_url = f"{redirect_url}?{query}"
-        return RedirectResponse(url=redirect_url, status_code=307)
-    return await proxy_sandbox_preview(pipeline_id, generated_path, request)
+        response = FastAPIResponse(status_code=307)
+        response.headers["Location"] = redirect_url
+        return response
+    return await proxy_sandbox_preview(pipeline_id, "", request)
 
 
 @router.api_route("/pipeline/{pipeline_id}/sandbox-preview/{path:path}", methods=["GET", "POST", "OPTIONS"])

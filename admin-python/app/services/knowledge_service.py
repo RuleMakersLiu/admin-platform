@@ -2492,21 +2492,26 @@ def _is_backend_project_skill(skill: Dict) -> bool:
     language = str(skill.get("language") or "").lower()
     framework = str(skill.get("framework") or "").lower()
     text = _project_skill_match_text(skill)
+    stack_text = f"{language} {framework}"
+    stack_tokens = set(re.findall(r"[a-z0-9+#.-]+", stack_text))
 
-    backend_signals = (
+    backend_stack_signals = (
         "spring", "spring-boot", "java", "go", "golang", "python", "django",
         "fastapi", "flask", "php", "laravel", "nest", "nestjs", "express",
-        "backend", "后端", "api", "接口", "controller", "service", "mapper",
     )
     frontend_only_signals = (
-        "vue", "react", "vite", "webpack", "element-plus", "antd", "ant design",
+        "javascript", "typescript", "vue", "vue3", "uniapp", "uni-app",
+        "react", "vite", "webpack", "element-plus", "antd", "ant design",
         "frontend", "前端", "页面", "组件", "router", "pinia", "redux",
     )
-    if any(signal in language or signal in framework for signal in backend_signals):
+    backend_text_signals = (
+        "backend", "后端", "api", "接口", "controller", "service", "mapper",
+    )
+    if any(signal in stack_tokens for signal in backend_stack_signals):
         return True
-    if any(signal in language or signal in framework for signal in frontend_only_signals):
+    if any(signal in stack_tokens or signal in stack_text for signal in frontend_only_signals):
         return False
-    return any(signal in text for signal in backend_signals)
+    return any(signal in text for signal in backend_text_signals)
 
 
 def _is_frontend_project_skill(skill: Dict) -> bool:

@@ -722,6 +722,37 @@ def test_prototype_validation_fails_when_primary_pages_are_missing():
     assert any("只生成了 1 个页面文件" in issue for issue in issues)
 
 
+def test_prototype_validation_accepts_uniapp_monorepo_pages():
+    page_design_stage = {
+        "structured_output": {
+            "design_quality": {
+                "primary_pages": ["钱包首页", "交易明细", "充值页面", "提现页面"]
+            }
+        }
+    }
+    files = {
+        "apps/hotel-client/api/wallet.ts": "export function getWalletAccount(){ return Promise.resolve({ message: { code: 0 }, data: {} }) }",
+        "apps/hotel-client/api/walletMock.ts": "export default { transactions: [] }",
+        "public/sandbox-miniapp-preview.html": "<!doctype html><html><body>钱包预览</body></html>",
+        "apps/hotel-client/pages/wallet/index.vue": "<template><view>钱包首页</view></template>",
+        "apps/hotel-client/pages/wallet/transaction.vue": "<template><view>交易明细</view></template>",
+        "apps/hotel-client/pages/wallet/recharge.vue": "<template><view>充值页面</view></template>",
+        "apps/hotel-client/pages/wallet/withdraw.vue": "<template><view>提现页面</view></template>",
+    }
+
+    issues = _validate_frontend_preview_code_files(
+        files,
+        user_request="小程序H5页面要增加一个钱包页面",
+        expected_pages=["钱包首页", "交易明细", "充值页面", "提现页面"],
+        page_design_stage=page_design_stage,
+    )
+
+    assert not any("缺少可预览页面文件" in issue for issue in issues)
+    assert not any("只生成了 0 个页面文件" in issue for issue in issues)
+    assert not any("预览阶段禁止生成静态 HTML 文件" in issue for issue in issues)
+    assert not any("没有对应的前端页面文件" in issue for issue in issues)
+
+
 def test_prototype_validation_extracts_primary_pages_from_design_document():
     page_design_stage = {
         "output": """# 营销活动管理页面设计

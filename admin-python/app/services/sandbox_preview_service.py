@@ -100,12 +100,25 @@ class SandboxPreviewService:
             target.write_text(text_content, encoding="utf-8")
 
     def _patch_generated_script_content(self, content: str) -> str:
-        return re.sub(r"<!--\s*(.*?)\s*-->", lambda match: f"// {match.group(1).strip()}", content, flags=re.S)
+        patched = re.sub(r"<!--\s*(.*?)\s*-->", lambda match: f"// {match.group(1).strip()}", content, flags=re.S)
+        patched = re.sub(
+            r"^\s*import\s+\{\s*http\s*\}\s+from\s+['\"]@hc-agent/http['\"]\s*;?\s*$",
+            (
+                "const http = {\n"
+                "  get: () => Promise.reject(new Error('sandbox preview mock http')),\n"
+                "  post: () => Promise.reject(new Error('sandbox preview mock http')),\n"
+                "}\n"
+            ),
+            patched,
+            flags=re.M,
+        )
+        return patched
 
     def _patch_generated_vue_content(self, content: str) -> str:
         patched = self._patch_stable_contract(content)
         patched = self._patch_invalid_vue_dimension_bindings(patched)
         patched = self._patch_missing_moment_instance(patched)
+        patched = self._patch_missing_permission_helper(patched)
         if "JDictSelectTag" not in patched:
             return patched
         replacements = {
@@ -143,6 +156,15 @@ class SandboxPreviewService:
             return patched
         insert_at = script_match.end()
         return patched[:insert_at] + "\nimport moment from 'moment'\n" + patched[insert_at:]
+
+    def _patch_missing_permission_helper(self, content: str) -> str:
+        if "hasPermission(" not in content or re.search(r"\b(?:const|function)\s+hasPermission\b", content):
+            return content
+        script_match = re.search(r"<script\s+setup[^>]*>", content)
+        if not script_match:
+            return content
+        insert_at = script_match.end()
+        return content[:insert_at] + "\nconst hasPermission = () => true\n" + content[insert_at:]
 
     def _patch_stable_contract(self, content: str) -> str:
         from app.ai.flow_manager import _patch_stable_table_contract_content
@@ -314,10 +336,15 @@ class SandboxPreviewService:
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def _miniapp_html_preview_content(self, frontend_files: Dict[str, str]) -> Optional[str]:
+        normalized_paths = [str(path).replace("\\", "/").lstrip("/") for path in frontend_files]
         has_miniapp_page = any(
-            str(path).replace("\\", "/").lstrip("/").startswith("pages/")
-            and str(path).replace("\\", "/").lstrip("/").endswith(".wxml")
-            for path in frontend_files
+            (
+                path.startswith("pages/")
+                or path.startswith("src/pages/")
+                or re.match(r"^apps/[^/]+/pages/", path)
+            )
+            and path.endswith((".wxml", ".vue"))
+            for path in normalized_paths
         )
         if not has_miniapp_page:
             return None
@@ -336,6 +363,11 @@ class SandboxPreviewService:
                 return content
         return None
 
+    def _redact_sensitive_output(self, output: str) -> str:
+        redacted = re.sub(r"(https?://[^:/@\s]+:)[^@\s]+@", r"\1***@", output or "")
+        redacted = re.sub(r"(oauth2:)[^@\s]+@", r"\1***@", redacted)
+        return redacted
+
     def _install_miniapp_html_preview(self, root: Path, frontend_files: Dict[str, str]) -> Optional[str]:
         content = self._miniapp_html_preview_content(frontend_files)
         if not content:
@@ -344,6 +376,139 @@ class SandboxPreviewService:
         public_dir.mkdir(parents=True, exist_ok=True)
         preview_name = "sandbox-miniapp-preview.html"
         public_dir.joinpath(preview_name).write_text(content, encoding="utf-8")
+        return preview_name
+
+    def _install_uniapp_monorepo_preview_files(self, root: Path, frontend_files: Dict[str, str]) -> str:
+        first_page = ""
+        pages_by_app: Dict[str, list[str]] = {}
+
+        for raw_path, content in frontend_files.items():
+            safe_path = str(raw_path).replace("\\", "/").lstrip("/")
+            match = re.match(r"^apps/([^/]+)/(pages|api)/(.+)$", safe_path)
+            if not match:
+                continue
+            app_name, kind, relative = match.groups()
+            app_root = root / "apps" / app_name
+            if not (app_root / "src").exists():
+                continue
+            target = app_root / "src" / kind / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            text_content = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False, indent=2)
+            if target.suffix == ".vue":
+                text_content = self._patch_generated_vue_content(text_content)
+            elif target.suffix in {".js", ".ts", ".jsx", ".tsx"}:
+                text_content = self._patch_generated_script_content(text_content)
+            target.write_text(text_content, encoding="utf-8")
+            if kind == "pages" and target.suffix == ".vue":
+                page_path = f"pages/{Path(relative).with_suffix('').as_posix()}"
+                pages_by_app.setdefault(app_name, []).append(page_path)
+                first_page = first_page or f"/{page_path}"
+
+        for app_name, page_paths in pages_by_app.items():
+            pages_json = root / "apps" / app_name / "src" / "pages.json"
+            if not pages_json.exists():
+                continue
+            try:
+                config = json.loads(pages_json.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                continue
+            pages = config.setdefault("pages", [])
+            if not isinstance(pages, list):
+                continue
+            existing = {
+                str(item.get("path") or "")
+                for item in pages
+                if isinstance(item, dict)
+            }
+            new_pages = [
+                {
+                    "path": page_path,
+                    "style": {
+                        "navigationBarTitleText": "生成预览",
+                        "navigationStyle": "custom",
+                    },
+                }
+                for page_path in sorted(set(page_paths))
+                if page_path not in existing
+            ]
+            if not new_pages:
+                continue
+            config["pages"] = new_pages + pages
+            pages_json.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        return first_page
+
+    def _prepare_miniapp_html_fallback_root(
+        self,
+        root: Path,
+        frontend_files: Dict[str, str],
+        project_info: Dict[str, Any],
+        reason: str,
+    ) -> Optional[str]:
+        content = self._miniapp_html_preview_content(frontend_files)
+        if not content:
+            return None
+        if root.exists():
+            shutil.rmtree(root)
+        root.mkdir(parents=True, exist_ok=True)
+        public_dir = root / "public"
+        public_dir.mkdir(parents=True, exist_ok=True)
+        preview_name = "sandbox-miniapp-preview.html"
+        public_dir.joinpath(preview_name).write_text(content, encoding="utf-8")
+        (root / "package.json").write_text(
+            json.dumps({
+                "name": "sandbox-miniapp-html-preview",
+                "private": True,
+                "scripts": {"start": "node server.js"},
+            }, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (root / "server.js").write_text(
+            """
+const http = require('http')
+const fs = require('fs')
+const path = require('path')
+
+const args = process.argv.slice(2)
+const valueAfter = (name, fallback) => {
+  const index = args.indexOf(name)
+  return index >= 0 && args[index + 1] ? args[index + 1] : fallback
+}
+const host = valueAfter('--host', '127.0.0.1')
+const port = Number(valueAfter('--port', process.env.PORT || '43000'))
+const publicDir = path.join(__dirname, 'public')
+
+const server = http.createServer((req, res) => {
+  const requestPath = decodeURIComponent((req.url || '/').split('?')[0])
+  const fileName = requestPath.endsWith('.html') ? path.basename(requestPath) : 'sandbox-miniapp-preview.html'
+  const filePath = path.join(publicDir, fileName)
+  fs.readFile(filePath, (error, data) => {
+    if (error) {
+      res.writeHead(404, {'content-type': 'text/plain; charset=utf-8'})
+      res.end('Not found')
+      return
+    }
+    res.writeHead(200, {'content-type': 'text/html; charset=utf-8'})
+    res.end(data)
+  })
+})
+
+server.listen(port, host, () => {
+  console.log(`sandbox miniapp preview ready at http://${host}:${port}/sandbox-miniapp-preview.html`)
+})
+""".lstrip(),
+            encoding="utf-8",
+        )
+        (root / ".sandbox-preview-project.json").write_text(
+            json.dumps({
+                "project_id": project_info.get("project_id") or "",
+                "project_name": project_info.get("project_name") or "",
+                "repo_url": project_info.get("repo_url") or "",
+                "fallback": "miniapp_html_preview",
+                "fallback_reason": reason[-500:],
+            }, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
         return preview_name
 
     def _generated_api_probe_specs(self, frontend_files: Dict[str, str]) -> list[Dict[str, Any]]:
@@ -571,8 +736,8 @@ class SandboxPreviewService:
             output, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
             proc.kill()
-            raise RuntimeError(f"{' '.join(args)} 超时")
-        return proc.returncode or 0, output.decode("utf-8", errors="ignore")
+            raise RuntimeError(f"{self._redact_sensitive_output(' '.join(args))} 超时")
+        return proc.returncode or 0, self._redact_sensitive_output(output.decode("utf-8", errors="ignore"))
 
     async def _node_version(self) -> str:
         code, output = await self._run(["node", "-v"], Path("/tmp"), timeout=10)
@@ -724,25 +889,92 @@ class SandboxPreviewService:
         root.parent.mkdir(parents=True, exist_ok=True)
         await self._clone_project(root, project_info)
 
-    def _dev_command(self, root: Path, port: int) -> list[str]:
+    def _package_manager(self, root: Path) -> str:
+        package_json = root / "package.json"
+        package: Dict[str, Any] = {}
+        if package_json.exists():
+            try:
+                package = json.loads(package_json.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                package = {}
+        package_manager = str(package.get("packageManager") or "").lower()
+        if (root / "pnpm-lock.yaml").exists() or (root / "pnpm-workspace.yaml").exists() or package_manager.startswith("pnpm@"):
+            return "pnpm"
+        if (root / "yarn.lock").exists() or package_manager.startswith("yarn@"):
+            return "yarn"
+        return "npm"
+
+    def _install_command(self, root: Path) -> list[str]:
+        package_manager = self._package_manager(root)
+        cache_root = Path(settings.pipeline_workspace_root)
+        if package_manager == "pnpm":
+            return [
+                "pnpm",
+                "install",
+                "--registry=https://registry.npmmirror.com",
+                "--frozen-lockfile=false",
+                "--store-dir",
+                str(cache_root / ".pnpm-store"),
+            ]
+        if package_manager == "yarn":
+            return [
+                "yarn",
+                "install",
+                "--registry=https://registry.npmmirror.com",
+                "--cache-folder",
+                str(cache_root / ".yarn-cache"),
+            ]
+        return [
+            "npm",
+            "install",
+            "--registry=https://registry.npmmirror.com",
+            "--no-audit",
+            "--no-fund",
+            "--legacy-peer-deps",
+            "--progress=false",
+            "--cache",
+            str(cache_root / ".npm-cache"),
+        ]
+
+    def _generated_apps(self, frontend_files: Dict[str, str]) -> list[str]:
+        apps: set[str] = set()
+        for raw_path in frontend_files:
+            safe_path = str(raw_path).replace("\\", "/").lstrip("/")
+            match = re.match(r"^apps/([^/]+)/", safe_path)
+            if match:
+                apps.add(match.group(1))
+        return sorted(apps)
+
+    def _select_dev_script(self, scripts: Dict[str, Any], frontend_files: Optional[Dict[str, str]] = None) -> str:
+        app_names = self._generated_apps(frontend_files or {})
+        for app in app_names:
+            candidates = [
+                f"dev:{app}:h5:sass",
+                f"dev:{app}:h5",
+                f"dev:{app}-h5",
+                f"dev:{app}:h5:longting",
+                f"dev:{app}:mp-weixin:sass",
+                f"dev:{app}:mp-weixin",
+            ]
+            for script in candidates:
+                if script in scripts:
+                    return script
+        for script in ("serve", "dev", "start", "preview"):
+            if script in scripts:
+                return script
+        raise RuntimeError("前端项目没有 dev/serve/start/preview 启动脚本")
+
+    def _dev_command(self, root: Path, port: int, frontend_files: Optional[Dict[str, str]] = None) -> list[str]:
         package_json = root / "package.json"
         if not package_json.exists():
             raise RuntimeError("匹配到的前端项目没有 package.json，无法启动真实项目预览")
         package = json.loads(package_json.read_text(encoding="utf-8"))
         scripts = package.get("scripts") or {}
-        if "serve" in scripts:
-            script = "serve"
-        elif "dev" in scripts:
-            script = "dev"
-        elif "start" in scripts:
-            script = "start"
-        elif "preview" in scripts:
-            script = "preview"
-        else:
-            raise RuntimeError("前端项目没有 dev/serve/start/preview 启动脚本")
+        script = self._select_dev_script(scripts, frontend_files)
 
+        package_manager = self._package_manager(root)
         script_command = str(scripts.get(script, ""))
-        args = ["npm", "run", script, "--", "--host", settings.pipeline_preview_host, "--port", str(port)]
+        args = [package_manager, "run", script, "--", "--host", settings.pipeline_preview_host, "--port", str(port)]
         if (root / "vite.config.js").exists() or "vite" in script_command:
             args.extend(["--strictPort", "--base", f"/api/flow/pipeline/{root.parent.name}/sandbox-preview/"])
         return args
@@ -817,6 +1049,111 @@ class SandboxPreviewService:
             return
         serve_js.write_text(patched, encoding="utf-8")
 
+    def _patch_vite_preview_config(self, root: Path) -> None:
+        config_files = [
+            root / "vite.config.ts",
+            root / "vite.config.js",
+            root / "vite.config.mts",
+            root / "vite.config.mjs",
+        ]
+        config_files.extend(sorted(root.glob("apps/*/vite.config.ts")))
+        config_files.extend(sorted(root.glob("apps/*/vite.config.js")))
+        marker = "SANDBOX_PREVIEW_VITE_CONFIG_PATCH_V1"
+        for config_file in config_files:
+            if not config_file.exists():
+                continue
+            content = config_file.read_text(encoding="utf-8")
+            if marker not in content:
+                patched = re.sub(
+                    r"return\s*\{",
+                    "return {\n"
+                    f"    // {marker}\n"
+                    "    base: process.env.VITE_SANDBOX_PREVIEW_BASE || '/',",
+                    content,
+                    count=1,
+                )
+            else:
+                patched = content
+            patched = re.sub(
+                r"port\s*:\s*\d+",
+                "port: Number(process.env.VITE_SANDBOX_PREVIEW_PORT || 3000)",
+                patched,
+                count=1,
+            )
+            patched = re.sub(
+                r"host\s*:\s*['\"][^'\"]+['\"]",
+                "host: process.env.VITE_SANDBOX_PREVIEW_HOST || '0.0.0.0'",
+                patched,
+                count=1,
+            )
+            if "hmr:" not in patched:
+                patched = re.sub(r"server\s*:\s*\{", "server: {\n          hmr: false,", patched, count=1)
+            if patched != content:
+                config_file.write_text(patched, encoding="utf-8")
+
+    def _patch_uniapp_manifest_preview_base(self, root: Path, pipeline_id: str) -> None:
+        preview_base = self._preview_base(pipeline_id)
+        manifest_files = [root / "src" / "manifest.json"]
+        manifest_files.extend(sorted(root.glob("apps/*/src/manifest.json")))
+        for manifest_file in manifest_files:
+            if not manifest_file.exists():
+                continue
+            try:
+                manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                continue
+            h5 = manifest.setdefault("h5", {})
+            if not isinstance(h5, dict):
+                continue
+            router = h5.setdefault("router", {})
+            if not isinstance(router, dict):
+                continue
+            router["mode"] = "history"
+            router["base"] = preview_base
+            h5["publicPath"] = preview_base
+            manifest_file.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _patch_uniapp_runtime_api_config(self, root: Path, pipeline_id: str) -> None:
+        preview_base = self._preview_base(pipeline_id).rstrip("/")
+        replacements = {
+            "javaUrl": f"{preview_base}/javaApi",
+            "aiJavaUrl": f"{preview_base}/hotelAi/dify/hotel/v2",
+            "h5Url": preview_base,
+        }
+        config_files = sorted(root.glob("apps/*/config/*.config.js"))
+        config_files.extend(sorted((root / "config").glob("*.config.js")) if (root / "config").exists() else [])
+        for config_file in config_files:
+            content = config_file.read_text(encoding="utf-8")
+            patched = content
+            for key, value in replacements.items():
+                patched = re.sub(
+                    rf"({re.escape(key)}\s*:\s*)['\"][^'\"]*['\"]",
+                    lambda match, replacement=value: f"{match.group(1)}{json.dumps(replacement)}",
+                    patched,
+                )
+            if patched != content:
+                config_file.write_text(patched, encoding="utf-8")
+        src_config_files = [root / "src" / "config" / "index.ts"]
+        src_config_files.extend(sorted(root.glob("apps/*/src/config/index.ts")))
+        for config_file in src_config_files:
+            if not config_file.exists():
+                continue
+            content = config_file.read_text(encoding="utf-8")
+            patched = content
+            patched = re.sub(r"javaUrl\s*:\s*['\"]/javaApi['\"]", f"javaUrl: {json.dumps(replacements['javaUrl'])}", patched)
+            patched = re.sub(r"aiJavaUrl\s*:\s*['\"]/hotelAi['\"]", f"aiJavaUrl: {json.dumps(preview_base + '/hotelAi')}", patched)
+            patched = re.sub(r"h5Url\s*:\s*window\.location\.origin", f"h5Url: {json.dumps(replacements['h5Url'])}", patched)
+            if patched != content:
+                config_file.write_text(patched, encoding="utf-8")
+
+    def _clear_preview_vite_cache(self, root: Path, frontend_files: Dict[str, str]) -> None:
+        candidates = [root / "node_modules" / ".vite"]
+        for app_name in self._generated_apps(frontend_files):
+            candidates.append(root / "apps" / app_name / "node_modules" / ".vite")
+        for cache_dir in candidates:
+            if cache_dir.exists():
+                shutil.rmtree(cache_dir, ignore_errors=True)
+
     def _api_base_url_for_preview(self, root: Path, project_env: Dict[str, str], pipeline_id: str) -> str:
         configured = project_env.get("VUE_APP_API_BASE_URL") or ""
         if configured.rstrip("/") != "/api":
@@ -877,10 +1214,31 @@ class SandboxPreviewService:
             async with self._start_semaphore:
                 root = self._preview_root(pipeline_id)
                 try:
-                    await self._prepare_project_root(root, project_info)
+                    preview_fallback_reason = ""
+                    html_preview_path = ""
+                    try:
+                        await self._prepare_project_root(root, project_info)
+                    except Exception as exc:
+                        fallback_path = self._prepare_miniapp_html_fallback_root(
+                            root,
+                            frontend_files,
+                            project_info,
+                            str(exc),
+                        )
+                        if not fallback_path:
+                            raise
+                        preview_fallback_reason = str(exc)
+                        html_preview_path = fallback_path
+                        logger.warning(
+                            "Falling back to miniapp HTML preview for %s after project clone/setup failed: %s",
+                            pipeline_id,
+                            exc,
+                        )
                     self._safe_write_files(root, frontend_files)
-                    html_preview_path = self._install_miniapp_html_preview(root, frontend_files)
+                    html_preview_path = html_preview_path or self._install_miniapp_html_preview(root, frontend_files)
+                    uniapp_preview_path = self._install_uniapp_monorepo_preview_files(root, frontend_files)
                     generated_preview_path = self._install_generated_vue_routes(root, frontend_files)
+                    generated_preview_path = generated_preview_path or uniapp_preview_path
                     self._patch_vue_cli_preview_base(root)
 
                     port = await self._allocate_port()
@@ -890,29 +1248,32 @@ class SandboxPreviewService:
                         not node_marker.exists() or node_marker.read_text(encoding="utf-8").strip() != node_version
                     ):
                         shutil.rmtree(root / "node_modules", ignore_errors=True)
-                    if not (root / "node_modules").exists():
-                        install_cmd = [
-                            "npm",
-                            "install",
-                            "--registry=https://registry.npmmirror.com",
-                            "--no-audit",
-                            "--no-fund",
-                            "--legacy-peer-deps",
-                            "--progress=false",
-                            "--cache",
-                            str(Path(settings.pipeline_workspace_root) / ".npm-cache"),
-                        ]
+                    is_html_fallback = bool(preview_fallback_reason)
+                    if not is_html_fallback and not (root / "node_modules").exists():
+                        install_cmd = self._install_command(root)
+                        package_manager = install_cmd[0]
+                        if not shutil.which(package_manager):
+                            raise RuntimeError(f"admin-python 容器未安装 {package_manager}，无法安装真实前端项目依赖")
                         code, output = await self._run(install_cmd, root, timeout=1200)
                         if code != 0:
-                            raise RuntimeError(f"npm install 失败: {output[-500:]}")
+                            raise RuntimeError(f"{package_manager} install 失败: {output[-500:]}")
                         node_marker.write_text(node_version, encoding="utf-8")
 
-                    self._patch_vue_cli_service_no_hmr(root)
-                    dev_cmd = self._dev_command(root, port)
+                    if not is_html_fallback:
+                        self._patch_vue_cli_service_no_hmr(root)
+                        self._patch_vite_preview_config(root)
+                        self._patch_uniapp_manifest_preview_base(root, pipeline_id)
+                        self._patch_uniapp_runtime_api_config(root, pipeline_id)
+                        self._clear_preview_vite_cache(root, frontend_files)
+                    dev_cmd = self._dev_command(root, port, frontend_files)
                     env = os.environ.copy()
                     project_env = self._load_env_file(root, ".env.development")
-                    proxy_targets = self._preview_proxy_targets(project_env)
-                    api_base_url = self._api_base_url_for_preview(root, project_env, pipeline_id)
+                    proxy_targets = (
+                        {"api": "", "java": "", "log": ""}
+                        if is_html_fallback
+                        else self._preview_proxy_targets(project_env)
+                    )
+                    api_base_url = self._preview_base(pipeline_id).rstrip("/") if is_html_fallback else self._api_base_url_for_preview(root, project_env, pipeline_id)
                     env.update({
                         "VUE_APP_PROXY": proxy_targets["api"],
                         "VUE_APP_JAVA_PROXY": proxy_targets["java"],
@@ -922,6 +1283,9 @@ class SandboxPreviewService:
                         "VUE_APP_SANDBOX_PREVIEW_DEFAULT_ROUTE": generated_preview_path,
                         "VUE_APP_SANDBOX_PREVIEW_PUBLIC": env.get("VUE_APP_SANDBOX_PREVIEW_PUBLIC") or "localhost",
                         "VUE_APP_SANDBOX_PREVIEW_DISABLE_WDS_CLIENT": "1",
+                        "VITE_SANDBOX_PREVIEW_BASE": self._preview_base(pipeline_id),
+                        "VITE_SANDBOX_PREVIEW_HOST": settings.pipeline_preview_host,
+                        "VITE_SANDBOX_PREVIEW_PORT": str(port),
                     })
                     process = await asyncio.create_subprocess_exec(
                         *dev_cmd,
@@ -941,6 +1305,7 @@ class SandboxPreviewService:
                         "generated_preview_path": generated_preview_path,
                         "project_info": project_info,
                         "proxy_targets": proxy_targets,
+                        "fallback_reason": preview_fallback_reason,
                     }
                     self._issue_token(entry)
                     entry["output_task"] = asyncio.create_task(self._drain_process_output(pipeline_id, process))
@@ -1026,8 +1391,10 @@ class SandboxPreviewService:
         elif path.startswith(("api/", "javaApi/", "logApi/", "socket.io/")):
             target = f"http://{settings.pipeline_preview_host}:{entry['port']}/{path}"
         else:
-            preview_path = entry.get("html_preview_path") if not path else ""
             generated_path = entry.get("generated_preview_path") if not path else ""
+            is_uniapp_page = str(generated_path or "").lstrip("/").startswith("pages/")
+            preview_path = entry.get("html_preview_path") if not path and not is_uniapp_page else ""
+            generated_path = "" if is_uniapp_page else generated_path
             fallback_path = path or str(preview_path or generated_path or "").lstrip("/")
             target = f"http://{settings.pipeline_preview_host}:{entry['port']}{self._preview_base(pipeline_id)}{fallback_path}"
         if query_string:
@@ -1052,6 +1419,64 @@ class SandboxPreviewService:
         if "text/html" in content_type:
             prefix = f"/api/flow/pipeline/{pipeline_id}/sandbox-preview/"
             text_body = response.text
+            runtime_proxy_script = (
+                "<script>\n"
+                "(function(){\n"
+                f"  var sandboxPrefix = {json.dumps(prefix)};\n"
+                "  function rewriteUrl(input) {\n"
+                "    if (typeof input !== 'string') return input;\n"
+                "    var url = input;\n"
+                "    if (url.indexOf(window.location.origin + '/') === 0) {\n"
+                "      url = url.slice(window.location.origin.length);\n"
+                "    }\n"
+                "    if (url.indexOf(sandboxPrefix) === 0) return input;\n"
+                "    if (/^(\\/api\\/server-time|\\/javaApi\\/|\\/hotelAi\\/|\\/log\\/save)(?:\\?|\\/|$)/.test(url)) {\n"
+                "      return sandboxPrefix + url.replace(/^\\//, '');\n"
+                "    }\n"
+                "    return input;\n"
+                "  }\n"
+                "  function installSandboxProxyPatch() {\n"
+                "    if (window.fetch && !window.fetch.__sandboxPreviewPatched) {\n"
+                "      var rawFetch = window.fetch.bind(window);\n"
+                "      var patchedFetch = function(input, init) {\n"
+                "        if (input instanceof Request) {\n"
+                "          var normalized = input.url.replace(window.location.origin, '');\n"
+                "          var rewritten = rewriteUrl(normalized);\n"
+                "          if (rewritten !== normalized) input = new Request(rewritten, input);\n"
+                "        } else {\n"
+                "          input = rewriteUrl(input);\n"
+                "        }\n"
+                "        return rawFetch(input, init);\n"
+                "      };\n"
+                "      patchedFetch.__sandboxPreviewPatched = true;\n"
+                "      window.fetch = patchedFetch;\n"
+                "    }\n"
+                "    if (window.XMLHttpRequest && !window.XMLHttpRequest.prototype.open.__sandboxPreviewPatched) {\n"
+                "      var rawOpen = window.XMLHttpRequest.prototype.open;\n"
+                "      var patchedOpen = function(method, url) {\n"
+                "        arguments[1] = rewriteUrl(url);\n"
+                "        return rawOpen.apply(this, arguments);\n"
+                "      };\n"
+                "      patchedOpen.__sandboxPreviewPatched = true;\n"
+                "      window.XMLHttpRequest.prototype.open = patchedOpen;\n"
+                "    }\n"
+                "    if (navigator.sendBeacon && !navigator.sendBeacon.__sandboxPreviewPatched) {\n"
+                "      var rawBeacon = navigator.sendBeacon.bind(navigator);\n"
+                "      var patchedBeacon = function(url, data) { return rawBeacon(rewriteUrl(url), data); };\n"
+                "      patchedBeacon.__sandboxPreviewPatched = true;\n"
+                "      navigator.sendBeacon = patchedBeacon;\n"
+                "    }\n"
+                "  }\n"
+                "  installSandboxProxyPatch();\n"
+                "  setTimeout(installSandboxProxyPatch, 0);\n"
+                "  setTimeout(installSandboxProxyPatch, 50);\n"
+                "  setTimeout(installSandboxProxyPatch, 250);\n"
+                "  setInterval(installSandboxProxyPatch, 1000);\n"
+                "})();\n"
+                "</script>\n"
+            )
+            if "sandboxPrefix" not in text_body:
+                text_body = text_body.replace("</head>", runtime_proxy_script + "</head>", 1)
             text_body = text_body.replace('src="/', f'src="{prefix}')
             text_body = text_body.replace("src='/", f"src='{prefix}")
             text_body = text_body.replace('href="/', f'href="{prefix}')

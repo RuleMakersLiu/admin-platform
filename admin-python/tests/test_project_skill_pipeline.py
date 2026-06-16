@@ -24,6 +24,8 @@ from app.services.knowledge_service import (
     _build_project_skill_content,
     _classify_requirement_for_knowledge,
     _format_project_skill_context,
+    _is_backend_project_skill,
+    _is_frontend_project_skill,
     _parse_knowledge_tags,
     select_backend_project_skill_match,
     select_backend_project_skill_matches,
@@ -619,3 +621,62 @@ def test_backend_match_returns_dubbo_related_project_group():
     assert all(item["match_source"] == "backend_project_group" for item in match["matches"])
     assert [item["match_tags"][1] for item in match["matches"]] == ["controller/API层", "service层", "core/model层"]
     assert all("兜底" not in item["match_reason"] for item in match["matches"])
+
+
+def test_javascript_vue_project_is_not_backend_skill():
+    skill = {
+        "project_id": 3,
+        "project_name": "web-product-agent",
+        "language": "javascript",
+        "framework": "vue",
+        "project_brief": "商品管理平台前端",
+        "skill_content": "Vue 页面、路由、组件、api 接口层、service/API mock fallback files.",
+        "skill_status": "confirmed",
+        "skill_version": 4,
+    }
+
+    assert _is_frontend_project_skill(skill) is True
+    assert _is_backend_project_skill(skill) is False
+
+
+def test_backend_project_group_excludes_frontend_vue_project():
+    candidates = [
+        {
+            "project_id": 2,
+            "project_name": "wealth-admin-home",
+            "language": "java",
+            "framework": "spring-boot",
+            "project_brief": "酒店智能体管理平台、供应链中台、商品管理平台接口项目，controller层",
+            "skill_content": "Controller API 接口项目，负责接收管理后台请求并通过 Dubbo 调用 service。",
+            "skill_status": "confirmed",
+            "skill_version": 1,
+        },
+        {
+            "project_id": 3,
+            "project_name": "web-product-agent",
+            "language": "javascript",
+            "framework": "vue",
+            "project_brief": "商品管理平台前端",
+            "skill_content": "Vue 页面、路由、组件、api 接口层、service/API mock fallback files.",
+            "skill_status": "confirmed",
+            "skill_version": 4,
+        },
+        {
+            "project_id": 6,
+            "project_name": "wealth-glsw-service",
+            "language": "java",
+            "framework": "spring-boot",
+            "project_brief": "酒店智能体管理平台、供应链中台、商品管理平台的java项目service层",
+            "skill_content": "Service 层实现业务逻辑，通过 Dubbo 暴露服务，使用 MyBatis Mapper。",
+            "skill_status": "confirmed",
+            "skill_version": 1,
+        },
+    ]
+    backend_candidates = [candidate for candidate in candidates if _is_backend_project_skill(candidate)]
+
+    match = select_backend_project_skill_matches(
+        "商城管理平台需要增一个费用明细系统",
+        backend_candidates,
+    )
+
+    assert [item["skill"]["project_id"] for item in match["matches"]] == [2, 6]

@@ -11,7 +11,8 @@ RUN pip install --no-cache-dir -e .
 
 COPY . .
 
-FROM node:16-slim AS node-runtime
+FROM node:22-slim AS node-runtime
+RUN npm install -g pnpm@10.11.0
 
 FROM python:3.11-slim
 
@@ -28,7 +29,9 @@ COPY --from=builder /app /app
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
 COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
-    && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+    && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && ln -sf ../lib/node_modules/pnpm/bin/pnpm.cjs /usr/local/bin/pnpm \
+    && ln -sf ../lib/node_modules/pnpm/bin/pnpx.cjs /usr/local/bin/pnpx
 
 EXPOSE 8081
 

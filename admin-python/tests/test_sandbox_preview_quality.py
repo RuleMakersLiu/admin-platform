@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path
 
@@ -130,6 +131,29 @@ def test_sandbox_preview_converts_html_comments_in_generated_scripts():
     assert "<!--" not in patched
     assert "-->" not in patched
     assert "// preview runtime guard: Array.isArray(list) || []" in patched
+
+
+def test_sandbox_preview_replaces_missing_hc_http_named_export():
+    service = SandboxPreviewService()
+
+    patched = service._patch_generated_script_content(
+        "import { http } from '@hc-agent/http'\nexport const load = () => http.get('/api/wallet')\n"
+    )
+
+    assert "import { http } from '@hc-agent/http'" not in patched
+    assert "sandbox preview mock http" in patched
+    assert "http.get('/api/wallet')" in patched
+
+
+def test_sandbox_preview_adds_missing_permission_helper_to_vue_setup():
+    service = SandboxPreviewService()
+
+    patched = service._patch_generated_vue_content(
+        "<template><button v-if=\"hasPermission('wallet:recharge')\">充值</button></template>"
+        "<script setup lang=\"ts\">const ok = true</script>"
+    )
+
+    assert "const hasPermission = () => true" in patched
 
 
 def test_preview_auto_fix_repairs_stable_missing_page_and_count_fields():
@@ -1337,6 +1361,159 @@ def test_sandbox_preview_installs_miniprogram_html_preview(tmp_path: Path):
     assert (tmp_path / "public" / "sandbox-miniapp-preview.html").exists()
 
 
+def test_sandbox_preview_installs_uniapp_monorepo_html_preview(tmp_path: Path):
+    service = SandboxPreviewService()
+    files = {
+        "apps/hotel-client/pages/wallet/index.vue": "<template><view>钱包首页</view></template>",
+        "public/sandbox-miniapp-preview.html": "<!doctype html><html><body>钱包预览</body></html>",
+    }
+
+    preview_path = service._install_miniapp_html_preview(tmp_path, files)
+
+    assert preview_path == "sandbox-miniapp-preview.html"
+    assert (tmp_path / "public" / "sandbox-miniapp-preview.html").read_text(encoding="utf-8").startswith("<!doctype html>")
+
+
+def test_sandbox_preview_patches_monorepo_vite_port_and_base(tmp_path: Path):
+    service = SandboxPreviewService()
+    config = tmp_path / "apps" / "hotel-client" / "vite.config.ts"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        """
+import { defineConfig } from 'vite'
+
+export default defineConfig(() => {
+  return {
+    server: {
+      port: 3000,
+      host: '0.0.0.0',
+    },
+  }
+})
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    service._patch_vite_preview_config(tmp_path)
+
+    patched = config.read_text(encoding="utf-8")
+    assert "VITE_SANDBOX_PREVIEW_BASE" in patched
+    assert "VITE_SANDBOX_PREVIEW_PORT" in patched
+    assert "VITE_SANDBOX_PREVIEW_HOST" in patched
+    assert "hmr: false" in patched
+
+
+def test_sandbox_preview_maps_uniapp_monorepo_pages_into_src(tmp_path: Path):
+    service = SandboxPreviewService()
+    app_src = tmp_path / "apps" / "hotel-client" / "src"
+    app_src.mkdir(parents=True)
+    (app_src / "pages.json").write_text(
+        json.dumps({"pages": [{"path": "pages/home/index", "style": {}}]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    preview_path = service._install_uniapp_monorepo_preview_files(
+        tmp_path,
+        {
+            "apps/hotel-client/pages/wallet/index.vue": "<template><view>钱包</view></template>",
+            "apps/hotel-client/api/wallet.ts": "<!-- bad comment -->\nexport const ok = true",
+        },
+    )
+
+    assert preview_path == "/pages/wallet/index"
+    assert (app_src / "pages" / "wallet" / "index.vue").exists()
+    assert (app_src / "api" / "wallet.ts").read_text(encoding="utf-8").startswith("// bad comment")
+    config = json.loads((app_src / "pages.json").read_text(encoding="utf-8"))
+    assert config["pages"][0]["path"] == "pages/wallet/index"
+    assert config["pages"][1]["path"] == "pages/home/index"
+
+
+def test_sandbox_preview_patches_uniapp_manifest_base(tmp_path: Path):
+    service = SandboxPreviewService()
+    manifest = tmp_path / "apps" / "hotel-client" / "src" / "manifest.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps({"h5": {"router": {"mode": "history", "base": "/"}, "publicPath": "/"}}),
+        encoding="utf-8",
+    )
+
+    service._patch_uniapp_manifest_preview_base(tmp_path, "pipe_demo")
+
+    config = json.loads(manifest.read_text(encoding="utf-8"))
+    assert config["h5"]["router"]["base"] == "/api/flow/pipeline/pipe_demo/sandbox-preview/"
+    assert config["h5"]["publicPath"] == "/api/flow/pipeline/pipe_demo/sandbox-preview/"
+
+
+def test_sandbox_preview_patches_uniapp_runtime_api_config(tmp_path: Path):
+    service = SandboxPreviewService()
+    config = tmp_path / "apps" / "hotel-client" / "config" / "sass.config.js"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        """
+module.exports = {
+  prod: {
+    javaUrl: 'https://api.example.com',
+    aiJavaUrl: 'https://ai.example.com/hotelAi/dify/hotel/v2',
+    h5Url: 'https://h5.example.com'
+  }
+}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    service._patch_uniapp_runtime_api_config(tmp_path, "pipe_demo")
+
+    patched = config.read_text(encoding="utf-8")
+    assert 'javaUrl: "/api/flow/pipeline/pipe_demo/sandbox-preview/javaApi"' in patched
+    assert 'aiJavaUrl: "/api/flow/pipeline/pipe_demo/sandbox-preview/hotelAi/dify/hotel/v2"' in patched
+    assert 'h5Url: "/api/flow/pipeline/pipe_demo/sandbox-preview"' in patched
+
+    src_config = tmp_path / "apps" / "hotel-client" / "src" / "config" / "index.ts"
+    src_config.parent.mkdir(parents=True)
+    src_config.write_text(
+        """
+export const getConfig = () => ({
+  javaUrl: '/javaApi',
+  aiJavaUrl: '/hotelAi',
+  h5Url: window.location.origin,
+})
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    service._patch_uniapp_runtime_api_config(tmp_path, "pipe_demo")
+
+    patched_src = src_config.read_text(encoding="utf-8")
+    assert 'javaUrl: "/api/flow/pipeline/pipe_demo/sandbox-preview/javaApi"' in patched_src
+    assert 'aiJavaUrl: "/api/flow/pipeline/pipe_demo/sandbox-preview/hotelAi"' in patched_src
+    assert 'h5Url: "/api/flow/pipeline/pipe_demo/sandbox-preview"' in patched_src
+
+
+def test_sandbox_preview_clears_matching_uniapp_vite_cache(tmp_path: Path):
+    service = SandboxPreviewService()
+    cache = tmp_path / "apps" / "hotel-client" / "node_modules" / ".vite"
+    cache.mkdir(parents=True)
+    (cache / "deps.js").write_text("cached", encoding="utf-8")
+
+    service._clear_preview_vite_cache(
+        tmp_path,
+        {"apps/hotel-client/pages/wallet/index.vue": "<template><view /></template>"},
+    )
+
+    assert not cache.exists()
+
+
+def test_sandbox_preview_redacts_git_tokens_from_command_errors():
+    service = SandboxPreviewService()
+
+    output = service._redact_sensitive_output(
+        "git clone http://oauth2:secret-token@gitlab.example.com/group/repo.git failed"
+    )
+
+    assert "secret-token" not in output
+    assert "oauth2:***@" in output
+
+
 def test_sandbox_preview_extracts_generated_list_api_paths():
     service = SandboxPreviewService()
     files = {
@@ -1485,6 +1662,36 @@ def test_vue_cli_preview_keeps_original_dev_server_and_routes_wds_resources(tmp_
     assert "delete vueConfig.devServer.proxy['sockjs-node']" in vue_config
     assert "delete vueConfig.devServer.proxy['/api'].pathRewrite" in vue_config
     assert "vueConfig.devServer.inline = false" in vue_config
+
+
+def test_pnpm_workspace_preview_uses_matching_uniapp_h5_script(tmp_path: Path):
+    service = SandboxPreviewService()
+    root = tmp_path / "monorepo-commonAI"
+    root.mkdir()
+    (root / "pnpm-workspace.yaml").write_text("packages:\n  - 'apps/*'\n", encoding="utf-8")
+    (root / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n", encoding="utf-8")
+    (root / "package.json").write_text(
+        json.dumps({
+            "packageManager": "pnpm@10.11.0",
+            "scripts": {
+                "dev": "pnpm --parallel --filter \"apps/*\" run dev",
+                "dev:hotel-client:h5:sass": "pnpm --filter \"hotel-client\" run dev:h5:sass",
+            },
+        }),
+        encoding="utf-8",
+    )
+
+    install_command = service._install_command(root)
+    dev_command = service._dev_command(
+        root,
+        43000,
+        {"apps/hotel-client/pages/wallet/index.vue": "<template />"},
+    )
+
+    assert install_command[:2] == ["pnpm", "install"]
+    assert "--frozen-lockfile=false" in install_command
+    assert dev_command[:3] == ["pnpm", "run", "dev:hotel-client:h5:sass"]
+    assert "--port" in dev_command
 
 
 def test_vue_cli_service_patch_disables_wds_client_in_sandbox(tmp_path: Path):

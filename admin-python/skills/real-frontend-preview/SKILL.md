@@ -77,6 +77,20 @@ Rules:
 - A combined "新增/编辑" action can be satisfied by one modal/drawer/form component with both create and edit handlers. Do not count the words "新增/编辑" as two missing primary pages by themselves.
 - Required visible actions are user commands, not container names. A drawer or modal label such as "新建/编辑抽屉" should be implemented as a form container opened by visible commands like "新建批次" and row-level "编辑"; the UI does not need a literal button named "新建/编辑抽屉".
 
+## Uni-App And Miniapp Projects
+
+- Do not treat uni-app or miniapp repositories as ordinary web admin projects.
+- For uni-app monorepos, generate files under the matched app's real structure, for example `apps/<app>/pages/**/index.vue` and `apps/<app>/api/*.ts`, unless the project skill explicitly gives a different convention.
+- Generate source pages for the real app, not only a browser-only HTML page. Native miniapp projects may additionally need `public/sandbox-miniapp-preview.html` for browser validation, but that file does not replace the source page files.
+- Preserve the project's confirmed API wrapper. Do not invent named imports such as `import { http } from '@hc-agent/http'` unless the project skill or code reference proves that export exists.
+- If the real API wrapper is not confirmed and the page is new, keep preview data isolated in a page-specific mock/helper whose fields match the API contract. Do not shadow an existing real request function name.
+
+## Permission Helpers
+
+- Use `hasPermission`, `v-action`, permission directives, or global permission helpers only when the matched project skill or code reference confirms they exist.
+- If permission behavior is required but the helper is not confirmed, define a small local helper in the generated page so the preview remains runnable, and keep the permission keys visible in the code.
+- Never render a template expression that references an undefined permission helper.
+
 ## Previewability
 
 - Every template event handler and rendered slot must have an implementation.

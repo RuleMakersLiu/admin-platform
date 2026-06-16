@@ -703,11 +703,13 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 4. 详情/编辑/配置接口必须返回对象，可包在 `result` 或 `data` 中；页面读取前必须有默认空对象，禁止直接对可能为 undefined 的对象取深层字段。
 5. 接口函数必须兼容真实接口和 mock 接口，推荐写法：列表 `then(res => res.result || res.data || res)`，详情 `then(res => res.result || res.data || {})`。
 6. 小程序/uni-app 页面必须遵循项目路由和页面生命周期：原生小程序至少成对生成 `pages/.../*.wxml` 和 `pages/.../*.js`，需要样式/配置时补 `*.wxss/*.json`；uni-app 使用 `pages/.../*.vue`，不要引用 Web-only 组件。
-7. 原生小程序必须额外生成 `public/sandbox-miniapp-preview.html`，作为浏览器可打开的 H5 等效预览。该 HTML 必须自包含 CSS/JS/mock 数据，并真实呈现小程序页面的布局、状态和交互；它是验收预览，不替代小程序源码。
-8. 禁止引用项目中未确认存在的组件、指令或工具；如果不确定，直接使用目标项目基础组件和本文件内方法。
-9. 所有模板事件引用的方法必须实现；表格列的 `scopedSlots` 必须有对应 slot。
-10. 代码必须能在首屏无运行时报错：不得访问可能为 undefined 的 `.length`、`.map`、`.filter`，除非先做 `Array.isArray` 或默认空数组。
-11. 数组兜底重点在页面组件里完成：例如 `const rows = Array.isArray(payload.list) ? payload.list : []`，模板和渲染逻辑只读取 `rows`；API/mock 服务模块只要返回契约正确的列表对象，不要因为参数处理中的 `.map/.filter/.length` 影响页面可用性。
+7. uni-app monorepo 必须按目标应用真实结构生成，例如 `apps/<app>/pages/**/index.vue` 和 `apps/<app>/api/*.ts`；不要生成 Web 后台路径。API/service 必须复用项目已确认的请求导出；如果无法确认 `@hc-agent/http` 是否导出 `http`，禁止写 `import { http } from '@hc-agent/http'` 这类未验证命名导入，改用项目既有 API 文件中的实际封装或页面内预览 mock。
+8. 使用 `hasPermission`、`v-action`、权限指令或全局 helper 前必须确认目标项目已有该能力；如果未确认但页面设计要求体现按钮权限，必须在当前页面内定义可运行的最小权限 helper，确保首屏不会因未定义变量报错。
+9. 原生小程序必须额外生成 `public/sandbox-miniapp-preview.html`，作为浏览器可打开的 H5 等效预览。该 HTML 必须自包含 CSS/JS/mock 数据，并真实呈现小程序页面的布局、状态和交互；它是验收预览，不替代小程序源码。
+10. 禁止引用项目中未确认存在的组件、指令或工具；如果不确定，直接使用目标项目基础组件和本文件内方法。
+11. 所有模板事件引用的方法必须实现；表格列的 `scopedSlots` 必须有对应 slot。
+12. 代码必须能在首屏无运行时报错：不得访问可能为 undefined 的 `.length`、`.map`、`.filter`，除非先做 `Array.isArray` 或默认空数组。
+13. 数组兜底重点在页面组件里完成：例如 `const rows = Array.isArray(payload.list) ? payload.list : []`，模板和渲染逻辑只读取 `rows`；API/mock 服务模块只要返回契约正确的列表对象，不要因为参数处理中的 `.map/.filter/.length` 影响页面可用性。
 
 ## 输出格式
 只允许输出 JSON 文件数组，不要输出 Markdown，不要输出代码块围栏，不要输出解释文字。系统会直接解析这个 JSON 并写入前端项目。
@@ -876,6 +878,8 @@ JSON 格式如下:
 - 必须复用目标前端项目的目录、路由、API 封装、组件库、权限指令和样式规范。
 - 不确定是否存在的组件/工具不要引用；优先使用基础组件和本文件内可维护方法。
 - 只输出本需求相关文件；不输出静态演示页或与真实项目脱节的 mock wrapper。
+- uni-app/小程序项目不要按普通 Web 后台生成；monorepo 项目必须输出目标应用真实页面路径，例如 `apps/<app>/pages/**/index.vue`，并按 H5 可预览要求补齐页面内 mock/兜底状态。
+- 禁止引用未验证的 API 命名导出或权限 helper。使用 `@hc-agent/http`、`hasPermission`、`v-action` 等能力前必须来自 Project Skill/代码参考；否则使用当前文件内可运行的最小 helper 或与页面字段一致的预览 mock，保证首屏不报错。
 
 **技术栈判断规则**:
 - 如果技术栈包含 `vue`、`react`、`javascript`、`typescript` 等 → 生成对应前端框架代码
@@ -1406,6 +1410,14 @@ def _page_name_tokens(name: str) -> List[str]:
     ]
     semantic_tokens: List[str] = []
     semantic_map = {
+        "首页": ["index", "home", "main"],
+        "主页": ["index", "home", "main"],
+        "钱包": ["wallet"],
+        "交易": ["transaction", "trade"],
+        "明细": ["detail", "record", "transaction"],
+        "流水": ["record", "transaction"],
+        "充值": ["recharge"],
+        "提现": ["withdraw"],
         "拼团": ["group"],
         "团购": ["group"],
         "团单": ["团单", "team", "groupteam", "order"],
@@ -2294,7 +2306,11 @@ def _validate_frontend_preview_code_files(
     normalized_paths = [str(path).replace("\\", "/").lstrip("/") for path in files]
     vue_admin_paths = [
         path for path in normalized_paths
-        if path.startswith(("src/views/", "src/pages/", "pages/")) and path.endswith(".vue")
+        if (
+            path.startswith(("src/views/", "src/pages/", "pages/"))
+            or re.match(r"^apps/[^/]+/pages/.+\.vue$", path)
+        )
+        and path.endswith(".vue")
     ]
     react_page_paths = [
         path for path in normalized_paths
@@ -2317,7 +2333,8 @@ def _validate_frontend_preview_code_files(
     ]
     static_paths = [path for path in normalized_paths if path.endswith((".html", ".htm"))]
 
-    if static_paths and not mini_wxml_paths:
+    non_preview_static_paths = [path for path in static_paths if path not in html_preview_paths]
+    if non_preview_static_paths and not mini_wxml_paths:
         issues.append("预览阶段禁止生成静态 HTML 文件，必须生成真实前端项目代码")
     if not (vue_admin_paths or react_page_paths or mini_wxml_paths):
         issues.append("缺少可预览页面文件：Vue/uni-app .vue、React .tsx/.jsx 或小程序 pages/*.wxml")
