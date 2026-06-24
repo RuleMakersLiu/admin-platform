@@ -2,6 +2,7 @@ from pathlib import Path
 
 from app.ai.flow_manager import (
     _auto_fix_frontend_preview_code_files,
+    _build_code_review_fix_feedback,
     _build_preview_failure_message,
     _build_repair_tasks_from_issues,
     _build_repair_task_feedback,
@@ -1434,3 +1435,50 @@ def test_preview_parser_flags_truncated_preview():
     assert parsed["preview_quality"]["ready_for_preview"] is False
     assert parsed["preview_quality"]["score"] < 80
     assert any("截断" in item or "过短" in item for item in parsed["preview_quality"]["issues"])
+
+
+def test_code_review_fix_feedback_includes_field_mismatches():
+    parsed = {
+        "contract_alignment": "契约对齐说明",
+        "fix_suggestions": "建议A",
+        "field_mismatches": [
+            {
+                "severity": "高",
+                "location": "用户列表",
+                "frontend_field": "name",
+                "contract_field": "username",
+                "fix": "改字段名",
+            }
+        ],
+    }
+
+    mismatch_feedback, fix_feedback = _build_code_review_fix_feedback(parsed, "RAW")
+
+    assert "高" in mismatch_feedback
+    assert "当前: name" in mismatch_feedback
+    assert "应为: username" in mismatch_feedback
+    # fix_feedback carries the review-failed prefix, both alignment notes, and
+    # the preserve-existing-page constraint.
+    assert "自动审查未通过" in fix_feedback
+    assert "契约对齐说明" in fix_feedback
+    assert mismatch_feedback in fix_feedback
+    assert "必须保留现有页面" in fix_feedback
+    # fix_suggestions present -> raw_output snippet is NOT appended.
+    assert "RAW" not in fix_feedback
+
+
+def test_code_review_fix_feedback_without_suggestions_appends_raw_snippet():
+    parsed = {"field_mismatches": []}
+
+    _, fix_feedback = _build_code_review_fix_feedback(parsed, "RAWOUTPUT")
+
+    assert "RAWOUTPUT" in fix_feedback
+    assert "自动审查未通过" in fix_feedback
+
+
+def test_code_review_fix_feedback_empty_mismatches():
+    mismatch_feedback, fix_feedback = _build_code_review_fix_feedback({}, "")
+
+    assert mismatch_feedback == ""
+    assert "自动审查未通过" in fix_feedback
+    assert "必须保留现有页面" in fix_feedback

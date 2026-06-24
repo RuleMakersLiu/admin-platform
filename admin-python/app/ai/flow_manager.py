@@ -137,6 +137,49 @@ def _stage_needs_confirm(stage_key: str) -> bool:
     return False
 
 
+def _build_code_review_fix_feedback(
+    parsed: Dict[str, Any], raw_output: str
+) -> Tuple[str, str]:
+    """Build code-review failure feedback from a failed review result.
+
+    Returns (mismatch_feedback, fix_feedback). mismatch_feedback is returned
+    separately because the caller reuses it both inside fix_feedback and as a
+    repair-issue entry. Pure function — no side effects.
+    """
+    mismatch_feedback = ""
+    field_mismatches = parsed.get("field_mismatches")
+    if isinstance(field_mismatches, list) and field_mismatches:
+        mismatch_feedback = "\n".join(
+            "- "
+            + "，".join(
+                str(part)
+                for part in (
+                    item.get("severity"),
+                    item.get("location"),
+                    f"当前: {item.get('frontend_field')}" if item.get("frontend_field") else "",
+                    f"应为: {item.get('contract_field')}" if item.get("contract_field") else "",
+                    item.get("fix"),
+                )
+                if part
+            )
+            for item in field_mismatches
+            if isinstance(item, dict)
+        )
+    fix_feedback = "\n".join(
+        part.strip()
+        for part in (
+            "自动审查未通过，请只修复审查指出的问题，生成完整可运行代码。",
+            parsed.get("contract_alignment", ""),
+            mismatch_feedback,
+            parsed.get("fix_suggestions", ""),
+            "必须保留现有页面、现有接口、现有查询条件和现有表格列；只做本次需求的增量改造。",
+            raw_output[:500] if not parsed.get("fix_suggestions") else "",
+        )
+        if part and str(part).strip()
+    )
+    return mismatch_feedback, fix_feedback
+
+
 def _should_pause_for_stage(stage_key: str, auto_review_fix_active: bool = False) -> bool:
     if not _stage_needs_confirm(stage_key):
         return False
@@ -5497,6 +5540,38 @@ class DevPipelineManager:
             "result": parsed,
         })
 
+    async def _complete_pipeline(
+        self,
+        session: AsyncSession,
+        pipe: 'DevPipeline',
+        stages: Dict[str, Any],
+        current_stage: str,
+        pipeline_id: str,
+        emit,
+    ) -> Dict[str, Any]:
+        """Mark the pipeline COMPLETED: record user evolution + delivery
+        knowledge, clean up temp files, emit the completed event, and return
+        the completion result dict.
+
+        Centralizes the epilogue that was duplicated by the normal-advance path
+        and the timeout code-review fallback path of execute_stage.
+        """
+        pipe.status = PipelineStatus.COMPLETED.value
+        pipe.stages_data = json.dumps(stages, ensure_ascii=False)
+        pipe.update_time = int(time.time() * 1000)
+        await self._record_user_evolution(session, pipe, stages)
+        await self._record_delivery_knowledge(pipe, stages)
+        await session.commit()
+        await _cleanup_pipeline_temp_files(pipeline_id)
+        logger.info(f"Pipeline {pipeline_id}: All stages completed")
+        await emit({"type": "completed", "stage": current_stage})
+        return {
+            "pipeline_id": pipeline_id,
+            "stage": current_stage,
+            "status": "completed",
+            "message": "流水线全部完成",
+        }
+
     async def execute_stage(
         self,
         pipeline_id: str,
@@ -5973,36 +6048,8 @@ class DevPipelineManager:
                             pipe.retry_count += 1
                             loop_stage = _fix_loop_stage_for_mode(stage_keys)
                             auto_review_fix_active = True
-                            mismatch_feedback = ""
-                            field_mismatches = parsed.get("field_mismatches")
-                            if isinstance(field_mismatches, list) and field_mismatches:
-                                mismatch_feedback = "\n".join(
-                                    "- "
-                                    + "，".join(
-                                        str(part)
-                                        for part in (
-                                            item.get("severity"),
-                                            item.get("location"),
-                                            f"当前: {item.get('frontend_field')}" if item.get("frontend_field") else "",
-                                            f"应为: {item.get('contract_field')}" if item.get("contract_field") else "",
-                                            item.get("fix"),
-                                        )
-                                        if part
-                                    )
-                                    for item in field_mismatches
-                                    if isinstance(item, dict)
-                                )
-                            fix_feedback = "\n".join(
-                                part.strip()
-                                for part in (
-                                    "自动审查未通过，请只修复审查指出的问题，生成完整可运行代码。",
-                                    parsed.get("contract_alignment", ""),
-                                    mismatch_feedback,
-                                    parsed.get("fix_suggestions", ""),
-                                    "必须保留现有页面、现有接口、现有查询条件和现有表格列；只做本次需求的增量改造。",
-                                    raw_output[:500] if not parsed.get("fix_suggestions") else "",
-                                )
-                                if part and str(part).strip()
+                            mismatch_feedback, fix_feedback = _build_code_review_fix_feedback(
+                                parsed, raw_output
                             )
                             pipe.current_stage = loop_stage
                             repair_issues = [
@@ -6141,21 +6188,9 @@ class DevPipelineManager:
                         # 旧流水线阶段不在当前定义中，跳到末尾
                         idx = len(stage_keys) - 1
                     if idx + 1 >= len(stage_keys):
-                        pipe.status = PipelineStatus.COMPLETED.value
-                        pipe.stages_data = json.dumps(stages, ensure_ascii=False)
-                        pipe.update_time = int(time.time() * 1000)
-                        await self._record_user_evolution(session, pipe, stages)
-                        await self._record_delivery_knowledge(pipe, stages)
-                        await session.commit()
-                        await _cleanup_pipeline_temp_files(pipeline_id)
-                        logger.info(f"Pipeline {pipeline_id}: All stages completed")
-                        await emit({"type": "completed", "stage": current_stage})
-                        return {
-                            "pipeline_id": pipeline_id,
-                            "stage": current_stage,
-                            "status": "completed",
-                            "message": "流水线全部完成",
-                        }
+                        return await self._complete_pipeline(
+                            session, pipe, stages, current_stage, pipeline_id, emit
+                        )
 
                     next_stage = stage_keys[idx + 1]
                     pipe.current_stage = next_stage
@@ -6243,20 +6278,9 @@ class DevPipelineManager:
                         except ValueError:
                             idx = len(stage_keys) - 1
                         if idx + 1 >= len(stage_keys):
-                            pipe.status = PipelineStatus.COMPLETED.value
-                            pipe.stages_data = json.dumps(stages, ensure_ascii=False)
-                            pipe.update_time = int(time.time() * 1000)
-                            await self._record_user_evolution(session, pipe, stages)
-                            await self._record_delivery_knowledge(pipe, stages)
-                            await session.commit()
-                            await _cleanup_pipeline_temp_files(pipeline_id)
-                            await emit({"type": "completed", "stage": current_stage})
-                            return {
-                                "pipeline_id": pipeline_id,
-                                "stage": current_stage,
-                                "status": "completed",
-                                "message": "流水线全部完成",
-                            }
+                            return await self._complete_pipeline(
+                                session, pipe, stages, current_stage, pipeline_id, emit
+                            )
                         pipe.current_stage = stage_keys[idx + 1]
                         pipe.status = PipelineStatus.RUNNING.value
                         pipe.stages_data = json.dumps(stages, ensure_ascii=False)
