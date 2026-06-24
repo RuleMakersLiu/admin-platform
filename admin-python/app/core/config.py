@@ -21,8 +21,11 @@ class Settings(BaseSettings):
 
     # 数据库配置
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/admin_platform"
-    database_pool_size: int = 10
-    database_max_overflow: int = 20
+    # 连接池需容纳并发流水线最坏占用：每条流水线顺序阶段持 1 连接，并行 FE/BE 阶段
+    # 额外开 2 条 branch_session（共 3）。pipeline_execution_concurrency=8 时最坏 24 连接，
+    # 需为其它请求留余量，故默认池上限 15+30=45。
+    database_pool_size: int = 15
+    database_max_overflow: int = 30
 
     # Redis配置
     redis_url: str = "redis://localhost:6379/1"
