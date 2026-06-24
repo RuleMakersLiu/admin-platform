@@ -5459,6 +5459,44 @@ class DevPipelineManager:
             logger.warning(f"Failed to load project prompts for {project_id}: {e}")
         return {}
 
+    async def _record_parallel_stage(
+        self,
+        pipeline_id: str,
+        stage_key: str,
+        agent_label: str,
+        raw_output: str,
+        parsed: Dict[str, Any],
+        stages: Dict[str, Any],
+        pipe: 'DevPipeline',
+        session: AsyncSession,
+        emit,
+    ) -> None:
+        """Record a completed fan-out branch (frontend_dev / backend_dev):
+        update stage status, persist memory, and emit completion.
+        Centralizes the previously duplicated FE/BE result handling.
+        """
+        stage_update: Dict[str, Any] = {
+            "status": "completed",
+            "output": raw_output,
+            "structured_output": parsed,
+            "revision_feedback": "",
+            "completed_at": datetime.now().isoformat(),
+        }
+        if stage_key == "frontend_dev":
+            stage_update["preview_html"] = parsed.get("preview_html", "")
+        stage_update["code_files"] = parsed.get("code_files", {})
+        stages[stage_key].update(stage_update)
+        await self._save_stage_memory(
+            pipeline_id, stage_key, agent_label,
+            raw_output, parsed, pipe.tenant_id, db_session=session,
+        )
+        await emit({
+            "type": "stage_completed",
+            "stage": stage_key,
+            "output": raw_output,
+            "result": parsed,
+        })
+
     async def execute_stage(
         self,
         pipeline_id: str,
@@ -5538,48 +5576,19 @@ class DevPipelineManager:
                         if isinstance(fe_result, Exception):
                             raise fe_result
                         fe_output, fe_parsed = fe_result
-                        stages["frontend_dev"].update({
-                            "status": "completed",
-                            "output": fe_output,
-                            "structured_output": fe_parsed,
-                            "preview_html": fe_parsed.get("preview_html", ""),
-                            "code_files": fe_parsed.get("code_files", {}),
-                            "revision_feedback": "",
-                            "completed_at": datetime.now().isoformat(),
-                        })
-                        await self._save_stage_memory(
+                        await self._record_parallel_stage(
                             pipeline_id, "frontend_dev", "FE",
-                            fe_output, fe_parsed, pipe.tenant_id, db_session=session,
+                            fe_output, fe_parsed, stages, pipe, session, emit,
                         )
-                        await emit({
-                            "type": "stage_completed",
-                            "stage": "frontend_dev",
-                            "output": fe_output,
-                            "result": fe_parsed,
-                        })
 
                         # 处理后端结果
                         if isinstance(be_result, Exception):
                             raise be_result
                         be_output, be_parsed = be_result
-                        stages["backend_dev"].update({
-                            "status": "completed",
-                            "output": be_output,
-                            "structured_output": be_parsed,
-                            "code_files": be_parsed.get("code_files", {}),
-                            "revision_feedback": "",
-                            "completed_at": datetime.now().isoformat(),
-                        })
-                        await self._save_stage_memory(
+                        await self._record_parallel_stage(
                             pipeline_id, "backend_dev", "BE",
-                            be_output, be_parsed, pipe.tenant_id, db_session=session,
+                            be_output, be_parsed, stages, pipe, session, emit,
                         )
-                        await emit({
-                            "type": "stage_completed",
-                            "stage": "backend_dev",
-                            "output": be_output,
-                            "result": be_parsed,
-                        })
 
                         # 执行 Skill（写文件）
                         for sk, prs in [("frontend_dev", fe_parsed), ("backend_dev", be_parsed)]:
