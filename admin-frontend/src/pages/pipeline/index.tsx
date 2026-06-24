@@ -72,6 +72,12 @@ const PipelinePage: React.FC = () => {
   const [stageOutputSaving, setStageOutputSaving] = useState(false)
   const streamAbortRef = useRef<AbortController | null>(null)
   const streamReconnectKeyRef = useRef('')
+  // Streaming chunks can arrive dozens of times per second. Writing each one
+  // straight to state re-renders the whole page per chunk (jank). Buffer them
+  // and flush on a short interval instead — ~12 fps is smooth for streaming
+  // text and cuts re-render count by an order of magnitude.
+  const pendingChunksRef = useRef<Record<string, string>>({})
+  const chunkFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isProductOnlyFlow = canUseProductPortal(user) && !canUsePipelineWorkbench(user)
 
   useEffect(() => {
@@ -79,7 +85,10 @@ const PipelinePage: React.FC = () => {
   }, [user])
 
   useEffect(() => {
-    return () => streamAbortRef.current?.abort()
+    return () => {
+      streamAbortRef.current?.abort()
+      if (chunkFlushTimerRef.current) clearTimeout(chunkFlushTimerRef.current)
+    }
   }, [])
 
   useEffect(() => {
@@ -199,6 +208,26 @@ const PipelinePage: React.FC = () => {
     return () => clearInterval(timer)
   }, [pipelineId, pipeline?.status, executionActive, refreshStatus])
 
+  // Drain buffered streaming chunks into state in a single update.
+  const flushPendingChunks = useCallback(() => {
+    chunkFlushTimerRef.current = null
+    const pending = pendingChunksRef.current
+    if (!pending || !Object.keys(pending).length) return
+    pendingChunksRef.current = {}
+    setStreamOutputByStage((prev) => {
+      const next = { ...prev }
+      for (const stageKey of Object.keys(pending)) {
+        next[stageKey] = appendLiveOutput(next[stageKey] || '', pending[stageKey])
+      }
+      return next
+    })
+  }, [])
+
+  const scheduleChunkFlush = useCallback(() => {
+    if (chunkFlushTimerRef.current != null) return
+    chunkFlushTimerRef.current = setTimeout(flushPendingChunks, 80)
+  }, [flushPendingChunks])
+
   const applyStreamEvent = useCallback((event: PipelineStreamEvent) => {
     if (event.type === 'heartbeat') return
 
@@ -207,6 +236,7 @@ const PipelinePage: React.FC = () => {
     }
 
     if ((event.type === 'stage_started' || event.type === 'stage_retry') && event.stage) {
+      flushPendingChunks()
       setExecutionActive(true)
       const stageKey = event.stage as string
       setStreamOutputByStage({ [stageKey]: '' })
@@ -236,32 +266,19 @@ const PipelinePage: React.FC = () => {
     if (event.type === 'chunk' && event.stage && event.content) {
       const stageKey = event.stage
       setExecutionActive(true)
-      setStreamOutputByStage((prev) => ({
-        ...prev,
-        [stageKey]: appendLiveOutput(prev[stageKey] || '', event.content || ''),
-      }))
-      setPipeline((prev) => {
-        if (!prev) return prev
-        const stage = prev.stages?.[stageKey]
-        if (!stage) return prev
-        return {
-          ...prev,
-          status: 'running',
-          current_stage: stageKey,
-          stages: {
-            ...prev.stages,
-            [stageKey]: {
-              ...stage,
-              status: 'running',
-              output: appendLiveOutput(stage.output || '', event.content || ''),
-            },
-          },
-        }
-      })
+      // Buffer the chunk; flush to state on a throttle (see flushPendingChunks).
+      // We deliberately do NOT mirror the output into `pipeline` per chunk —
+      // the live <pre> reads streamOutputByStage, and the final output arrives
+      // via the stage_completed event (or a server refresh on reconnect), so a
+      // per-chunk pipeline update would only force the whole page to re-render.
+      pendingChunksRef.current[stageKey] =
+        (pendingChunksRef.current[stageKey] || '') + (event.content || '')
+      scheduleChunkFlush()
       return
     }
 
     if (event.type === 'stage_completed' && event.stage) {
+      flushPendingChunks()
       const stageKey = event.stage
       setStreamOutputByStage((prev) => {
         const next = { ...prev }
@@ -300,7 +317,7 @@ const PipelinePage: React.FC = () => {
         })
       }
     }
-  }, [pipelineId, userRequest])
+  }, [pipelineId, userRequest, flushPendingChunks, scheduleChunkFlush])
 
   const runPipelineStream = useCallback(async (targetId: string, input = '') => {
     streamAbortRef.current?.abort()
