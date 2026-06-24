@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -340,8 +341,56 @@ func (s *DeployService) getProjectConfig(name string) *Project {
 	return nil
 }
 
+// allowedBuildCommands is the allowlist of command prefixes permitted in a
+// build_cmd. Anything else (curl, wget, nc, sh -c "...", etc.) is rejected.
+var allowedBuildCommands = map[string]bool{
+	"npm": true, "yarn": true, "pnpm": true, "npx": true, "node": true,
+	"python": true, "python3": true, "pip": true, "pip3": true,
+	"go": true, "make": true, "cmake": true,
+	"mvn": true, "mvnw": true, "gradle": true,
+	"docker": true, "tar": true, "cp": true, "echo": true,
+}
+
+// validateBuildCmd guards against shell injection via user-controlled build_cmd.
+// '&&' chaining is allowed; each segment must start with an allowlisted command.
+func validateBuildCmd(cmd string) error {
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" {
+		return errors.New("build_cmd is empty")
+	}
+	// Reject shell injection vectors.
+	if strings.ContainsAny(cmd, ";|`\n\r") ||
+		strings.Contains(cmd, "$(") || strings.Contains(cmd, "${") ||
+		strings.Contains(cmd, ">") || strings.Contains(cmd, "<") {
+		return errors.New("build_cmd contains disallowed shell metacharacters")
+	}
+	// Reject a single '&' (background operator); only '&&' chaining is permitted.
+	if strings.Contains(strings.ReplaceAll(cmd, "&&", ""), "&") {
+		return errors.New("build_cmd uses single '&' operator; only '&&' is allowed")
+	}
+	// Each '&&'-chained segment must start with an allowlisted command.
+	for _, seg := range strings.Split(cmd, "&&") {
+		fields := strings.Fields(strings.TrimSpace(seg))
+		if len(fields) == 0 {
+			continue
+		}
+		base := fields[0]
+		if idx := strings.LastIndex(base, "/"); idx >= 0 {
+			base = base[idx+1:] // allow "./mvnw" etc.
+		}
+		if !allowedBuildCommands[base] {
+			return fmt.Errorf("build_cmd contains disallowed command: %q", fields[0])
+		}
+	}
+	return nil
+}
+
 // runBuildCmd 执行构建命令
 func (s *DeployService) runBuildCmd(project *Project) error {
+	if err := validateBuildCmd(project.BuildCmd); err != nil {
+		log.Printf("[security] rejected build_cmd for project %s: %v", project.Name, err)
+		return fmt.Errorf("build command rejected: %w", err)
+	}
 	workDir := filepath.Join(viper.GetString("deploy.work_dir"), project.Name)
 
 	cmd := exec.Command("sh", "-c", project.BuildCmd)

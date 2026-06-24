@@ -1,9 +1,11 @@
 package router
 
 import (
+	"admin-common/middleware"
 	"admin-deploy/internal/handler"
 
 	"github.com/gin-gonic/gin"
+	"github.com/spf13/viper"
 )
 
 // Setup 设置路由
@@ -13,8 +15,9 @@ func Setup(r *gin.Engine) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
-	// 部署路由
+	// 部署路由（所有操作需 JWT 鉴权，防止匿名直连触发 RCE / 容器越权操作）
 	deploy := r.Group("/deploy")
+	deploy.Use(middleware.AuthMiddleware(viper.GetString("jwt.secret")))
 	{
 		// 项目管理
 		deploy.GET("/projects", handler.ListProjects)

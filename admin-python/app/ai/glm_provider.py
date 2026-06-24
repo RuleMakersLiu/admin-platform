@@ -208,8 +208,3 @@ class ChatGLM:
             "content": full_content,
             "done": True,
         }, ensure_ascii=False)
-
-    def invoke(self, messages: list) -> GLMMessage:
-        """同步调用（阻塞，仅用于简单场景）"""
-        import asyncio
-        return asyncio.run(self.ainvoke(messages))

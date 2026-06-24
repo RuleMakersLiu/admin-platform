@@ -5,6 +5,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -83,6 +84,8 @@ func Load(configPath string) (*Config, error) {
 
 	// 允许环境变量覆盖
 	v.AutomaticEnv()
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.BindEnv("jwt.secret", "JWT_SECRET")
 
 	// 读取配置
 	if err := v.ReadInConfig(); err != nil {

@@ -1,4 +1,4 @@
-import api from './api'
+import { http } from './api'
 import { useAuthStore } from '@/stores/auth'
 
 export interface StageDef {
@@ -139,6 +139,15 @@ export interface PipelineListItem {
   update_time: number
 }
 
+// Generic result for pipeline action endpoints (execute/confirm/rollback/etc.)
+export interface PipelineActionResult {
+  error?: string
+  status?: string
+  stage?: string
+  message?: string
+  output?: string
+}
+
 export interface PipelineStreamEvent {
   type: 'stage_started' | 'stage_retry' | 'stage_auto_fixed' | 'chunk' | 'stage_completed' | 'waiting_confirm' | 'stage_advanced' | 'completed' | 'failed' | 'done' | 'error' | 'heartbeat'
   pipeline_id?: string
@@ -188,16 +197,16 @@ export const pipelineApi = {
     pipeline_mode?: string
     skill_config?: Record<string, unknown>
   }) =>
-    api.post(`${BASE}/create`, data) as any as Promise<{ pipeline_id: string; status: string }>,
+    http.post<{ pipeline_id: string; status: string }>(`${BASE}/create`, data),
 
   matchProjectSkill: (data: { user_request: string }) =>
-    api.post(`${BASE}/match`, data) as any as Promise<ProjectSkillMatch>,
+    http.post<ProjectSkillMatch>(`${BASE}/match`, data),
 
   updateSkillConfig: (id: string, skill_config: Record<string, unknown>) =>
-    api.put(`${BASE}/${id}/skill-config`, { skill_config }) as any as Promise<{ message?: string }>,
+    http.put<{ message?: string }>(`${BASE}/${id}/skill-config`, { skill_config }),
 
   execute: (id: string, user_input?: string) =>
-    api.post(`${BASE}/${id}/execute`, { user_input: user_input || '' }, { timeout: 300000 }) as any,
+    http.post<PipelineActionResult>(`${BASE}/${id}/execute`, { user_input: user_input || '' }, { timeout: 300000 }),
 
   executeStream: async (
     id: string,
@@ -261,24 +270,24 @@ export const pipelineApi = {
   },
 
   confirm: (id: string, confirmed: boolean, feedback?: string) =>
-    api.post(`${BASE}/${id}/confirm`, { confirmed, feedback: feedback || '' }, { timeout: 300000 }) as any,
+    http.post<PipelineActionResult>(`${BASE}/${id}/confirm`, { confirmed, feedback: feedback || '' }, { timeout: 300000 }),
 
   getStatus: (id: string) =>
-    api.get(`${BASE}/${id}/status`) as any as Promise<PipelineStatus>,
+    http.get<PipelineStatus>(`${BASE}/${id}/status`),
 
   getPreview: (id: string) =>
-    api.get(`${BASE}/${id}/preview`) as any as Promise<{ preview_html: string; output: string }>,
+    http.get<{ preview_html: string; output: string }>(`${BASE}/${id}/preview`),
 
   startSandboxPreview: (id: string) =>
-    api.post(`${BASE}/${id}/sandbox-preview/start`) as any as Promise<{
+    http.post<{
       pipeline_id: string
       status: string
       preview_url: string
       preview_token: string
-    }>,
+    }>(`${BASE}/${id}/sandbox-preview/start`),
 
   getArtifact: (id: string) =>
-    api.get(`${BASE}/${id}/artifact`) as any as Promise<PipelineArtifact>,
+    http.get<PipelineArtifact>(`${BASE}/${id}/artifact`),
 
   downloadFrontend: async (id: string) => {
     const { token, user } = useAuthStore.getState()
@@ -304,45 +313,45 @@ export const pipelineApi = {
   },
 
   getOutput: (id: string, stage?: string) =>
-    api.get(`${BASE}/${id}/output`, { params: { stage: stage || '' } }) as any,
+    http.get<PipelineActionResult>(`${BASE}/${id}/output`, { params: { stage: stage || '' } }),
 
   updateStageOutput: (id: string, stage: string, output: string) =>
-    api.put(`${BASE}/${id}/stages/${stage}/output`, { output }) as any,
+    http.put<PipelineActionResult>(`${BASE}/${id}/stages/${stage}/output`, { output }),
 
   list: () =>
-    api.get(`${BASE}/list`) as any,
+    http.get<PipelineListItem[]>(`${BASE}/list`),
 
   rollback: (id: string, stage?: string, feedback?: string) =>
-    api.post(`${BASE}/${id}/rollback`, { stage, feedback: feedback || '' }) as any,
+    http.post<PipelineActionResult>(`${BASE}/${id}/rollback`, { stage, feedback: feedback || '' }),
 
   delete: (id: string) =>
-    api.delete(`${BASE}/${id}`) as any,
+    http.delete(`${BASE}/${id}`),
 
   getTemplates: () =>
-    api.get('/flow/templates') as any,
+    http.get('/flow/templates'),
 
   // Prompt 管理
   getDefaultPrompts: () =>
-    api.get('/flow/prompts/defaults') as any as Promise<Record<string, string>>,
+    http.get<Record<string, string>>('/flow/prompts/defaults'),
 
   getProjectPrompts: (projectCode: string) =>
-    api.get(`/flow/projects/${projectCode}/prompts`) as any as Promise<Record<string, string>>,
+    http.get<Record<string, string>>(`/flow/projects/${projectCode}/prompts`),
 
   updateProjectPrompts: (projectCode: string, prompts: Record<string, string>) =>
-    api.put(`/flow/projects/${projectCode}/prompts`, { prompts }) as any,
+    http.put(`/flow/projects/${projectCode}/prompts`, { prompts }),
 
   analyzeProject: (projectId: string | number) =>
-    api.post(`/flow/projects/${projectId}/analyze`) as any,
+    http.post<PipelineActionResult>(`/flow/projects/${projectId}/analyze`),
 
   getProjectSkill: (projectId: string | number) =>
-    api.get(`/flow/projects/${projectId}/skill`) as any as Promise<ProjectSkill | null>,
+    http.get<ProjectSkill | null>(`/flow/projects/${projectId}/skill`),
 
   updateProjectSkill: (
     projectId: string | number,
     data: { project_brief?: string; skill_content?: string; tenant_scope_ids?: number[] },
   ) =>
-    api.put(`/flow/projects/${projectId}/skill`, data) as any as Promise<ProjectSkill>,
+    http.put<ProjectSkill>(`/flow/projects/${projectId}/skill`, data),
 
   confirmProjectSkill: (projectId: string | number) =>
-    api.post(`/flow/projects/${projectId}/skill/confirm`) as any as Promise<ProjectSkill>,
+    http.post<ProjectSkill>(`/flow/projects/${projectId}/skill/confirm`),
 }

@@ -1,11 +1,12 @@
 """Skills 管理 API"""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List, Any
 
 from app.ai.skills import skill_registry, skill_manager
+from app.core.deps import get_current_user
 
-router = APIRouter(prefix="/skills", tags=["Skills技能系统"])
+router = APIRouter(prefix="/skills", tags=["Skills技能系统"], dependencies=[Depends(get_current_user)])
 
 
 class ExecuteSkillRequest(BaseModel):

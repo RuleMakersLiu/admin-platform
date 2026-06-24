@@ -1,4 +1,4 @@
-import { Component } from 'react'
+import { Component, lazy, Suspense } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { Result, Spin } from 'antd'
 import {
@@ -11,25 +11,27 @@ import {
 } from '@/stores/auth'
 import Layout from '@/components/Layout'
 import Login from '@/pages/login'
-import AdminList from '@/pages/system/admin'
-import GroupList from '@/pages/system/group'
-import MenuList from '@/pages/system/menu'
-import TenantList from '@/pages/system/tenant'
-import AgentChat from '@/pages/agent/chat'
-import AgentProject from '@/pages/agent/project'
-import AgentBug from '@/pages/agent/bug'
-import LLMConfig from '@/pages/system/llm'
-import GitConfig from '@/pages/system/git'
-import KnowledgeList from '@/pages/system/knowledge'
-import WebChatPage from '@/pages/webchat'
-import SkillMarketPage from '@/pages/skills/market'
-import KanbanPage from '@/pages/kanban'
-import ProjectCreate from '@/pages/project/create'
-import ProjectList from '@/pages/project/list'
-import ProjectTest from '@/pages/project/test'
-import PortalSelect from '@/pages/portal/select'
-import DeveloperPortal from '@/pages/portal/developer'
-import ProductPortal from '@/pages/portal/product'
+
+// Route-level code splitting: each page loads on demand to shrink the initial bundle.
+const AdminList = lazy(() => import('@/pages/system/admin'))
+const GroupList = lazy(() => import('@/pages/system/group'))
+const MenuList = lazy(() => import('@/pages/system/menu'))
+const TenantList = lazy(() => import('@/pages/system/tenant'))
+const AgentChat = lazy(() => import('@/pages/agent/chat'))
+const AgentProject = lazy(() => import('@/pages/agent/project'))
+const AgentBug = lazy(() => import('@/pages/agent/bug'))
+const LLMConfig = lazy(() => import('@/pages/system/llm'))
+const GitConfig = lazy(() => import('@/pages/system/git'))
+const KnowledgeList = lazy(() => import('@/pages/system/knowledge'))
+const WebChatPage = lazy(() => import('@/pages/webchat'))
+const SkillMarketPage = lazy(() => import('@/pages/skills/market'))
+const KanbanPage = lazy(() => import('@/pages/kanban'))
+const ProjectCreate = lazy(() => import('@/pages/project/create'))
+const ProjectList = lazy(() => import('@/pages/project/list'))
+const ProjectTest = lazy(() => import('@/pages/project/test'))
+const PortalSelect = lazy(() => import('@/pages/portal/select'))
+const DeveloperPortal = lazy(() => import('@/pages/portal/developer'))
+const ProductPortal = lazy(() => import('@/pages/portal/product'))
 
 class ErrorBoundary extends Component<{ children: React.ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null }
@@ -122,6 +124,7 @@ function App() {
   return (
     <ErrorBoundary>
       <BrowserRouter>
+        <Suspense fallback={<LoadingGate />}>
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route
@@ -176,6 +179,7 @@ function App() {
             <Route path="" element={<IndexRedirect />} />
           </Route>
         </Routes>
+        </Suspense>
       </BrowserRouter>
     </ErrorBoundary>
   )

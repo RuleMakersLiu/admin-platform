@@ -3,12 +3,13 @@ package config
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/docker/docker/api"
 	"github.com/docker/docker/client"
 	"github.com/spf13/viper"
-	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -28,21 +29,27 @@ func Load() error {
 	viper.SetDefault("server.port", "8083")
 	viper.SetDefault("database.port", 3306)
 
+	// Allow environment variables to override config (precedence: env > file).
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	viper.AutomaticEnv()
+	viper.SetEnvPrefix("ADMIN")
+	viper.BindEnv("jwt.secret", "JWT_SECRET")
+
 	return viper.ReadInConfig()
 }
 
 // InitDB 初始化数据库
 func InitDB() error {
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local",
-		viper.GetString("database.user"),
-		viper.GetString("database.password"),
+	dsn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
 		viper.GetString("database.host"),
 		viper.GetInt("database.port"),
+		viper.GetString("database.user"),
+		viper.GetString("database.password"),
 		viper.GetString("database.dbname"),
 	)
 
 	var err error
-	DB, err = gorm.Open(mysql.Open(dsn), &gorm.Config{
+	DB, err = gorm.Open(postgres.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Info),
 	})
 	if err != nil {

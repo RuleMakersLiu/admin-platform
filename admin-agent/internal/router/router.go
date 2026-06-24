@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
+	"admin-common/middleware"
 	"admin-agent/internal/config"
 	"admin-agent/internal/handler"
 	"admin-agent/internal/service"
@@ -103,8 +104,13 @@ func SetupRouterWithVoiceAndLLM(agentService *service.AgentService, sandboxServi
 		}
 	}
 
-	// API v1
+	// API v1（需 JWT 鉴权，含 sandbox/execute 代码执行端点）
+	jwtSecret := ""
+	if config.GlobalConfig != nil {
+		jwtSecret = config.GlobalConfig.JWT.Secret
+	}
 	v1 := router.Group("/api/v1")
+	v1.Use(middleware.AuthMiddleware(jwtSecret))
 	{
 		// 对话相关
 		chatHandler := handler.NewChatHandler(nil, agentService)

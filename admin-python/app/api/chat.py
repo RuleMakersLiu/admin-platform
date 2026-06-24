@@ -4,10 +4,13 @@ import logging
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
+import jwt
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
 from app.ai.agents import AgentService, AgentType
+from app.core.config import settings
+from app.core.deps import get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +36,7 @@ class ChatResponse(BaseModel):
 # ==================== SSE 流式聊天 ====================
 
 @router.post("/stream")
-async def chat_stream(request: ChatRequest, http_request: Request):
+async def chat_stream(request: ChatRequest, http_request: Request, user: dict = Depends(get_current_user)):
     """SSE 流式聊天端点"""
     from fastapi.responses import StreamingResponse
 
@@ -65,7 +68,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
 # ==================== 非流式聊天 ====================
 
 @router.post("", response_model=ChatResponse)
-async def chat(request: ChatRequest, http_request: Request):
+async def chat(request: ChatRequest, http_request: Request, user: dict = Depends(get_current_user)):
     """非流式聊天端点"""
     session_id = request.session_id or _agent_service.create_session()
 
@@ -80,8 +83,17 @@ async def chat(request: ChatRequest, http_request: Request):
 # ==================== WebSocket 聊天 ====================
 
 @router.websocket("/ws")
-async def chat_websocket(websocket: WebSocket):
+async def chat_websocket(websocket: WebSocket, token: Optional[str] = Query(default=None)):
     """WebSocket 双向聊天"""
+    # Browsers cannot send an Authorization header on a WebSocket handshake, so
+    # verify the JWT from the query string before accepting the connection.
+    try:
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"]) if token else None
+    except jwt.PyJWTError:
+        payload = None
+    if not payload or not payload.get("adminId"):
+        await websocket.close(code=4401)  # unauthorized
+        return
     await websocket.accept()
 
     session_id = _agent_service.create_session()
@@ -143,21 +155,21 @@ async def chat_websocket(websocket: WebSocket):
 # ==================== 会话管理 ====================
 
 @router.get("/sessions/{session_id}/messages")
-async def get_session_messages(session_id: str):
+async def get_session_messages(session_id: str, user: dict = Depends(get_current_user)):
     """获取会话消息历史"""
     messages = _agent_service.get_session_messages(session_id)
     return {"code": 200, "data": {"session_id": session_id, "messages": messages}}
 
 
 @router.post("/sessions")
-async def create_session():
+async def create_session(user: dict = Depends(get_current_user)):
     """创建新会话"""
     session_id = _agent_service.create_session()
     return {"code": 200, "data": {"session_id": session_id}}
 
 
 @router.delete("/sessions/{session_id}")
-async def delete_session(session_id: str):
+async def delete_session(session_id: str, user: dict = Depends(get_current_user)):
     """删除会话"""
     success = _agent_service.delete_session(session_id)
     if success:

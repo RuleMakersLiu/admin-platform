@@ -1,17 +1,26 @@
 """知识库管理 API"""
-from fastapi import APIRouter, HTTPException, Request
+import jwt
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from typing import Optional, List
 
+from app.core.config import settings
+from app.core.deps import get_current_user
 from app.services.knowledge_service import knowledge_service
 
-router = APIRouter(prefix="/knowledge", tags=["知识库管理"])
+router = APIRouter(prefix="/knowledge", tags=["知识库管理"], dependencies=[Depends(get_current_user)])
 
 
 def _get_tenant_id(request: Request) -> int:
+    """从 JWT 获取租户ID（不信任可伪造的 X-Tenant-Id header）"""
+    auth = request.headers.get("authorization") or request.headers.get("Authorization", "")
+    token = auth[7:] if auth.lower().startswith("bearer ") else auth
+    if not token:
+        return 1
     try:
-        return int(request.headers.get("X-Tenant-Id", "1"))
-    except (ValueError, TypeError):
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+        return int(payload.get("tenantId") or 1)
+    except Exception:
         return 1
 
 

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -44,6 +45,10 @@ func GenerateToken(adminID int64, username string, tenantID int64) (string, erro
 // ParseToken 解析Token
 func ParseToken(tokenString string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+		// Reject alg=none / algorithm-confusion attacks: only HMAC is valid for this HS256 issuer.
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
 		return []byte(viper.GetString("jwt.secret")), nil
 	})
 

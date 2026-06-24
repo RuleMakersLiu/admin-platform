@@ -4665,8 +4665,35 @@ async def _fetch_project_files_from_git(project_id: str) -> Dict[str, str]:
             await _cleanup_temp_path(tmp_dir)
 
 
+def _is_safe_git_url(repo_url: str) -> tuple:
+    """SSRF guard: allow only http(s) and reject loopback/private/link-local/metadata hosts."""
+    import ipaddress
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(repo_url)
+    except Exception:
+        return False, "invalid URL"
+    if parsed.scheme not in ("https", "http"):
+        return False, f"scheme '{parsed.scheme}' not allowed"
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False, "missing host"
+    try:
+        ip = ipaddress.ip_address(host)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            return False, f"private/loopback IP {host} not allowed"
+    except ValueError:
+        if host in ("localhost", "metadata.google.internal") or host.endswith(".internal"):
+            return False, f"host '{host}' not allowed"
+    return True, ""
+
+
 async def _clone_project_repo(clone_url: str, branch: str, tmp_dir: str):
     """Clone a repo, falling back to the remote default branch when stored branch is stale."""
+    ok, reason = _is_safe_git_url(clone_url)
+    if not ok:
+        logger.warning("Blocked git clone to unsafe host: %s", reason)
+        return b"", reason.encode(errors="ignore")[:200], 128
     proc = await asyncio.create_subprocess_exec(
         "git", "clone", "--depth", "1", "--branch", branch, clone_url, tmp_dir,
         stdout=asyncio.subprocess.PIPE,
@@ -5474,28 +5501,35 @@ class DevPipelineManager:
                     await emit({"type": "stage_started", "stage": "backend_dev"})
 
                     try:
+                        async def _run_branch(stage_key: str, on_chunk):
+                            # Each fan-out branch gets its own AsyncSession: a single
+                            # AsyncSession cannot service two concurrent gathered
+                            # coroutines (retrieve_memories issues concurrent queries).
+                            # pipe is read-only here and expire_on_commit=False, so
+                            # accessing its attributes does not touch the outer session.
+                            async with async_session_maker() as branch_session:
+                                return await self._run_single_stage(
+                                    pipeline_id, stage_key, stages,
+                                    pipe, fix_feedback, user_input, branch_session,
+                                    on_chunk=on_chunk,
+                                )
+
                         fe_result, be_result = await asyncio.gather(
-                            self._run_single_stage(
-                                pipeline_id, "frontend_dev", stages,
-                                pipe, fix_feedback, user_input, session,
-                                on_chunk=(
-                                    lambda content: emit({
-                                        "type": "chunk",
-                                        "stage": "frontend_dev",
-                                        "content": content,
-                                    })
-                                ) if stream_callback else None,
+                            _run_branch(
+                                "frontend_dev",
+                                (lambda content: emit({
+                                    "type": "chunk",
+                                    "stage": "frontend_dev",
+                                    "content": content,
+                                })) if stream_callback else None,
                             ),
-                            self._run_single_stage(
-                                pipeline_id, "backend_dev", stages,
-                                pipe, fix_feedback, user_input, session,
-                                on_chunk=(
-                                    lambda content: emit({
-                                        "type": "chunk",
-                                        "stage": "backend_dev",
-                                        "content": content,
-                                    })
-                                ) if stream_callback else None,
+                            _run_branch(
+                                "backend_dev",
+                                (lambda content: emit({
+                                    "type": "chunk",
+                                    "stage": "backend_dev",
+                                    "content": content,
+                                })) if stream_callback else None,
                             ),
                             return_exceptions=True,
                         )

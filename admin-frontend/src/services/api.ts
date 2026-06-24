@@ -1,4 +1,4 @@
-import axios from 'axios'
+import axios, { type AxiosRequestConfig } from 'axios'
 import { useAuthStore } from '@/stores/auth'
 
 const api = axios.create({
@@ -55,6 +55,19 @@ api.interceptors.response.use(
 )
 
 export default api
+
+// Typed request helpers. The response interceptor already unwraps `data.data`,
+// so these cast once centrally — callers use http.get<T>() with no per-call `as any`.
+export const http = {
+  get: <T = unknown>(url: string, config?: AxiosRequestConfig) =>
+    api.get(url, config) as unknown as Promise<T>,
+  post: <T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig) =>
+    api.post(url, data, config) as unknown as Promise<T>,
+  put: <T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig) =>
+    api.put(url, data, config) as unknown as Promise<T>,
+  delete: <T = unknown>(url: string, config?: AxiosRequestConfig) =>
+    api.delete(url, config) as unknown as Promise<T>,
+}
 
 // 认证接口
 export const authApi = {

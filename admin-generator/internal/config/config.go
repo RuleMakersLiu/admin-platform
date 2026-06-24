@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -21,6 +22,12 @@ func Load() error {
 
 	viper.SetDefault("server.port", "8082")
 	viper.SetDefault("database.port", 5432)
+
+	// Allow environment variables to override config (precedence: env > file).
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	viper.AutomaticEnv()
+	viper.SetEnvPrefix("ADMIN")
+	viper.BindEnv("jwt.secret", "JWT_SECRET")
 
 	return viper.ReadInConfig()
 }

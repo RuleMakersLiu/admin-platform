@@ -89,7 +89,10 @@ class SandboxPreviewService:
             if not parts:
                 continue
             target = (root / Path(*parts)).resolve()
-            if not str(target).startswith(str(root_resolved)):
+            # Use Path.parents membership (not str.startswith) so a sibling dir
+            # like /data/pipelines/abcde is not accepted under root /data/pipelines/abc,
+            # and resolved symlinks pointing outside root are rejected.
+            if target != root_resolved and root_resolved not in target.parents:
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
             text_content = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False, indent=2)

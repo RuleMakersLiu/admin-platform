@@ -89,8 +89,10 @@ app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
     description="Admin Platform Python Backend with AI Agents",
-    docs_url="/docs",
-    redoc_url="/redoc",
+    # Expose interactive API docs only in debug mode; hide schema in production.
+    docs_url="/docs" if settings.debug else None,
+    redoc_url="/redoc" if settings.debug else None,
+    openapi_url="/openapi.json" if settings.debug else None,
     lifespan=lifespan,
 )
 

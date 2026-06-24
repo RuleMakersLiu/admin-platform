@@ -2,7 +2,11 @@
 from functools import lru_cache
 from typing import Optional
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
+
+# Dev-only default; production MUST override via JWT_SECRET (enforced by the validator below).
+DEFAULT_JWT_SECRET = "admin-platform-jwt-secret-key-2026-dev-only"
 
 
 class Settings(BaseSettings):
@@ -25,7 +29,7 @@ class Settings(BaseSettings):
 
     # JWT配置
     # SECURITY: production must set JWT_SECRET. The dev default is shared with admin-gateway.
-    jwt_secret: str = "admin-platform-jwt-secret-key-2026-dev-only"
+    jwt_secret: str = DEFAULT_JWT_SECRET
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 1440  # 24小时
 
@@ -77,19 +81,15 @@ class Settings(BaseSettings):
     pipeline_execution_queue_limit: int = 50
     deploy_service_url: str = "http://admin-deploy:8083"
 
-    # ==================== 埋点数据配置 ====================
-
-    # Kafka 配置
-    kafka_bootstrap_servers: str = "localhost:9092"
-    kafka_tracking_topic: str = "tracking-events"
-    kafka_tracking_group: str = "tracking-consumer"
-
-    # ClickHouse 配置
-    clickhouse_host: str = "localhost"
-    clickhouse_port: int = 9000
-    clickhouse_database: str = "analytics"
-    clickhouse_user: str = "default"
-    clickhouse_password: str = ""
+    @model_validator(mode="after")
+    def _enforce_production_secret(self) -> "Settings":
+        """Fail fast if the JWT secret is missing or is the insecure dev default, outside debug mode."""
+        if not self.debug and (not self.jwt_secret or self.jwt_secret == DEFAULT_JWT_SECRET):
+            raise ValueError(
+                "Refusing to start: jwt_secret is empty or the insecure dev default. "
+                "Set the JWT_SECRET environment variable (or DEBUG=true for local dev)."
+            )
+        return self
 
     class Config:
         env_file = ".env"

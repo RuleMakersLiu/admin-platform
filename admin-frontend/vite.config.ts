@@ -4,6 +4,10 @@ import path from 'path'
 
 export default defineConfig({
   plugins: [react()],
+  esbuild: {
+    // Strip debug-level console calls in production builds; keep error/warn.
+    pure: ['console.log', 'console.debug', 'console.info', 'console.trace'],
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -35,7 +39,8 @@ export default defineConfig({
       output: {
         manualChunks: {
           vendor: ['react', 'react-dom', 'react-router-dom'],
-          antd: ['antd', '@ant-design/icons', '@ant-design/pro-components'],
+          antd: ['antd', '@ant-design/icons'],
+          markdown: ['react-markdown', 'remark-gfm', 'rehype-highlight', 'highlight.js'],
         },
       },
     },

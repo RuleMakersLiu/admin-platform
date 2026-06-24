@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go vet *)",
+      "Bash(go test *)",
+      "Bash(/usr/local/go/bin/go *)",
+      "Bash(.venv/bin/python *)",
+      "Bash(.venv/bin/python -m pytest *)",
+      "Bash(git rm --cached *)",
+      "Bash(export *)",
+      "Bash(npx prettier *)",
+      "Bash(npx tsc --noEmit)"
+    ]
+  }
+}

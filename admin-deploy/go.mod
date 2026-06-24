@@ -5,12 +5,16 @@ go 1.24.0
 toolchain go1.24.5
 
 require (
+	admin-common v0.0.0
 	github.com/docker/docker v25.0.6+incompatible
+	github.com/docker/go-connections v0.6.0
 	github.com/gin-gonic/gin v1.9.1
 	github.com/spf13/viper v1.18.2
-	gorm.io/driver/mysql v1.5.2
+	gorm.io/driver/postgres v1.5.4
 	gorm.io/gorm v1.25.5
 )
+
+replace admin-common => ../admin-common
 
 require (
 	github.com/Microsoft/go-winio v0.4.21 // indirect
@@ -19,7 +23,6 @@ require (
 	github.com/chenzhuoyu/base64x v0.0.0-20221115062448-fe3a3abad311 // indirect
 	github.com/containerd/log v0.1.0 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
-	github.com/docker/go-connections v0.6.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
@@ -30,10 +33,13 @@ require (
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/go-playground/validator/v10 v10.14.0 // indirect
-	github.com/go-sql-driver/mysql v1.7.0 // indirect
 	github.com/goccy/go-json v0.10.2 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
+	github.com/golang-jwt/jwt/v5 v5.2.1 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20221227161230-091c0ba34f0a // indirect
+	github.com/jackc/pgx/v5 v5.4.3 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect

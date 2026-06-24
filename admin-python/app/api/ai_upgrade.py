@@ -1,9 +1,10 @@
 """AI 前沿技术自动升级 API"""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from app.core.deps import get_current_user
 from app.services.ai_upgrade_service import ai_upgrade_service
 
-router = APIRouter(prefix="/ai-upgrade", tags=["AI自动升级"])
+router = APIRouter(prefix="/ai-upgrade", tags=["AI自动升级"], dependencies=[Depends(get_current_user)])
 
 
 @router.post("/run")

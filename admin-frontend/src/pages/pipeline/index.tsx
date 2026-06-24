@@ -904,7 +904,7 @@ const PipelinePage: React.FC = () => {
     setHistoryLoading(true)
     try {
       const res = await pipelineApi.list()
-      const list = res?.data?.list || res?.data || res?.list || res || []
+      const list = res || []
       setPipelineHistory(Array.isArray(list) ? list : [])
     } catch { /* ignore */ }
     setHistoryLoading(false)

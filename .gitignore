@@ -19,6 +19,8 @@ dist/
 *.tsbuildinfo
 playwright-report/
 test-results/
+# npm install residue (shell mis-parses "--version=x.y.z" as a redirect filename)
+=*.*.*
 
 # Python
 __pycache__/

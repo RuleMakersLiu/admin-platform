@@ -1,9 +1,11 @@
 package router
 
 import (
+	"admin-common/middleware"
 	"admin-generator/internal/handler"
 
 	"github.com/gin-gonic/gin"
+	"github.com/spf13/viper"
 )
 
 // Setup 设置路由
@@ -13,8 +15,9 @@ func Setup(r *gin.Engine) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
-	// 生成器路由
+	// 生成器路由（需 JWT 鉴权）
 	gen := r.Group("/generator")
+	gen.Use(middleware.AuthMiddleware(viper.GetString("jwt.secret")))
 	{
 		// 对话生成（保留原有）
 		gen.POST("/chat", handler.Chat)

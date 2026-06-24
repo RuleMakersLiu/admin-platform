@@ -1,6 +1,8 @@
 package router
 
 import (
+	"admin-common/middleware"
+	"admin-config/internal/config"
 	"admin-config/internal/handler"
 	"admin-config/internal/service"
 
@@ -34,8 +36,13 @@ func Setup(r *gin.Engine, db *gorm.DB) error {
 		})
 	})
 
-	// API路由组
+	// API路由组（需 JWT 鉴权）
+	jwtSecret := ""
+	if config.GlobalConfig != nil {
+		jwtSecret = config.GlobalConfig.JWT.Secret
+	}
 	api := r.Group("/config")
+	api.Use(middleware.AuthMiddleware(jwtSecret))
 	{
 		// LLM配置路由
 		llm := api.Group("/llm")

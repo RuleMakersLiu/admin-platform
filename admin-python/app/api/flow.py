@@ -2,15 +2,18 @@
 import asyncio
 import json
 import logging
-from fastapi import APIRouter, HTTPException, Query, Request
+
+import jwt
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response as FastAPIResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, List, Any, Set
 
 from app.ai.flow_manager import pipeline_manager, STAGE_DEFINITIONS, DEFAULT_STAGE_PROMPTS
 from app.core.config import settings
+from app.core.deps import get_current_user
 
-router = APIRouter(prefix="/flow", tags=["智能体流程"])
+router = APIRouter(prefix="/flow", tags=["智能体流程"], dependencies=[Depends(get_current_user)])
 logger = logging.getLogger(__name__)
 
 _pipeline_tasks: Dict[str, asyncio.Task] = {}
@@ -61,20 +64,31 @@ class UpdateProjectSkillRequest(BaseModel):
     tenant_scope_ids: Optional[List[int]] = Field(default=None, description="适用租户")
 
 
-def _get_tenant_id(request: Request) -> int:
-    """从请求头获取租户ID"""
+def _jwt_claim(request: Request, key: str, default: int = 0) -> int:
+    """Read an integer claim from the verified JWT.
+
+    Identity is derived from the signed JWT only — never from the spoofable
+    X-Tenant-Id / X-Admin-Id headers.
+    """
+    auth = request.headers.get("authorization") or request.headers.get("Authorization", "")
+    token = auth[7:] if auth.lower().startswith("bearer ") else auth
+    if not token:
+        return default
     try:
-        return int(request.headers.get("X-Tenant-Id", "0"))
-    except (ValueError, TypeError):
-        return 0
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+        return int(payload.get(key) or default)
+    except Exception:
+        return default
+
+
+def _get_tenant_id(request: Request) -> int:
+    """从 JWT 获取租户ID"""
+    return _jwt_claim(request, "tenantId")
 
 
 def _get_admin_id(request: Request) -> int:
-    """从请求头获取管理员ID"""
-    try:
-        return int(request.headers.get("X-Admin-Id", "0"))
-    except (ValueError, TypeError):
-        return 0
+    """从 JWT 获取管理员ID"""
+    return _jwt_claim(request, "adminId")
 
 
 def _sse_event(event: Dict) -> str:
