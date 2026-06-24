@@ -1,75 +1,18 @@
 /**
  * HTML 安全过滤工具
- * 用于清理和过滤潜在的恶意 HTML 内容
+ *
+ * 基于 DOMPurify 的白名单（ALLOWED_TAGS / ALLOWED_ATTR / ALLOWED_URI_REGEXP）
+ * 进行净化。白名单是唯一的真实控制：未列入的标签/属性一律移除，因此不再
+ * 维护手写的危险标签/属性黑名单（曾经的 DANGEROUS_TAGS/ATTRS 在白名单开启时
+ * 本就是冗余的）。
+ *
+ * XSS 攻击向量回归见 tests/sanitize.test.ts（script / on* / javascript: /
+ * data: / iframe / svg / meta refresh / form-action / base / link 等均被拦截）。
  */
 
 import DOMPurify from 'dompurify';
 
-// 危险标签列表 - 这些标签将被完全移除
-const DANGEROUS_TAGS = [
-  'script',
-  'iframe',
-  'frame',
-  'frameset',
-  'object',
-  'embed',
-  'applet',
-  'meta',
-  'link',
-  'base',
-  'form',
-  'input',
-  'button',
-  'select',
-  'textarea',
-  'style',
-];
-
-// 危险属性列表 - 这些属性将被移除
-const DANGEROUS_ATTRS = [
-  'onabort',
-  'onblur',
-  'onchange',
-  'onclick',
-  'ondblclick',
-  'onerror',
-  'onfocus',
-  'onkeydown',
-  'onkeypress',
-  'onkeyup',
-  'onload',
-  'onmousedown',
-  'onmousemove',
-  'onmouseout',
-  'onmouseover',
-  'onmouseup',
-  'onreset',
-  'onresize',
-  'onscroll',
-  'onselect',
-  'onsubmit',
-  'onunload',
-  'onunload',
-  'oncontextmenu',
-  'ondrag',
-  'ondragend',
-  'ondragenter',
-  'ondragleave',
-  'ondragover',
-  'ondragstart',
-  'ondrop',
-  'onhashchange',
-  'onmessage',
-  'onoffline',
-  'ononline',
-  'onpopstate',
-  'onstorage',
-  'onwheel',
-  'formaction',
-  'xlink:href',
-];
-
-// DOMPurify 配置
+// DOMPurify 配置（白名单模式）
 const PURIFY_CONFIG = {
   // 允许的标签
   ALLOWED_TAGS: [
@@ -212,73 +155,15 @@ const PURIFY_CONFIG = {
     'name',
   ],
 
-  // 允许的 URI 协议
+  // 允许的 URI 协议（拒绝 javascript: / vbscript: / data: 等）
   ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp):|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i,
 
-  // 禁止的标签
-  FORBID_TAGS: DANGEROUS_TAGS,
-
-  // 禁止的属性
-  FORBID_ATTR: DANGEROUS_ATTRS,
-
-  // 保持 HTML 实体
+  // 移除危险标签时保留其文本内容
   KEEP_CONTENT: true,
 
-  // 允许 data 属性
   ADD_ATTR: ['target'],
-
-  // 强制添加 rel="noopener noreferrer" 到链接
   ADD_TAGS: [],
 };
-
-/**
- * 清理 HTML 内容，移除危险的标签和属性
- * @param html 原始 HTML 内容
- * @param options 可选的额外配置
- * @returns 清理后的安全 HTML
- */
-export function sanitizeHtml(html: string, options?: Record<string, unknown>): string {
-  if (!html || typeof html !== 'string') {
-    return '';
-  }
-
-  const config = options ? { ...PURIFY_CONFIG, ...options } : PURIFY_CONFIG;
-
-  // 使用 RETURN_TRUSTED_TYPE: false 确保返回 string 类型
-  const finalConfig = { ...config, RETURN_TRUSTED_TYPE: false };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const result = DOMPurify.sanitize(html, finalConfig as any);
-  return String(result);
-}
-
-/**
- * 清理内联样式
- * 移除可能包含 expression() 或 url(javascript:) 等危险内容
- * @param style 内联样式字符串
- * @returns 清理后的样式
- */
-export function sanitizeStyle(style: string): string {
-  if (!style || typeof style !== 'string') {
-    return '';
-  }
-
-  // 移除危险的模式
-  const dangerousPatterns = [
-    /expression\s*\(/gi,
-    /javascript\s*:/gi,
-    /behavior\s*:/gi,
-    /binding\s*:/gi,
-    /-moz-binding\s*:/gi,
-    /url\s*\(\s*['"]?\s*javascript:/gi,
-  ];
-
-  let sanitized = style;
-  for (const pattern of dangerousPatterns) {
-    sanitized = sanitized.replace(pattern, '');
-  }
-
-  return sanitized;
-}
 
 /**
  * 为 iframe 沙箱准备 HTML 内容
@@ -303,12 +188,13 @@ export function prepareSandboxHtml(
     darkMode = false,
   } = options;
 
-  // UI 预览沙箱：允许 <style> 和 style 属性（iframe 沙箱隔离，安全）
+  // UI 预览沙箱：在白名单基础上额外放开内联 style 属性（iframe 沙箱隔离，安全）。
+  // 注意：<style> 标签不在白名单中，会被移除；样式应通过内联 style 或下方默认样式提供。
   const sandboxConfig = {
     ...PURIFY_CONFIG,
-    FORBID_TAGS: DANGEROUS_TAGS.filter(t => t !== 'style'),
     ALLOWED_ATTR: [...PURIFY_CONFIG.ALLOWED_ATTR, 'style'],
   };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const sanitizedContent = DOMPurify.sanitize(html, sandboxConfig as any);
 
   // 默认基础样式
@@ -596,71 +482,9 @@ export function extractHtmlBlocks(content: string): Array<{ language: string; co
 
   return blocks;
 }
-/**
- * 修复被截断的 HTML（LLM 输出超出 max_tokens 时被截断）
- * 通过自动闭合未关闭的标签来尽量恢复页面渲染
- */
-export function repairTruncatedHtml(html: string): string {
-  if (!html || typeof html !== 'string') return ''
-
-  // 如果有 </html> 标签，大概率是完整的
-  if (/<\/html\s*>/i.test(html)) return html
-
-  const selfClosing = new Set([
-    'br', 'hr', 'img', 'input', 'meta', 'link', 'area',
-    'base', 'col', 'embed', 'source', 'track', 'wbr',
-  ])
-  const tagRegex = /<\/?([a-zA-Z][a-zA-Z0-9]*)[^>]*>/gi
-  const openTags: string[] = []
-
-  let match
-  while ((match = tagRegex.exec(html)) !== null) {
-    const full = match[0]
-    const tag = match[1].toLowerCase()
-    if (selfClosing.has(tag)) continue
-    if (full.startsWith('</')) {
-      const idx = openTags.lastIndexOf(tag)
-      if (idx !== -1) openTags.splice(idx, 1)
-    } else {
-      openTags.push(tag)
-    }
-  }
-
-  // 移除末尾不完整的标签（如 `<div class="som` 被截断）
-  let result = html.replace(/<[^>]*$/, '')
-
-  // 按相反顺序关闭未闭合的标签
-  for (let i = openTags.length - 1; i >= 0; i--) {
-    result += `\n</${openTags[i]}>`
-  }
-
-  return result
-}
-
-/**
- * 为 UI 预览准备 HTML 内容
- *
- * iframe sandbox=allow-scripts 已提供安全隔离，LLM 生成的内容是可信的。
- * 只做极轻量过滤：移除 javascript: URL，其余全部保留。
- * 不移除 <script> 标签（Vue/antd CDN + 内联初始化代码都需要）
- * 不移除 on* 属性（antd 组件内部使用）
- */
-export function prepareUIPreviewHtml(html: string): string {
-  if (!html || typeof html !== 'string') return ''
-
-  let safe = html
-  // 只移除 javascript: URL
-  safe = safe.replace(/href\s*=\s*(?:"javascript:[^"]*"|'javascript:[^']*')/gi, 'href="#"')
-
-  return safe
-}
 
 export default {
-  sanitizeHtml,
-  sanitizeStyle,
   prepareSandboxHtml,
-  prepareUIPreviewHtml,
-  repairTruncatedHtml,
   detectContentType,
   extractHtmlBlocks,
 };
