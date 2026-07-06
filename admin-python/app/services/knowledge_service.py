@@ -2,6 +2,7 @@
 import time
 import uuid
 import json
+import hashlib
 import logging
 import re
 from typing import Any, Dict, List, Optional
@@ -9,6 +10,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import select, update, delete, func, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import async_session_maker
 from app.models.agent_models import AgentKnowledge, KnowledgeEdge, ProjectKnowledge
 from app.models.models import ProjectTenantScope, SysAdmin, SysAdminGroup, SysAdminTenant, SysTenant
@@ -57,6 +59,20 @@ def _parse_knowledge_tags(raw_tags: Any) -> List[str]:
             ]
         values = parsed if isinstance(parsed, list) else [parsed]
     return [str(item).strip() for item in values if str(item).strip()]
+
+
+def _build_embedding_text(title: str, content: str, tags: Any) -> str:
+    """构造用于 embedding 的文本：标题 + 正文 + 标签（与检索时拼法一致）。"""
+    tag_str = ", ".join(_parse_knowledge_tags(tags))
+    parts = [title or "", content or ""]
+    if tag_str:
+        parts.append(f"tags: {tag_str}")
+    return "\n".join(parts)
+
+
+def _compute_content_hash(text: str) -> str:
+    """计算 embedding 文本的 SHA-256，用于幂等去重（内容未变则跳过重算）。"""
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
 
 
 def _knowledge_graph_dedupe_key(record: AgentKnowledge) -> str:
@@ -2691,8 +2707,7 @@ async def confirm_project_skill(project_id: str, confirmed_by: int = 0) -> Optio
 
 async def semantic_search(query: str, tenant_id: int = 1, top_k: int = 5,
                           category: Optional[str] = None) -> List[Dict]:
-    """语义搜索知识库：基于关键词 + 标签的多维匹配。
-    当没有向量数据库时，使用 BM25 风格的 TF 匹配作为语义搜索的替代。
+    """语义搜索知识库：优先向量检索，失败或无向量时回退 BM25 关键词匹配。
 
     Args:
         query: 搜索查询
@@ -2701,13 +2716,74 @@ async def semantic_search(query: str, tenant_id: int = 1, top_k: int = 5,
         category: 可选分类过滤
 
     Returns:
-        匹配的知识条目列表，按相关度排序
+        匹配的知识条目列表，按相关度排序（向量结果 score 为相似度 0~1）
     """
     if not query or not query.strip():
         return []
 
-    # 分词（简单按空格/标点分割）
-    import re
+    # 优先向量检索（需已回填 embedding）
+    try:
+        vec_results = await _vector_search(query, tenant_id, top_k, category)
+        if vec_results:
+            return vec_results
+    except Exception as exc:
+        logger.warning(f"Vector search failed, fallback to BM25: {exc}")
+
+    return await _bm25_search(query, tenant_id, top_k, category)
+
+
+async def _vector_search(query: str, tenant_id: int, top_k: int,
+                         category: Optional[str]) -> List[Dict]:
+    """向量检索：GLM embedding 查询文本 → pgvector cosine_distance 召回 → 相似度阈值过滤。"""
+    from app.ai.glm_provider import ChatGLM
+
+    provider = ChatGLM()
+    vectors = await provider.aembed([query])
+    if not vectors:
+        return []
+    query_vec = vectors[0]
+
+    conditions = [
+        AgentKnowledge.is_deleted == 0,
+        AgentKnowledge.tenant_id == tenant_id,
+        AgentKnowledge.embedding_status == "completed",
+        AgentKnowledge.embedding.isnot(None),
+    ]
+    if category:
+        conditions.append(AgentKnowledge.category == category)
+
+    distance = AgentKnowledge.embedding.cosine_distance(query_vec)
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(AgentKnowledge, distance.label("distance"))
+            .where(and_(*conditions))
+            .order_by(distance)
+            .limit(max(top_k * 2, 10))
+        )
+        rows = result.all()
+
+    min_similarity = settings.rag_min_similarity
+    results: List[Dict] = []
+    for record, dist in rows:
+        similarity = 1.0 - float(dist)
+        if similarity < min_similarity:
+            continue
+        results.append({
+            "knowledge_id": record.knowledge_id,
+            "title": record.title,
+            "content": record.content[:500],
+            "category": record.category,
+            "score": round(similarity, 4),
+            "tags": _parse_knowledge_tags(record.tags),
+        })
+        if len(results) >= top_k:
+            break
+    return results
+
+
+async def _bm25_search(query: str, tenant_id: int, top_k: int,
+                       category: Optional[str]) -> List[Dict]:
+    """BM25 风格关键词匹配（向量检索不可用 / 无 completed embedding 时的 fallback）。"""
     query_terms = set(re.findall(r'[a-zA-Z0-9_一-鿿]+', query.lower()))
     if not query_terms:
         return []
@@ -2766,6 +2842,90 @@ async def semantic_search(query: str, tenant_id: int = 1, top_k: int = 5,
             "tags": _parse_knowledge_tags(record.tags),
         })
     return results
+
+
+async def backfill_pending_embeddings(batch_size: Optional[int] = None) -> int:
+    """扫描 embedding_status='pending' 的知识条目，批量向量化并标记 completed/failed。
+
+    幂等：content_hash 未变且已有 embedding 的直接复用（仅置 completed），不重复调用 API。
+    Returns: 本批处理的条目数（0 表示队列空）。
+    """
+    from app.ai.glm_provider import ChatGLM
+
+    batch_size = batch_size or settings.zai_embedding_batch_size
+
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(AgentKnowledge).where(
+                AgentKnowledge.embedding_status == "pending",
+                AgentKnowledge.is_deleted == 0,
+            ).limit(batch_size)
+        )
+        records = result.scalars().all()
+
+    if not records:
+        return 0
+
+    items = []
+    for r in records:
+        text = _build_embedding_text(r.title, r.content, r.tags)
+        new_hash = _compute_content_hash(text)
+        items.append({
+            "id": r.id,
+            "text": text,
+            "hash": new_hash,
+            "cached": r.content_hash == new_hash and r.embedding is not None,
+        })
+
+    to_embed = [it for it in items if not it["cached"]]
+    embeddings: Dict[int, list] = {}
+
+    if to_embed:
+        try:
+            provider = ChatGLM()
+            vectors = await provider.aembed([it["text"] for it in to_embed])
+            if len(vectors) != len(to_embed):
+                raise RuntimeError(
+                    f"aembed returned {len(vectors)} vectors for {len(to_embed)} inputs"
+                )
+            embeddings = {it["id"]: vec for it, vec in zip(to_embed, vectors)}
+        except Exception as exc:
+            logger.error(f"Embedding batch failed ({len(to_embed)} items): {exc}")
+            async with async_session_maker() as session:
+                for it in to_embed:
+                    await session.execute(
+                        update(AgentKnowledge)
+                        .where(AgentKnowledge.id == it["id"])
+                        .values(embedding_status="failed")
+                    )
+                await session.commit()
+            return len(records)
+
+    async with async_session_maker() as session:
+        for it in items:
+            if it["id"] in embeddings:
+                await session.execute(
+                    update(AgentKnowledge)
+                    .where(AgentKnowledge.id == it["id"])
+                    .values(
+                        embedding=embeddings[it["id"]],
+                        content_hash=it["hash"],
+                        embedding_status="completed",
+                    )
+                )
+            elif it["cached"]:
+                await session.execute(
+                    update(AgentKnowledge)
+                    .where(AgentKnowledge.id == it["id"])
+                    .values(content_hash=it["hash"], embedding_status="completed")
+                )
+        await session.commit()
+
+    logger.info(
+        f"Embedding backfill: {len(embeddings)} embedded, "
+        f"{len(items) - len(to_embed)} revalidated, {len(items)} total"
+    )
+    return len(items)
 
 
 async def generate_code_summary(code_files: Dict[str, str], project_name: str = "") -> str:

@@ -7,6 +7,7 @@ import logging
 from typing import AsyncGenerator, Optional
 
 import httpx
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from app.core.config import settings
 
@@ -31,6 +32,14 @@ REASONING_MODEL_PREFIXES = ("glm-5",)
 def _is_reasoning_model(model: str) -> bool:
     """检测推理模型（reasoning tokens 消耗 max_tokens 预算）"""
     return any(model.startswith(p) for p in REASONING_MODEL_PREFIXES)
+
+
+def _is_retryable_http(exc: BaseException) -> bool:
+    """HTTP 重试判定：429、5xx 或网络层错误才重试，其余 4xx 立即失败。"""
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        return status == 429 or status >= 500
+    return isinstance(exc, httpx.RequestError)
 
 
 def _parse_content(raw) -> str:
@@ -86,6 +95,8 @@ class ChatGLM:
             self.max_tokens = max(self.max_tokens * 4, 16384)
         self.temperature = temperature
         self.thinking = thinking
+        # response_format（如 {"type": "json_object"}），由 flow_manager override 机制注入
+        self.response_format: Optional[dict] = None
         self._client: Optional[httpx.AsyncClient] = None
 
         if not self.api_key:
@@ -130,6 +141,8 @@ class ChatGLM:
         }
         if self.thinking:
             payload["thinking"] = self.thinking
+        if self.response_format:
+            payload["response_format"] = self.response_format
         return payload
 
     async def ainvoke(self, messages: list) -> GLMMessage:
@@ -208,3 +221,42 @@ class ChatGLM:
             "content": full_content,
             "done": True,
         }, ensure_ascii=False)
+
+    async def aembed(self, inputs: list[str], model: Optional[str] = None) -> list[list[float]]:
+        """异步批量 embedding，返回与 inputs 顺序一致的向量列表。
+
+        复用 chat 的 httpx client / api_key，端点 {GLM_API_URL}/embeddings。
+        模型默认取 settings.zai_embedding_model（GLM embedding-3, 1024 维）。
+        """
+        if not inputs:
+            return []
+        client = await self._get_client()
+        embed_model = model or settings.zai_embedding_model or "embedding-3"
+        payload = {
+            "model": embed_model,
+            "input": inputs,
+            "dimensions": settings.zai_embedding_dimensions,
+        }
+
+        @retry(
+            stop=stop_after_attempt(3),
+            wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
+            retry=retry_if_exception(_is_retryable_http),
+            reraise=True,
+        )
+        async def _call() -> list[list[float]]:
+            response = await client.post(
+                f"{GLM_API_URL}/embeddings",
+                headers=self._build_headers(),
+                json=payload,
+            )
+            response.raise_for_status()
+            result = response.json()
+            data = result.get("data", []) or []
+            if len(data) != len(inputs):
+                raise RuntimeError(
+                    f"embedding response count mismatch: got {len(data)}, expected {len(inputs)}"
+                )
+            return [item["embedding"] for item in data]
+
+        return await _call()

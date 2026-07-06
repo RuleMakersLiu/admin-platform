@@ -48,6 +48,15 @@ class Settings(BaseSettings):
     zai_default_model: str = "glm-4-flash"
     zai_max_tokens: int = 4096
 
+    # GLM Embedding（RAG 向量检索）配置 — 复用 zai_api_key
+    zai_embedding_model: str = "embedding-3"
+    zai_embedding_dimensions: int = 1024
+    zai_embedding_batch_size: int = 32
+
+    # RAG 检索参数
+    rag_top_k: int = 5
+    rag_min_similarity: float = 0.75
+
     # CORS配置
     cors_origins: list[str] = ["http://localhost:3000", "http://localhost:3001"]
 

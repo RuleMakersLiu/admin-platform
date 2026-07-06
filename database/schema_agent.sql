@@ -3,6 +3,9 @@
 -- 创建时间: 2026-02-27
 -- =====================================================
 
+-- pgvector 扩展：支持向量检索（RAG），需 pgvector/pgvector:pg15 镜像
+CREATE EXTENSION IF NOT EXISTS vector;
+
 -- ---------------------------------------------------
 -- 1. 项目表 (agent_project)
 -- 存储分身协作的项目信息
@@ -222,6 +225,8 @@ CREATE TABLE agent_knowledge (
     version INTEGER NOT NULL DEFAULT 1,
     view_count INTEGER NOT NULL DEFAULT 0,
     embedding_status VARCHAR(32) DEFAULT 'pending',
+    embedding vector(1024),
+    content_hash CHAR(64),
     status SMALLINT NOT NULL DEFAULT 1,
     create_time BIGINT NOT NULL,
     update_time BIGINT NOT NULL,
@@ -232,6 +237,9 @@ CREATE UNIQUE INDEX uk_knowledge_id ON agent_knowledge(knowledge_id);
 CREATE INDEX idx_knowledge_project ON agent_knowledge(project_id);
 CREATE INDEX idx_knowledge_tenant ON agent_knowledge(tenant_id);
 CREATE INDEX idx_knowledge_category ON agent_knowledge(category);
+CREATE INDEX idx_knowledge_content_hash ON agent_knowledge(content_hash);
+-- HNSW 近似最近邻索引，余弦距离（1 - cosine similarity），向量召回主索引
+CREATE INDEX idx_knowledge_embedding_hnsw ON agent_knowledge USING hnsw (embedding vector_cosine_ops);
 
 COMMENT ON TABLE agent_knowledge IS '分身知识库表';
 COMMENT ON COLUMN agent_knowledge.category IS '分类: tech/business/process/faq';
@@ -542,6 +550,45 @@ INSERT INTO agent_config (config_id, tenant_id, agent_type, config_name, system_
 2. 回答简洁有力，先给结论再给细节',
 '{"model": "claude-sonnet-4-20250514", "max_tokens": 4096, "temperature": 0.5}',
 1, 1, EXTRACT(EPOCH FROM NOW())::BIGINT * 1000, EXTRACT(EPOCH FROM NOW())::BIGINT * 1000);
+
+-- ---------------------------------------------------
+-- 9. Pipeline 评测结果表 (pipeline_eval_result) — Eval 闭环
+-- pipeline 终态聚合各 stage 评测信号为可 SQL 聚合的扁平列
+-- ---------------------------------------------------
+CREATE TABLE IF NOT EXISTS pipeline_eval_result (
+    id BIGSERIAL PRIMARY KEY,
+    eval_id VARCHAR(64) NOT NULL,
+    pipeline_id VARCHAR(64) NOT NULL,
+    tenant_id BIGINT NOT NULL,
+    project_id VARCHAR(64),
+    status VARCHAR(32) NOT NULL,
+    overall_score INTEGER,
+    pm_quality_score INTEGER,
+    design_quality_score INTEGER,
+    preview_quality_score INTEGER,
+    review_passed SMALLINT,
+    tests_passed SMALLINT,
+    tests_total INTEGER,
+    tests_passed_count INTEGER,
+    tests_failed_count INTEGER,
+    retry_count INTEGER,
+    auto_repair_iterations INTEGER,
+    framework VARCHAR(32),
+    test_duration_ms INTEGER,
+    stage_scores TEXT,
+    cost_input_tokens BIGINT,
+    cost_output_tokens BIGINT,
+    create_time BIGINT NOT NULL,
+    update_time BIGINT NOT NULL,
+    is_deleted SMALLINT NOT NULL DEFAULT 0
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uk_pipeline_eval_id ON pipeline_eval_result(eval_id);
+CREATE INDEX IF NOT EXISTS idx_pipeline_eval_pipeline ON pipeline_eval_result(pipeline_id);
+CREATE INDEX IF NOT EXISTS idx_pipeline_eval_tenant_time ON pipeline_eval_result(tenant_id, create_time);
+
+COMMENT ON TABLE pipeline_eval_result IS 'Pipeline 终态评测结果（Eval 闭环）';
+COMMENT ON COLUMN pipeline_eval_result.overall_score IS '综合质量分 0-100（加权 pm/design/preview/review/testing）';
 
 -- 验证数据
 SELECT 'agent_config' as table_name, COUNT(*) as row_count FROM agent_config;

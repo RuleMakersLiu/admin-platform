@@ -46,6 +46,22 @@ async def _daily_ai_upgrade_task():
             await asyncio.sleep(3600)  # 失败后等 1 小时重试
 
 
+async def _embedding_backfill_task():
+    """后台任务：周期性扫描 embedding_status='pending' 的知识条目并批量向量化。"""
+    while True:
+        try:
+            await asyncio.sleep(60)
+            from app.services.knowledge_service import backfill_pending_embeddings
+            processed = await backfill_pending_embeddings()
+            if processed:
+                logger.info(f"Embedding backfill processed {processed} pending item(s)")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Embedding backfill failed: {e}")
+            await asyncio.sleep(300)  # 失败后等 5 分钟重试
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
@@ -73,10 +89,15 @@ async def lifespan(app: FastAPI):
     upgrade_task = asyncio.create_task(_daily_ai_upgrade_task())
     logger.info("✅ 每日 AI 升级定时任务已启动 (每天 02:05)")
 
+    # 启动知识库 embedding 回填任务（每 60s 扫一次 pending 队列）
+    embedding_task = asyncio.create_task(_embedding_backfill_task())
+    logger.info("✅ 知识库 embedding 回填任务已启动 (每 60s)")
+
     yield
 
     # 关闭时
     upgrade_task.cancel()
+    embedding_task.cancel()
     try:
         from app.messaging.setup import shutdown_messaging
         await shutdown_messaging()

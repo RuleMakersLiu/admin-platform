@@ -1,9 +1,9 @@
 version: '3.8'
 
 services:
-  # PostgreSQL数据库
+  # PostgreSQL数据库 (pgvector: PG15 + vector 扩展)
   postgres:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:pg15
     container_name: admin-postgres
     restart: always
     ports:

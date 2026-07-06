@@ -597,6 +597,22 @@ async def list_pipelines(http_request: Request):
     return {"code": 200, "message": "查询成功", "data": pipelines}
 
 
+@router.get("/pipeline/eval/list")
+async def eval_list_pipelines(http_request: Request, limit: int = Query(50, ge=1, le=500)):
+    """获取带评测分数的流水线列表（Eval 看板）"""
+    tenant_id = _get_tenant_id(http_request)
+    pipelines = await pipeline_manager.list_eval_pipelines(tenant_id=tenant_id, limit=limit)
+    return {"code": 200, "message": "查询成功", "data": pipelines}
+
+
+@router.get("/pipeline/eval/stats")
+async def eval_stats(http_request: Request, days: int = Query(30, ge=1, le=365)):
+    """获取流水线评测聚合统计（平均分/通过率/分桶/趋势）"""
+    tenant_id = _get_tenant_id(http_request)
+    stats = await pipeline_manager.get_eval_stats(tenant_id=tenant_id, days=days)
+    return {"code": 200, "message": "查询成功", "data": stats}
+
+
 @router.post("/pipeline/{pipeline_id}/rollback")
 async def rollback_pipeline(pipeline_id: str, request: RollbackPipelineRequest = None):
     """回退到指定阶段，清空该阶段之后的结果。"""

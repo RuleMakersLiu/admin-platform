@@ -4055,13 +4055,15 @@ def _is_retriable_error(e: Exception) -> bool:
 async def _call_agent_with_retry(agent_service: AgentService, session_id: str,
                                   message: str, agent_type: str,
                                   max_tokens_override: int = None,
-                                  thinking_override: Optional[Dict[str, Any]] = None) -> str:
+                                  thinking_override: Optional[Dict[str, Any]] = None,
+                                  response_format_override: Optional[dict] = None) -> str:
     """调用 Agent，自动重试可恢复的错误"""
     last_error = None
     original_max_tokens = None
     original_thinking = None
+    original_response_format = None
 
-    if max_tokens_override or thinking_override is not None:
+    if max_tokens_override or thinking_override is not None or response_format_override is not None:
         from app.ai.agents import AgentFactory
         agent = AgentFactory.get_agent(agent_type)
         llm = agent._get_llm() if hasattr(agent, "_get_llm") else getattr(agent, "_llm", None)
@@ -4071,6 +4073,9 @@ async def _call_agent_with_retry(agent_service: AgentService, session_id: str,
         if llm and thinking_override is not None and hasattr(llm, "thinking"):
             original_thinking = llm.thinking
             llm.thinking = thinking_override
+        if llm and response_format_override is not None and hasattr(llm, "response_format"):
+            original_response_format = llm.response_format
+            llm.response_format = response_format_override
 
     try:
         for attempt in range(MAX_LLM_RETRIES):
@@ -4110,6 +4115,12 @@ async def _call_agent_with_retry(agent_service: AgentService, session_id: str,
             llm = getattr(agent, "_llm", None)
             if llm and hasattr(llm, "thinking"):
                 llm.thinking = original_thinking
+        if response_format_override is not None:
+            from app.ai.agents import AgentFactory
+            agent = AgentFactory.get_agent(agent_type)
+            llm = getattr(agent, "_llm", None)
+            if llm and hasattr(llm, "response_format"):
+                llm.response_format = original_response_format
 
 
 def _normalize_stream_chunk(chunk: Any) -> Tuple[str, bool, Optional[str]]:
@@ -4164,13 +4175,15 @@ async def _call_agent_with_retry_stream(
     on_chunk: Callable[[str], Awaitable[None]],
     max_tokens_override: int = None,
     thinking_override: Optional[Dict[str, Any]] = None,
+    response_format_override: Optional[dict] = None,
 ) -> str:
     """Call an agent with streaming chunks while preserving the final reply."""
     last_error = None
     original_max_tokens = None
     original_thinking = None
+    original_response_format = None
 
-    if max_tokens_override or thinking_override is not None:
+    if max_tokens_override or thinking_override is not None or response_format_override is not None:
         from app.ai.agents import AgentFactory
         agent = AgentFactory.get_agent(agent_type)
         llm = agent._get_llm() if hasattr(agent, "_get_llm") else getattr(agent, "_llm", None)
@@ -4180,6 +4193,9 @@ async def _call_agent_with_retry_stream(
         if llm and thinking_override is not None and hasattr(llm, "thinking"):
             original_thinking = llm.thinking
             llm.thinking = thinking_override
+        if llm and response_format_override is not None and hasattr(llm, "response_format"):
+            original_response_format = llm.response_format
+            llm.response_format = response_format_override
 
     try:
         for attempt in range(MAX_LLM_RETRIES):
@@ -4272,6 +4288,12 @@ async def _call_agent_with_retry_stream(
             llm = getattr(agent, "_llm", None)
             if llm and hasattr(llm, "thinking"):
                 llm.thinking = original_thinking
+        if response_format_override is not None:
+            from app.ai.agents import AgentFactory
+            agent = AgentFactory.get_agent(agent_type)
+            llm = getattr(agent, "_llm", None)
+            if llm and hasattr(llm, "response_format"):
+                llm.response_format = original_response_format
 
 
 # ==================== 项目上下文加载 ====================
@@ -5456,6 +5478,8 @@ class DevPipelineManager:
         html_stages = {"prototype", "ui_preview"}
         max_tok = 32768 if compact_preview_stage else (8192 if compact_pm_design_stage else (16384 if stage_key in html_stages else None))
         thinking_override = {"type": "disabled"} if compact_preview_stage or compact_pm_design_stage else None
+        # prototype 已强制 JSON-only 输出，启用 GLM json mode 从源头保证合法 JSON
+        response_format_override = {"type": "json_object"} if stage_key == "prototype" else None
 
         if on_chunk:
             raw_output = await asyncio.wait_for(
@@ -5464,6 +5488,7 @@ class DevPipelineManager:
                     on_chunk=on_chunk,
                     max_tokens_override=max_tok,
                     thinking_override=thinking_override,
+                    response_format_override=response_format_override,
                 ),
                 timeout=LLM_STAGE_TIMEOUT,
             )
@@ -5473,6 +5498,7 @@ class DevPipelineManager:
                     self.agent_service, session_id, prompt, agent_type,
                     max_tokens_override=max_tok,
                     thinking_override=thinking_override,
+                    response_format_override=response_format_override,
                 ),
                 timeout=LLM_STAGE_TIMEOUT,
             )
@@ -5540,6 +5566,145 @@ class DevPipelineManager:
             "result": parsed,
         })
 
+    @staticmethod
+    def _compute_overall_score(stages: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
+        """Aggregate per-stage quality signals into an overall 0-100 score.
+
+        Weighting (normalized over available dimensions):
+        pm 0.15 / design 0.15 / preview 0.30 / review 0.20 / testing 0.20.
+        review_passed/tests_passed gate signals mapped to score (100/40, 100/30).
+        """
+        def _num(stage_key: str, *path: str) -> Optional[int]:
+            so = (stages.get(stage_key) or {}).get("structured_output") or {}
+            obj: Any = so
+            for p in path:
+                obj = (obj or {}).get(p) if isinstance(obj, dict) else None
+            if isinstance(obj, (int, float)):
+                return max(0, min(100, int(obj)))
+            return None
+
+        pm = _num("requirement", "pm_quality", "score")
+        design = _num("page_design", "design_quality", "score")
+        preview = _num("prototype", "preview_quality", "score")
+        if preview is None:
+            preview = _num("ui_preview", "preview_quality", "score")
+
+        cr_so = (stages.get("code_review") or {}).get("structured_output") or {}
+        review_passed = cr_so.get("review_passed")
+        t_so = (stages.get("testing") or {}).get("structured_output") or {}
+        tests_passed = t_so.get("tests_passed")
+
+        weights = {"pm": 0.15, "design": 0.15, "preview": 0.30, "review": 0.20, "testing": 0.20}
+        components: List[Tuple[str, int, float]] = []
+        if pm is not None:
+            components.append(("pm", pm, weights["pm"]))
+        if design is not None:
+            components.append(("design", design, weights["design"]))
+        if preview is not None:
+            components.append(("preview", preview, weights["preview"]))
+        if isinstance(review_passed, bool):
+            components.append(("review", 100 if review_passed else 40, weights["review"]))
+        if isinstance(tests_passed, bool):
+            components.append(("testing", 100 if tests_passed else 30, weights["testing"]))
+
+        if not components:
+            return None, {
+                "pm_quality_score": None, "design_quality_score": None, "preview_quality_score": None,
+                "review_passed": review_passed, "tests_passed": tests_passed, "components": {},
+            }
+
+        total_w = sum(w for _, _, w in components)
+        overall = round(sum(score * w for _, score, w in components) / total_w)
+        return overall, {
+            "pm_quality_score": pm,
+            "design_quality_score": design,
+            "preview_quality_score": preview,
+            "review_passed": review_passed,
+            "tests_passed": tests_passed,
+            "components": {name: score for name, score, _ in components},
+        }
+
+    async def _record_pipeline_eval(
+        self, pipe: "DevPipeline", stages: Dict[str, Any]
+    ) -> None:
+        """Pipeline terminal: aggregate eval signals into pipeline_eval_result.
+
+        用独立 session 写入并自行 commit，确保 eval 失败（可观测层）不影响 _complete_pipeline 主事务。
+        """
+        from app.models.pipeline_eval import PipelineEvalResult
+
+        overall, breakdown = self._compute_overall_score(stages)
+
+        testing_stage = stages.get("testing") or {}
+        skill_result = testing_stage.get("skill_result") or {}
+        t_so = testing_stage.get("structured_output") or {}
+        tests_passed_count = skill_result.get("tests_passed")
+        tests_failed_count = skill_result.get("tests_failed")
+        tests_total = t_so.get("test_cases_total")
+        if tests_total is None:
+            computed = (tests_passed_count or 0) + (tests_failed_count or 0)
+            tests_total = computed if computed > 0 else None
+
+        stage_scores: Dict[str, Any] = {}
+        for sk, sd in stages.items():
+            so = (sd or {}).get("structured_output") or {}
+            entry = {
+                k: so[k] for k in (
+                    "pm_quality", "design_quality", "preview_quality",
+                    "review_passed", "tests_passed", "test_cases_total",
+                    "test_cases_passed", "coverage_estimate",
+                    "auto_repair_iterations", "auto_repair_summary",
+                ) if k in so
+            }
+            if entry:
+                stage_scores[sk] = entry
+
+        retry_count = pipe.retry_count or 0
+        prototype_so = (stages.get("prototype") or {}).get("structured_output") or {}
+        auto_repair = prototype_so.get("auto_repair_iterations") or retry_count
+
+        review_passed = breakdown["review_passed"]
+        tests_passed = breakdown["tests_passed"]
+        now = int(time.time() * 1000)
+        values = {
+            "eval_id": f"EVAL-{pipe.pipeline_id}",
+            "pipeline_id": pipe.pipeline_id,
+            "tenant_id": pipe.tenant_id,
+            "project_id": pipe.project_id,
+            "status": pipe.status,
+            "overall_score": overall,
+            "pm_quality_score": breakdown["pm_quality_score"],
+            "design_quality_score": breakdown["design_quality_score"],
+            "preview_quality_score": breakdown["preview_quality_score"],
+            "review_passed": int(review_passed) if isinstance(review_passed, bool) else None,
+            "tests_passed": int(tests_passed) if isinstance(tests_passed, bool) else None,
+            "tests_total": tests_total,
+            "tests_passed_count": tests_passed_count,
+            "tests_failed_count": tests_failed_count,
+            "retry_count": retry_count,
+            "auto_repair_iterations": auto_repair,
+            "framework": skill_result.get("framework"),
+            "test_duration_ms": skill_result.get("duration_ms"),
+            "stage_scores": json.dumps(stage_scores, ensure_ascii=False),
+            "update_time": now,
+        }
+
+        async with async_session_maker() as session:
+            existing = await session.execute(
+                select(PipelineEvalResult).where(
+                    PipelineEvalResult.pipeline_id == pipe.pipeline_id,
+                    PipelineEvalResult.is_deleted == 0,
+                )
+            )
+            rec = existing.scalar_one_or_none()
+            if rec is not None:
+                for k, v in values.items():
+                    setattr(rec, k, v)
+            else:
+                rec = PipelineEvalResult(**values, create_time=now)
+                session.add(rec)
+            await session.commit()
+
     async def _complete_pipeline(
         self,
         session: AsyncSession,
@@ -5560,6 +5725,10 @@ class DevPipelineManager:
         pipe.stages_data = json.dumps(stages, ensure_ascii=False)
         pipe.update_time = int(time.time() * 1000)
         await self._record_user_evolution(session, pipe, stages)
+        try:
+            await self._record_pipeline_eval(pipe, stages)
+        except Exception as exc:
+            logger.warning(f"Pipeline eval record suppressed for {pipeline_id}: {exc}")
         await self._record_delivery_knowledge(pipe, stages)
         await session.commit()
         await _cleanup_pipeline_temp_files(pipeline_id)
@@ -6638,6 +6807,107 @@ class DevPipelineManager:
                 }
                 for p in pipes
             ]
+
+    async def list_eval_pipelines(
+        self, tenant_id: int = 0, limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """带评测分数的 pipeline 列表（left join pipeline_eval_result）。"""
+        from app.models.pipeline_eval import PipelineEvalResult
+
+        async with async_session_maker() as session:
+            query = (
+                select(DevPipeline, PipelineEvalResult)
+                .outerjoin(
+                    PipelineEvalResult,
+                    (PipelineEvalResult.pipeline_id == DevPipeline.pipeline_id)
+                    & (PipelineEvalResult.is_deleted == 0),
+                )
+                .where(DevPipeline.is_deleted == 0)
+            )
+            if tenant_id:
+                query = query.where(DevPipeline.tenant_id == tenant_id)
+            query = query.order_by(DevPipeline.create_time.desc()).limit(limit)
+            result = await session.execute(query)
+            rows = result.all()
+            return [
+                {
+                    "pipeline_id": p.pipeline_id,
+                    "project_id": p.project_id or "",
+                    "user_request": (p.user_request or "")[:120],
+                    "status": p.status,
+                    "current_stage": p.current_stage,
+                    "retry_count": p.retry_count,
+                    "create_time": p.create_time,
+                    "update_time": p.update_time,
+                    "overall_score": e.overall_score if e else None,
+                    "pm_quality_score": e.pm_quality_score if e else None,
+                    "design_quality_score": e.design_quality_score if e else None,
+                    "preview_quality_score": e.preview_quality_score if e else None,
+                    "review_passed": e.review_passed if e else None,
+                    "tests_passed": e.tests_passed if e else None,
+                }
+                for p, e in rows
+            ]
+
+    async def get_eval_stats(
+        self, tenant_id: int = 0, days: int = 30
+    ) -> Dict[str, Any]:
+        """tenant 维度评测聚合：平均分、通过率、retry 均值、分桶、按天趋势。"""
+        from app.models.pipeline_eval import PipelineEvalResult
+
+        cutoff = int((time.time() - days * 86400) * 1000)
+        async with async_session_maker() as session:
+            query = select(PipelineEvalResult).where(
+                PipelineEvalResult.is_deleted == 0,
+                PipelineEvalResult.create_time >= cutoff,
+            )
+            if tenant_id:
+                query = query.where(PipelineEvalResult.tenant_id == tenant_id)
+            result = await session.execute(query)
+            records = result.scalars().all()
+
+        if not records:
+            return {
+                "total": 0, "avg_overall_score": None, "review_pass_rate": None,
+                "tests_pass_rate": None, "avg_retry_count": None,
+                "score_buckets": {"lt60": 0, "60_80": 0, "gte80": 0},
+                "daily_trend": [],
+            }
+
+        scores = [r.overall_score for r in records if r.overall_score is not None]
+        review = [r.review_passed for r in records if r.review_passed is not None]
+        tests = [r.tests_passed for r in records if r.tests_passed is not None]
+        retries = [r.retry_count for r in records if r.retry_count is not None]
+
+        buckets = {"lt60": 0, "60_80": 0, "gte80": 0}
+        for s in scores:
+            if s < 60:
+                buckets["lt60"] += 1
+            elif s < 80:
+                buckets["60_80"] += 1
+            else:
+                buckets["gte80"] += 1
+
+        daily: Dict[str, List[int]] = {}
+        for r in records:
+            if r.overall_score is None or not r.create_time:
+                continue
+            day = time.strftime("%Y-%m-%d", time.localtime(r.create_time / 1000))
+            daily.setdefault(day, []).append(r.overall_score)
+        trend = [
+            {"date": day, "avg_score": round(sum(v) / len(v)), "count": len(v)}
+            for day, v in sorted(daily.items())
+        ]
+
+        return {
+            "total": len(records),
+            "avg_overall_score": round(sum(scores) / len(scores)) if scores else None,
+            "review_pass_rate": round(sum(1 for v in review if v) / len(review), 4) if review else None,
+            "tests_pass_rate": round(sum(1 for v in tests if v) / len(tests), 4) if tests else None,
+            "avg_retry_count": round(sum(retries) / len(retries), 2) if retries else None,
+            "score_buckets": buckets,
+            "daily_trend": trend,
+        }
 
     async def delete_pipeline(self, pipeline_id: str, tenant_id: int = 0) -> None:
         """软删除流水线"""

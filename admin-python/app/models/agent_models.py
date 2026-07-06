@@ -5,6 +5,7 @@ from typing import Optional
 
 from sqlalchemy import BigInteger, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
+from pgvector.sqlalchemy import Vector
 
 from app.core.database import Base
 
@@ -239,6 +240,9 @@ class AgentKnowledge(Base):
     version: Mapped[int] = mapped_column(Integer, default=1)
     view_count: Mapped[int] = mapped_column(Integer, default=0)
     embedding_status: Mapped[str] = mapped_column(String(32), default="pending")
+    # RAG: GLM embedding-3 (1024 维)，NULL 表示尚未向量化；content_hash 用于幂等去重
+    embedding: Mapped[Optional[list[float]]] = mapped_column(Vector(1024), nullable=True)
+    content_hash: Mapped[Optional[str]] = mapped_column(String(64), index=True)
     status: Mapped[int] = mapped_column(Integer, default=1)
     create_time: Mapped[int] = mapped_column(BigInteger, default=lambda: int(time.time() * 1000))
     update_time: Mapped[int] = mapped_column(BigInteger, default=lambda: int(time.time() * 1000))

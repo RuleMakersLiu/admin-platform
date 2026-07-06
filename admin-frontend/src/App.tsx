@@ -32,6 +32,7 @@ const ProjectTest = lazy(() => import('@/pages/project/test'))
 const PortalSelect = lazy(() => import('@/pages/portal/select'))
 const DeveloperPortal = lazy(() => import('@/pages/portal/developer'))
 const ProductPortal = lazy(() => import('@/pages/portal/product'))
+const PipelineEval = lazy(() => import('@/pages/pipeline-eval'))
 
 class ErrorBoundary extends Component<{ children: React.ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null }
@@ -170,6 +171,7 @@ function App() {
               <Route path="requirement" element={<RedirectWithSearch to="/pipeline/development" />} />
               <Route path="development" element={withPermission(PIPELINE_PAGE_PERMISSIONS, <PipelineEntry />)} />
               <Route path="advanced" element={<RedirectWithSearch to="/pipeline/development" />} />
+              <Route path="eval" element={withPermission(PIPELINE_PAGE_PERMISSIONS, <PipelineEval />)} />
             </Route>
 
             <Route path="skills">

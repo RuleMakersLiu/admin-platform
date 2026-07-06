@@ -7,7 +7,8 @@ version: '3.8'
 services:
   # PostgreSQL数据库
   postgres:
-    image: postgres:15-alpine
+    # pgvector 官方镜像：PG15 + vector 扩展，数据目录与 postgres:15-alpine 兼容
+    image: pgvector/pgvector:pg15
     container_name: admin-postgres
     restart: always
     ports:

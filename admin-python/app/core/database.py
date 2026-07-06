@@ -62,3 +62,63 @@ async def ensure_runtime_schema():
         await conn.execute(
             text("ALTER TABLE project_knowledge ADD COLUMN IF NOT EXISTS verification_contract TEXT")
         )
+
+        # RAG: pgvector 扩展 + agent_knowledge 向量列与索引（镜像需为 pgvector/pgvector:pg15）
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        await conn.execute(
+            text("ALTER TABLE agent_knowledge ADD COLUMN IF NOT EXISTS embedding vector(1024)")
+        )
+        await conn.execute(
+            text("ALTER TABLE agent_knowledge ADD COLUMN IF NOT EXISTS content_hash CHAR(64)")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_knowledge_content_hash ON agent_knowledge(content_hash)")
+        )
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_knowledge_embedding_hnsw "
+                "ON agent_knowledge USING hnsw (embedding vector_cosine_ops)"
+            )
+        )
+
+        # Eval 评测闭环：pipeline_eval_result（终端态聚合各 stage 评测信号）
+        await conn.execute(text(
+            """
+            CREATE TABLE IF NOT EXISTS pipeline_eval_result (
+                id BIGSERIAL PRIMARY KEY,
+                eval_id VARCHAR(64) NOT NULL,
+                pipeline_id VARCHAR(64) NOT NULL,
+                tenant_id BIGINT NOT NULL,
+                project_id VARCHAR(64),
+                status VARCHAR(32) NOT NULL,
+                overall_score INTEGER,
+                pm_quality_score INTEGER,
+                design_quality_score INTEGER,
+                preview_quality_score INTEGER,
+                review_passed SMALLINT,
+                tests_passed SMALLINT,
+                tests_total INTEGER,
+                tests_passed_count INTEGER,
+                tests_failed_count INTEGER,
+                retry_count INTEGER,
+                auto_repair_iterations INTEGER,
+                framework VARCHAR(32),
+                test_duration_ms INTEGER,
+                stage_scores TEXT,
+                cost_input_tokens BIGINT,
+                cost_output_tokens BIGINT,
+                create_time BIGINT NOT NULL,
+                update_time BIGINT NOT NULL,
+                is_deleted SMALLINT NOT NULL DEFAULT 0
+            )
+            """
+        ))
+        await conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uk_pipeline_eval_id ON pipeline_eval_result(eval_id)"
+        ))
+        await conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_pipeline_eval_pipeline ON pipeline_eval_result(pipeline_id)"
+        ))
+        await conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_pipeline_eval_tenant_time ON pipeline_eval_result(tenant_id, create_time)"
+        ))

@@ -3,6 +3,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { Avatar, Dropdown, Layout as AntLayout, Menu } from 'antd'
 import {
   AppstoreOutlined,
+  BarChartOutlined,
   BookOutlined,
   BugOutlined,
   CodeOutlined,
@@ -61,6 +62,7 @@ const menuItems: MenuItem[] = [
     label: '开发流水线',
     children: [
       { key: '/pipeline/development', label: '开发流水线', icon: <ThunderboltOutlined />, permission: PIPELINE_PAGE_PERMISSIONS },
+      { key: '/pipeline/eval', label: '质量看板', icon: <BarChartOutlined />, permission: PIPELINE_PAGE_PERMISSIONS },
     ],
   },
   {
