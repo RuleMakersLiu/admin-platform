@@ -43,13 +43,15 @@ services:
       dockerfile: Dockerfile
     container_name: admin-python
     restart: always
+    env_file:
+      - ../admin-python/.env   # 注入 ZAI_API_KEY 等（RAG worker 回填依赖）；DB/REDIS/JWT 仍由下方 environment 覆盖
     ports:
       - "8081:8081"
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/admin_platform
       - REDIS_URL=redis://redis:6379/5
       - JWT_SECRET=admin-platform-jwt-secret-key-2026-dev-only
-      - DEBUG=false
+      - DEBUG=true
       - PIPELINE_PREVIEW_API_PROXY=https://malladmin-jdagent.hctest.tech
       - PIPELINE_EXECUTION_CONCURRENCY=8
       - PIPELINE_EXECUTION_QUEUE_LIMIT=50
@@ -58,6 +60,7 @@ services:
       - redis
     volumes:
       - pipeline_data:/data/pipelines
+      - ../admin-python/app:/app/app   # 开发模式：挂载源码，免 rebuild 即生效（生产应 rebuild 镜像）
     networks:
       - admin-network
 
