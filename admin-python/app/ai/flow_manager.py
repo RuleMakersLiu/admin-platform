@@ -5705,6 +5705,15 @@ class DevPipelineManager:
                 session.add(rec)
             await session.commit()
 
+    async def _record_eval_safe(self, pipe: "DevPipeline", stages: Dict[str, Any]) -> None:
+        """Record pipeline eval in fail-soft mode (completed + failed terminal paths)."""
+        try:
+            await self._record_pipeline_eval(pipe, stages)
+        except Exception as exc:
+            logger.warning(
+                f"Pipeline eval record suppressed for {getattr(pipe, 'pipeline_id', '?')}: {exc}"
+            )
+
     async def _complete_pipeline(
         self,
         session: AsyncSession,
@@ -5725,10 +5734,7 @@ class DevPipelineManager:
         pipe.stages_data = json.dumps(stages, ensure_ascii=False)
         pipe.update_time = int(time.time() * 1000)
         await self._record_user_evolution(session, pipe, stages)
-        try:
-            await self._record_pipeline_eval(pipe, stages)
-        except Exception as exc:
-            logger.warning(f"Pipeline eval record suppressed for {pipeline_id}: {exc}")
+        await self._record_eval_safe(pipe, stages)
         await self._record_delivery_knowledge(pipe, stages)
         await session.commit()
         await _cleanup_pipeline_temp_files(pipeline_id)
@@ -5884,6 +5890,7 @@ class DevPipelineManager:
                         pipe.stages_data = json.dumps(stages, ensure_ascii=False)
                         pipe.update_time = int(time.time() * 1000)
                         await session.commit()
+                        await self._record_eval_safe(pipe, stages)
                         await _cleanup_pipeline_temp_files(pipeline_id)
                         await emit({
                             "type": "failed",
@@ -6268,6 +6275,7 @@ class DevPipelineManager:
                             pipe.stages_data = json.dumps(stages, ensure_ascii=False)
                             pipe.update_time = int(time.time() * 1000)
                             await session.commit()
+                            await self._record_eval_safe(pipe, stages)
                             await _cleanup_pipeline_temp_files(pipeline_id)
                             return {
                                 "pipeline_id": pipeline_id,
@@ -6306,6 +6314,7 @@ class DevPipelineManager:
                             pipe.stages_data = json.dumps(stages, ensure_ascii=False)
                             pipe.update_time = int(time.time() * 1000)
                             await session.commit()
+                            await self._record_eval_safe(pipe, stages)
                             await _cleanup_pipeline_temp_files(pipeline_id)
                             return {
                                 "pipeline_id": pipeline_id,
@@ -6413,6 +6422,7 @@ class DevPipelineManager:
                             pipe.stages_data = json.dumps(stages, ensure_ascii=False)
                             pipe.update_time = int(time.time() * 1000)
                             await session.commit()
+                            await self._record_eval_safe(pipe, stages)
                             await _cleanup_pipeline_temp_files(pipeline_id)
                             await emit({
                                 "type": "failed",
@@ -6463,6 +6473,7 @@ class DevPipelineManager:
                     pipe.stages_data = json.dumps(stages, ensure_ascii=False)
                     pipe.update_time = int(time.time() * 1000)
                     await session.commit()
+                    await self._record_eval_safe(pipe, stages)
                     await _cleanup_pipeline_temp_files(pipeline_id)
                     await emit({
                         "type": "failed",
@@ -6483,6 +6494,7 @@ class DevPipelineManager:
                     pipe.stages_data = json.dumps(stages, ensure_ascii=False)
                     pipe.update_time = int(time.time() * 1000)
                     await session.commit()
+                    await self._record_eval_safe(pipe, stages)
                     await _cleanup_pipeline_temp_files(pipeline_id)
                     await emit({
                         "type": "failed",

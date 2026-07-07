@@ -60,7 +60,6 @@ services:
       - redis
     volumes:
       - pipeline_data:/data/pipelines
-      - ../admin-python/app:/app/app   # 开发模式：挂载源码，免 rebuild 即生效（生产应 rebuild 镜像）
     networks:
       - admin-network
 
