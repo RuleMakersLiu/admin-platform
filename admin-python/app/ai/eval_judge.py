@@ -104,8 +104,61 @@ def parse_judgment(content: Any) -> dict:
     }
 
 
+def _extract_code_files(code_files: Any) -> list:
+    """从 code_files 抽取实际代码文本。
+
+    支持三种形态（pipeline 不同阶段写法不一）：
+    - dict: {path: content}（直接 key=路径、value=内容）
+    - list[{path,content}]: 每项含 path 与 content/code
+    - list[str]: 裸内容
+    """
+    parts: list = []
+    if isinstance(code_files, dict):
+        for path, content in code_files.items():
+            if isinstance(content, str) and content.strip():
+                parts.append(f"// {path}\n{content}")
+            elif isinstance(content, dict):
+                c = content.get("content") or content.get("code") or ""
+                if isinstance(c, str) and c.strip():
+                    parts.append(f"// {path}\n{c}")
+    elif isinstance(code_files, list):
+        for f in code_files:
+            if isinstance(f, dict):
+                path = f.get("path") or f.get("name") or ""
+                content = f.get("content") or f.get("code") or ""
+                if isinstance(content, str) and content.strip():
+                    parts.append(f"// {path}\n{content}" if path else content)
+            elif isinstance(f, str) and f.strip():
+                parts.append(f)
+    return parts
+
+
+def _try_parse_code_array(text: str) -> list:
+    """output 字段常是 JSON 数组字符串 [{path,content}, ...]；解析失败返回 []。"""
+    s = text.strip()
+    if not s or s[0] not in "[{":
+        return []
+    try:
+        parsed = json.loads(s)
+    except Exception:
+        return []
+    if isinstance(parsed, list):
+        return _extract_code_files(parsed)
+    if isinstance(parsed, dict):
+        # 可能是 {path:content} 或单个 {path,content}
+        if any(k in parsed for k in ("content", "code")):
+            return _extract_code_files([parsed])
+        return _extract_code_files(parsed)
+    return []
+
+
 def extract_pipeline_output(stages_data_str: Any) -> str:
-    """尽力从 pipeline 的 stages_data 抽取可评审的产物文本（前端代码优先，回退各阶段输出）。"""
+    """尽力从 pipeline 的 stages_data 抽取可评审的产物文本（前端代码优先）。
+
+    prototype 阶段把生成代码写在多个位置（实测：output 是 JSON 数组 [{path,content}]，
+    code_files 是 dict {path:content}，preview_html 是裸 HTML），本函数逐一兜底，
+    确保抽到的是「真实代码内容」而非「文件名清单」。
+    """
     try:
         data = json.loads(stages_data_str or "{}")
     except Exception:
@@ -113,30 +166,43 @@ def extract_pipeline_output(stages_data_str: Any) -> str:
     if not isinstance(data, dict):
         return ""
 
-    parts: list = []
-    proto = (data.get("prototype") or {}).get("structured_output") or {}
-    if not isinstance(proto, dict):
-        proto = {}
-    code_files = proto.get("code_files") or proto.get("files") or []
-    for f in code_files:
-        if isinstance(f, dict):
-            path = f.get("path") or f.get("name") or ""
-            content = f.get("content") or f.get("code") or ""
-            if content:
-                parts.append(f"// {path}\n{content}" if path else content)
-        elif isinstance(f, str) and f.strip():
-            parts.append(f)
-    if parts:
-        return "\n\n".join(parts)
+    # 优先前端产物阶段；取到即止（避免拼接过多无关阶段）
+    for stage_key in ("prototype", "frontend_dev", "page_design", "delivery"):
+        sd = data.get(stage_key)
+        if not isinstance(sd, dict):
+            continue
+        parts: list = []
+        # 1. code_files（dict 或 list）
+        parts.extend(_extract_code_files(sd.get("code_files")))
+        # 2. preview_html（裸 HTML）
+        preview = sd.get("preview_html")
+        if isinstance(preview, str) and preview.strip():
+            parts.append(preview)
+        # 3. output（常为 JSON 数组 [{path,content}]，也可能是纯文本/HTML）
+        out = sd.get("output")
+        if isinstance(out, str) and out.strip():
+            parsed = _try_parse_code_array(out)
+            if parsed:
+                parts.extend(parsed)
+            else:
+                parts.append(out)
+        # 4. structured_output.code_files（部分版本写这里）
+        so = sd.get("structured_output")
+        if isinstance(so, dict):
+            parts.extend(_extract_code_files(so.get("code_files") or so.get("files")))
+        if parts:
+            return "\n\n".join(p for p in parts if p).strip()
 
-    # 回退：各阶段的 raw_output
+    # 最终回退：各阶段的 output / raw_output 纯文本
+    parts: list = []
     for stage_key, sd in data.items():
         if not isinstance(sd, dict):
             continue
-        raw = sd.get("raw_output")
-        if isinstance(raw, str) and raw.strip():
-            parts.append(f"## {stage_key}\n{raw}")
-    return "\n\n".join(parts)
+        for field in ("raw_output", "output"):
+            raw = sd.get(field)
+            if isinstance(raw, str) and raw.strip():
+                parts.append(f"## {stage_key}\n{raw}")
+    return "\n\n".join(parts).strip()
 
 
 def input_spec_to_request_text(input_spec: Any) -> str:
