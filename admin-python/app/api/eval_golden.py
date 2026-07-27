@@ -201,6 +201,42 @@ async def judge_pipeline(
     return {"code": 200, "message": "评审完成", "data": result}
 
 
+async def _eval_auto_run_pipeline(pipeline_id: str, user_request: str, max_iters: int = 80) -> None:
+    """无人值守驱动 golden-case 流水线：自动执行各阶段 + 自动确认 confirm 关卡，直到终态。
+
+    流水线是 stage-by-stage 模型——execute_stage 跑一个阶段 → waiting_confirm →
+    confirm_stage 推进到下一阶段（status=pending，不自动执行）→ 再 execute_stage。
+    本函数把这个「执行 + 确认」循环自动化。终态（completed/failed）由 execute_stage
+    内部触发 _record_pipeline_eval → _auto_judge_eval_runs 自动评审，写入关联的 eval_run。
+    """
+    import asyncio
+
+    from app.ai.flow_manager import pipeline_manager
+
+    for _ in range(max_iters):
+        try:
+            st = await pipeline_manager.get_pipeline_status(pipeline_id)
+        except Exception:
+            return
+        status = st.get("status")
+        if status in ("completed", "failed"):
+            return
+        if status == "waiting_confirm":
+            try:
+                await pipeline_manager.confirm_stage(pipeline_id, True, "")
+            except Exception:
+                # confirm 可能因「需选择前端页面」等特殊关卡失败 —— 跳过本轮，下轮重试或终态退出
+                pass
+            await asyncio.sleep(1.0)
+            continue
+        # pending / running → 执行当前阶段（阻塞至该阶段完成，再回到循环顶部判断）
+        try:
+            await pipeline_manager.execute_stage(pipeline_id, user_request)
+        except Exception:
+            # 执行异常通常会把流水线置为 failed —— 下一轮 top 判定终态后退出
+            await asyncio.sleep(1.0)
+
+
 @router.post("/{case_id}/run")
 async def run_golden_case(
     case_id: int,
@@ -209,11 +245,13 @@ async def run_golden_case(
 ):
     """从 Golden case 创建并自动执行一条开发流水线；执行完成自动评审（写入 eval_run）。
 
-    完整无人值守闭环：golden case → 创建管线(+EvalRun) → 后台执行 → 终态自动评审。
+    完整无人值守闭环：golden case → 创建管线(+EvalRun) → 自动执行+自动确认 → 终态自动评审。
+    full 模式生成全新项目（frontend_contract_review 需已存在前端项目，不适用 golden case）。
     """
+    import asyncio
+
     from app.ai.eval_judge import input_spec_to_request_text
     from app.ai.flow_manager import pipeline_manager
-    from app.api.flow import _ensure_pipeline_background_task
     from app.models.eval_run import EvalRun
 
     case = await _load_owned(case_id, user["tenantId"], db)
@@ -239,14 +277,8 @@ async def run_golden_case(
     await db.commit()
     await db.refresh(run)
 
-    # 触发后台执行（与产品门户同一执行路径）
-    try:
-        await _ensure_pipeline_background_task(pipeline_id, user_request)
-    except Exception as exc:
-        run.status = "failed"
-        run.judgment = json.dumps({"error": f"启动执行失败: {exc}"}, ensure_ascii=False)
-        await db.commit()
-        raise HTTPException(status_code=500, detail=f"流水线已创建但启动执行失败: {exc}")
+    # 后台无人值守驱动：自动执行各阶段 + 自动确认 confirm 关卡，终态自动评审
+    asyncio.create_task(_eval_auto_run_pipeline(pipeline_id, user_request))
 
     return {
         "code": 200,
