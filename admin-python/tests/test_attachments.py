@@ -36,6 +36,7 @@ def test_audio_unconfigured_returns_placeholder(monkeypatch):
 
     monkeypatch.setattr(settings, "asr_base_url", "")
     monkeypatch.setattr(settings, "asr_api_key", "")
+    monkeypatch.setattr(settings, "zai_api_key", None)  # 连 zai key 也没有才视为未配置
     extra, images = _run(attachments.process_attachments([
         {"type": "audio", "mime": "audio/mpeg", "filename": "v.mp3", "data_uri": _b64("audio/mpeg", b"AUDIO")},
     ]))
@@ -87,8 +88,51 @@ def test_asr_unconfigured(monkeypatch):
 
     monkeypatch.setattr(settings, "asr_base_url", "")
     monkeypatch.setattr(settings, "asr_api_key", "")
+    monkeypatch.setattr(settings, "zai_api_key", None)
     out = _run(asr.transcribe_audio(b"AUDIO", "audio/mpeg", "v.mp3"))
     assert "未配置" in out
+
+
+def test_asr_defaults_to_glm_when_only_zai_key(monkeypatch):
+    """只有 ZAI_API_KEY 时，ASR 应默认走智谱 GLM-ASR（开箱即用）。"""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "asr_base_url", "")
+    monkeypatch.setattr(settings, "asr_api_key", "")
+    monkeypatch.setattr(settings, "zai_api_key", "zai-test-key")
+
+    captured = {}
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"text": "你好世界"}
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *e):
+            return False
+
+        async def post(self, url, headers=None, files=None, data=None):
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["data"] = data
+            return _Resp()
+
+    monkeypatch.setattr("app.ai.asr.httpx.AsyncClient", _Client)
+    out = _run(asr.transcribe_audio(b"AUDIO", "audio/mpeg", "v.mp3"))
+    assert out == "你好世界"
+    assert "open.bigmodel.cn" in captured["url"]  # 默认智谱端点
+    assert captured["url"].endswith("/audio/transcriptions")
+    assert captured["headers"]["Authorization"] == "Bearer zai-test-key"  # 复用 zai key
+    assert captured["data"]["model"] == "glm-asr-2512"  # 默认模型
 
 
 def test_asr_configured_calls_endpoint(monkeypatch):
