@@ -48,6 +48,7 @@ from app.models.collaboration import (
     CollaborationStatus,
 )
 from app.models.pipeline_eval import PipelineEvalResult
+from app.models.eval_golden_case import EvalGoldenCase
 
 __all__ = [
     # Base
@@ -92,4 +93,5 @@ __all__ = [
     "CollaborationStatus",
     # Eval 评测
     "PipelineEvalResult",
+    "EvalGoldenCase",
 ]
