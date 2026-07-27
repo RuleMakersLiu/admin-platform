@@ -13,12 +13,21 @@ export interface Message {
   status: MessageStatus;
   createdAt: number;
   error?: string;
+  attachments?: Attachment[];
   metadata?: {
     model?: string;
     tokens?: number;
     agentType?: string;
     [key: string]: any;
   };
+}
+
+// 多模态附件（图像 / 文档 / 语音）
+export interface Attachment {
+  type?: 'image' | 'document' | 'audio'; // 留空则后端按 mime/扩展名自动判断
+  mime: string;
+  filename: string;
+  data_uri: string; // data:<mime>;base64,<payload>
 }
 
 // 会话

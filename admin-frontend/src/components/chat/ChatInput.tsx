@@ -1,5 +1,5 @@
 import React, { memo, useState, useRef, useCallback, useEffect } from 'react';
-import { Input, Button, Tooltip, Dropdown, Space, Typography } from 'antd';
+import { Input, Button, Tooltip, Dropdown, Space, Typography, Tag } from 'antd';
 import {
   SendOutlined,
   SettingOutlined,
@@ -7,17 +7,23 @@ import {
   AudioOutlined,
   BulbOutlined,
   StopOutlined,
+  PaperClipOutlined,
 } from '@ant-design/icons';
-import type { ChatSettings } from '@/types/chat';
+import type { Attachment, ChatSettings } from '@/types/chat';
 import { useKeyboardShortcut } from '@/hooks/useChat';
 import './ChatInput.css';
 
 const { TextArea } = Input;
 const { Text } = Typography;
 
+// 附件限制
+const MAX_ATTACHMENTS = 5;
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const ACCEPTED_TYPES = 'image/*,.pdf,.docx,.xlsx,.pptx,.txt,.md,.csv,.json,audio/*';
+
 // 聊天输入组件 Props
 interface ChatInputProps {
-  onSend: (message: string) => void;
+  onSend: (message: string, attachments?: Attachment[]) => void;
   onCancel?: () => void;
   onClear?: () => void;
   disabled?: boolean;
@@ -37,6 +43,15 @@ const QUICK_SUGGESTIONS = [
   { key: 'document', label: '添加注释', prompt: '请为以下代码添加详细注释：\n' },
 ];
 
+const readFileAsDataUri = (file: File): Promise<Attachment> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () =>
+      resolve({ mime: file.type, filename: file.name, data_uri: String(reader.result) });
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+
 const ChatInput: React.FC<ChatInputProps> = memo(({
   onSend,
   onCancel,
@@ -50,17 +65,20 @@ const ChatInput: React.FC<ChatInputProps> = memo(({
 }) => {
   const [message, setMessage] = useState('');
   const [isComposing, setIsComposing] = useState(false);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 发送消息
   const handleSend = useCallback(() => {
     const trimmedMessage = message.trim();
-    if (trimmedMessage && !disabled) {
-      onSend(trimmedMessage);
+    if ((trimmedMessage || attachments.length) && !disabled) {
+      onSend(trimmedMessage, attachments);
       setMessage('');
+      setAttachments([]);
       textAreaRef.current?.focus();
     }
-  }, [message, disabled, onSend]);
+  }, [message, attachments, disabled, onSend]);
 
   // 键盘快捷键 - Enter 发送
   useKeyboardShortcut('Enter', handleSend, { ctrl: false, shift: false });
@@ -88,6 +106,26 @@ const ChatInput: React.FC<ChatInputProps> = memo(({
     setMessage(prompt);
     textAreaRef.current?.focus();
   }, []);
+
+  // 附件选择
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = ''; // 允许重复选择同一文件
+    const room = MAX_ATTACHMENTS - attachments.length;
+    for (const file of files.slice(0, room)) {
+      if (file.size > MAX_FILE_SIZE) continue; // 跳过超大文件
+      try {
+        const att = await readFileAsDataUri(file);
+        setAttachments((prev) => [...prev, att]);
+      } catch {
+        /* 忽略读取失败 */
+      }
+    }
+  };
+
+  const removeAttachment = (idx: number) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== idx));
+  };
 
   // 设置菜单
   const settingsMenu = {
@@ -127,7 +165,7 @@ const ChatInput: React.FC<ChatInputProps> = memo(({
     }
   }, [message]);
 
-  const canSend = message.trim().length > 0 && !disabled;
+  const canSend = (message.trim().length > 0 || attachments.length > 0) && !disabled;
 
   return (
     <div className="chat-input-container">
@@ -150,6 +188,23 @@ const ChatInput: React.FC<ChatInputProps> = memo(({
           ))}
         </div>
       </div>
+
+      {/* 附件预览 */}
+      {attachments.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
+          {attachments.map((att, idx) => (
+            <Tag
+              key={`${att.filename}-${idx}`}
+              closable
+              onClose={() => removeAttachment(idx)}
+              color="blue"
+              icon={<PaperClipOutlined />}
+            >
+              {att.filename || att.mime || '附件'}
+            </Tag>
+          ))}
+        </div>
+      )}
 
       {/* 输入区域 */}
       <div className="chat-input-wrapper">
@@ -187,12 +242,29 @@ const ChatInput: React.FC<ChatInputProps> = memo(({
               </Dropdown>
             )}
 
+            <Tooltip title={`添加附件（图片 / 文档 / 语音，最多 ${MAX_ATTACHMENTS} 个）`}>
+              <Button
+                type="text"
+                icon={<PaperClipOutlined />}
+                onClick={() => fileInputRef.current?.click()}
+                disabled={disabled || attachments.length >= MAX_ATTACHMENTS}
+              />
+            </Tooltip>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept={ACCEPTED_TYPES}
+              style={{ display: 'none' }}
+              onChange={handleFileChange}
+            />
+
             <Tooltip title="语音输入（开发中）">
               <Button type="text" icon={<AudioOutlined />} disabled />
             </Tooltip>
           </Space>
 
-          <Tooltip title={isStreaming ? '停止生成' : canSend ? '发送消息' : '请输入内容'}>
+          <Tooltip title={isStreaming ? '停止生成' : canSend ? '发送消息' : '请输入内容或添加附件'}>
             <Button
               type="primary"
               icon={isStreaming ? <StopOutlined /> : <SendOutlined />}

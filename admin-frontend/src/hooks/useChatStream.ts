@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { useChatStore } from '@/stores/chat';
 import { useAuthStore } from '@/stores/auth';
+import type { Attachment } from '@/types/chat';
 
 interface UseChatStreamOptions {
   agentType?: string;
@@ -17,7 +18,7 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
   void _storeState;
 
   const sendMessage = useCallback(
-    async (message: string) => {
+    async (message: string, attachments?: Attachment[]) => {
       const store = useChatStore.getState();
       const sessionId = store.currentSessionId;
       if (!sessionId) return;
@@ -30,6 +31,7 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
         sessionId,
         type: 'user',
         content: message,
+        attachments,
         status: 'completed',
         createdAt: Date.now(),
         metadata: { agentType },
@@ -60,6 +62,12 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
             message,
             session_id: sessionId,
             agent_type: agentType,
+            attachments: (attachments || []).map((a) => ({
+              type: a.type,
+              mime: a.mime,
+              filename: a.filename,
+              data_uri: a.data_uri,
+            })),
           }),
           signal: abortControllerRef.current.signal,
         });

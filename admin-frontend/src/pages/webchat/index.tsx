@@ -15,7 +15,7 @@ import { SessionList, MessageList, ChatInput, CanvasPanel } from '@/components/c
 import { useChatStore } from '@/stores/chat';
 import { useWebSocket } from '@/services/websocket';
 import { useThemeSwitch, useResponsive, useId } from '@/hooks/useChat';
-import type { Message, Session } from '@/types/chat';
+import type { Attachment, Message, Session } from '@/types/chat';
 import { extractHtmlBlocks } from '@/utils/sanitize';
 import './index.css';
 
@@ -202,8 +202,8 @@ const WebChatPage: React.FC = () => {
 
   // 发送消息
   const handleSendMessage = useCallback(
-    (content: string) => {
-      if (!currentSessionId || !content.trim()) return;
+    (content: string, attachments?: Attachment[]) => {
+      if (!currentSessionId || (!content.trim() && !(attachments && attachments.length))) return;
 
       // 创建用户消息
       const userMessage: Message = {
@@ -211,6 +211,7 @@ const WebChatPage: React.FC = () => {
         sessionId: currentSessionId,
         type: 'user',
         content: content.trim(),
+        attachments,
         status: 'completed',
         createdAt: Date.now(),
       };
@@ -221,17 +222,11 @@ const WebChatPage: React.FC = () => {
       updateSession(currentSessionId, {
         updatedAt: Date.now(),
         messageCount: currentMessages.length + 1,
-        lastMessage: content.slice(0, 50),
+        lastMessage: content.slice(0, 50) || (attachments?.length ? `[附件×${attachments.length}]` : ''),
       });
 
-      // 发送到 WebSocket
-      if (settings.streamEnabled) {
-        // 流式发送
-        wsManager.sendChatMessage(currentSessionId, content, true);
-      } else {
-        // 非流式发送
-        wsManager.sendChatMessage(currentSessionId, content, false);
-      }
+      // 发送到 WebSocket（附件随消息一同发送）
+      wsManager.sendChatMessage(currentSessionId, content, settings.streamEnabled, attachments);
     },
     [
       currentSessionId,

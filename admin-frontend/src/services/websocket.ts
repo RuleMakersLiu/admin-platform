@@ -1,5 +1,5 @@
 import { useAuthStore } from '@/stores/auth';
-import type { WSConnectionStatus, WSMessage, StreamEvent } from '@/types/chat';
+import type { Attachment, WSConnectionStatus, WSMessage, StreamEvent } from '@/types/chat';
 
 // WebSocket 配置
 const WS_BASE_URL = import.meta.env.VITE_WS_URL || `ws://${window.location.host}/ws`;
@@ -121,11 +121,12 @@ class WebSocketManager {
   }
 
   // 发送聊天消息
-  sendChatMessage(sessionId: string, content: string, stream = true): boolean {
+  sendChatMessage(sessionId: string, content: string, stream = true, attachments?: Attachment[]): boolean {
     return this.send('message.send', {
       sessionId,
       content,
       stream,
+      attachments: attachments || [],
     });
   }
 
