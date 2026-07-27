@@ -270,6 +270,7 @@
 
 .tech-avatar-wrapper {
   position: relative;
+  display: inline-block; /* 收缩到头像尺寸，让在线状态点锚定在头像右下角 */
 }
 
 .tech-avatar {
