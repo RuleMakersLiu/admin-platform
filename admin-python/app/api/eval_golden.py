@@ -198,3 +198,41 @@ async def judge_pipeline(
     )
     result["pipeline_id"] = pipeline_id
     return {"code": 200, "message": "评审完成", "data": result}
+
+
+@router.post("/{case_id}/run")
+async def run_golden_case(
+    case_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """从 Golden case 的输入创建一条开发流水线（pending）。
+
+    复用 pipeline_manager.create_pipeline；流水线创建后到流水线页执行，
+    完成后用 /eval/golden-cases/{id}/judge-pipeline/{pipeline_id} 评审 → 形成
+    golden case → 跑管线 → 评审 的闭环。
+    """
+    from app.ai.eval_judge import input_spec_to_request_text
+    from app.ai.flow_manager import pipeline_manager
+
+    case = await _load_owned(case_id, user["tenantId"], db)
+    user_request = input_spec_to_request_text(from_storage(case.input_spec))
+    if not user_request:
+        raise HTTPException(status_code=400, detail="Golden case 的 input_spec 无法解析为需求文本")
+
+    pipeline_id = await pipeline_manager.create_pipeline(
+        user_request=user_request,
+        tenant_id=user["tenantId"],
+        creator_id=user["adminId"],
+        pipeline_mode="full",
+    )
+    return {
+        "code": 200,
+        "message": "已从 Golden case 创建流水线",
+        "data": {
+            "pipeline_id": pipeline_id,
+            "status": "pending",
+            "golden_case_id": case_id,
+            "note": "流水线已创建，请在流水线页执行；完成后用 judge-pipeline 评审",
+        },
+    }

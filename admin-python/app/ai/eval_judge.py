@@ -139,6 +139,21 @@ def extract_pipeline_output(stages_data_str: Any) -> str:
     return "\n\n".join(parts)
 
 
+def input_spec_to_request_text(input_spec: Any) -> str:
+    """把 golden case 的 input_spec 归一化为可用于创建 pipeline 的需求文本。"""
+    if input_spec is None:
+        return ""
+    if isinstance(input_spec, str):
+        return input_spec.strip()
+    if isinstance(input_spec, dict):
+        for key in ("requirement", "user_request", "prompt", "需求", "description"):
+            v = input_spec.get(key)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        return json.dumps(input_spec, ensure_ascii=False)
+    return json.dumps(input_spec, ensure_ascii=False)
+
+
 def build_judge_llm():
     """构造评审用 LLM（json mode，低温）；未配置返回 None。"""
     try:

@@ -110,3 +110,14 @@ def test_extract_pipeline_output_fallback_raw():
     out = eval_judge.extract_pipeline_output(json.dumps(stages))
     assert "需求文本" in out
     assert "设计文本" in out
+
+
+def test_input_spec_to_request_text_variants():
+    from app.ai.eval_judge import input_spec_to_request_text
+
+    assert input_spec_to_request_text("实现登录页") == "实现登录页"
+    assert input_spec_to_request_text({"requirement": "做一个列表"}) == "做一个列表"
+    assert input_spec_to_request_text({"prompt": "生成首页"}) == "生成首页"
+    assert input_spec_to_request_text({"foo": "bar"}) == '{"foo": "bar"}'
+    assert input_spec_to_request_text(None) == ""
+    assert input_spec_to_request_text(["a", "b"]) == '["a", "b"]'
