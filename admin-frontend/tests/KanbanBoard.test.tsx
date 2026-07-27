@@ -28,7 +28,10 @@ vi.mock('antd', () => ({
   Space: ({ children }: any) => <div data-testid="space">{children}</div>,
   Badge: ({ count }: any) => <span data-testid="badge">{count}</span>,
   Typography: {
-    Title: ({ children, level }: any) => <h{level || 1} data-testid="title">{children}</h{level || 1}>,
+    Title: ({ children, level }: any) => {
+      const H = (`h${level || 1}`) as any;
+      return <H data-testid="title">{children}</H>;
+    },
     Text: ({ children, type }: any) => (
       <span data-testid="text" data-type={type}>{children}</span>
     ),
