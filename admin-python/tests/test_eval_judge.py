@@ -82,3 +82,31 @@ def test_judge_output_without_llm_returns_error(monkeypatch):
     monkeypatch.setattr(settings, "zai_api_key", None)
     r = _run(eval_judge.judge_output("需求", "产物", ["c1"], llm=None))
     assert "error" in r
+
+
+def test_extract_pipeline_output_code_files():
+    import json
+
+    stages = {"prototype": {"structured_output": {"code_files": [
+        {"path": "src/App.vue", "content": "<template>hi</template>"},
+        {"path": "src/main.js", "content": "import Vue"},
+    ]}}}
+    out = eval_judge.extract_pipeline_output(json.dumps(stages))
+    assert "src/App.vue" in out
+    assert "<template>hi</template>" in out
+    assert "import Vue" in out
+
+
+def test_extract_pipeline_output_empty_and_malformed():
+    assert eval_judge.extract_pipeline_output("") == ""
+    assert eval_judge.extract_pipeline_output(None) == ""
+    assert eval_judge.extract_pipeline_output("not json") == ""
+
+
+def test_extract_pipeline_output_fallback_raw():
+    import json
+
+    stages = {"requirement": {"raw_output": "需求文本"}, "design": {"raw_output": "设计文本"}}
+    out = eval_judge.extract_pipeline_output(json.dumps(stages))
+    assert "需求文本" in out
+    assert "设计文本" in out

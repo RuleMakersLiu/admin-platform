@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.eval_judge import judge_output
+from app.ai.eval_judge import extract_pipeline_output, judge_output
 from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.models.eval_golden_case import EvalGoldenCase
@@ -167,4 +167,34 @@ async def judge_endpoint(
         req.output,
         criteria if criteria is not None else "",
     )
+    return {"code": 200, "message": "评审完成", "data": result}
+
+
+@router.post("/{case_id}/judge-pipeline/{pipeline_id}")
+async def judge_pipeline(
+    case_id: int,
+    pipeline_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """用 golden case 评审某条已完成 pipeline 的产物（自动抽取 stages_data 中的生成代码）。"""
+    from app.models.agent_models import DevPipeline
+
+    case = await _load_owned(case_id, user["tenantId"], db)
+    stmt = select(DevPipeline).where(
+        DevPipeline.pipeline_id == pipeline_id,
+        DevPipeline.tenant_id == user["tenantId"],
+        DevPipeline.is_deleted == 0,
+    )
+    pipe = (await db.execute(stmt)).scalar_one_or_none()
+    if not pipe:
+        raise HTTPException(status_code=404, detail="流水线不存在")
+
+    output = extract_pipeline_output(pipe.stages_data)
+    result = await judge_output(
+        from_storage(case.input_spec),
+        output,
+        from_storage(case.expected_criteria),
+    )
+    result["pipeline_id"] = pipeline_id
     return {"code": 200, "message": "评审完成", "data": result}

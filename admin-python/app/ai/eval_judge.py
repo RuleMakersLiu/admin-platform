@@ -104,6 +104,41 @@ def parse_judgment(content: Any) -> dict:
     }
 
 
+def extract_pipeline_output(stages_data_str: Any) -> str:
+    """尽力从 pipeline 的 stages_data 抽取可评审的产物文本（前端代码优先，回退各阶段输出）。"""
+    try:
+        data = json.loads(stages_data_str or "{}")
+    except Exception:
+        return ""
+    if not isinstance(data, dict):
+        return ""
+
+    parts: list = []
+    proto = (data.get("prototype") or {}).get("structured_output") or {}
+    if not isinstance(proto, dict):
+        proto = {}
+    code_files = proto.get("code_files") or proto.get("files") or []
+    for f in code_files:
+        if isinstance(f, dict):
+            path = f.get("path") or f.get("name") or ""
+            content = f.get("content") or f.get("code") or ""
+            if content:
+                parts.append(f"// {path}\n{content}" if path else content)
+        elif isinstance(f, str) and f.strip():
+            parts.append(f)
+    if parts:
+        return "\n\n".join(parts)
+
+    # 回退：各阶段的 raw_output
+    for stage_key, sd in data.items():
+        if not isinstance(sd, dict):
+            continue
+        raw = sd.get("raw_output")
+        if isinstance(raw, str) and raw.strip():
+            parts.append(f"## {stage_key}\n{raw}")
+    return "\n\n".join(parts)
+
+
 def build_judge_llm():
     """构造评审用 LLM（json mode，低温）；未配置返回 None。"""
     try:
