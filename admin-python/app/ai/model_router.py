@@ -7,6 +7,7 @@
 """
 import logging
 import time
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import Enum
@@ -27,6 +28,16 @@ def bind_pipeline_context(pipeline_id: str, tenant_id: Optional[int] = None):
 def reset_pipeline_context(token):
     """解除绑定。"""
     _pipeline_ctx.reset(token)
+
+
+@asynccontextmanager
+async def pipeline_context(pipeline_id: str, tenant_id: Optional[int] = None):
+    """``async with``：在作用域内把 LLM 用量归因到该 pipeline（自动 bind/reset）。"""
+    token = bind_pipeline_context(pipeline_id, tenant_id)
+    try:
+        yield
+    finally:
+        reset_pipeline_context(token)
 
 
 class TaskComplexity(str, Enum):

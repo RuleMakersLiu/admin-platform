@@ -93,3 +93,19 @@ def test_flush_usage_failure_restores_buffer():
     n = _run(r.flush_usage(sess))
     assert n == 0
     assert len(r._usage) == 1  # 失败回灌
+
+
+def test_pipeline_context_async_cm_binds_and_resets():
+    from app.ai.model_router import _pipeline_ctx, pipeline_context
+
+    r = ModelRouter(default_provider="glm")
+
+    async def body():
+        async with pipeline_context("pipe-x", tenant_id=3):
+            r.record_usage("glm-4-flash", 10, 5)
+
+    assert _pipeline_ctx.get() is None
+    _run(body())
+    assert r._usage[0].pipeline_id == "pipe-x"
+    assert r._usage[0].tenant_id == 3
+    assert _pipeline_ctx.get() is None  # 退出 context 后已 reset

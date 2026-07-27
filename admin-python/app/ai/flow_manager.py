@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.agents import AgentService
 from app.ai.pipeline_skills import ensure_workspace, get_workspace_path
 from app.ai.skills import SkillStatus, skill_registry
+from app.ai.model_router import pipeline_context
 from app.models.agent_models import DevPipeline, ProjectKnowledge
 from app.services.memory_service import MemoryService, MemoryType
 from app.services.user_evolution_service import UserEvolutionService
@@ -5690,6 +5691,24 @@ class DevPipelineManager:
         }
 
         async with async_session_maker() as session:
+            # 汇总该 pipeline 的 LLM 用量，回填成本列（B3）
+            try:
+                from sqlalchemy import func
+
+                from app.models.llm_usage_log import LLMUsageLog
+                usage_row = (await session.execute(
+                    select(
+                        func.coalesce(func.sum(LLMUsageLog.input_tokens), 0),
+                        func.coalesce(func.sum(LLMUsageLog.output_tokens), 0),
+                    ).where(
+                        LLMUsageLog.pipeline_id == pipe.pipeline_id,
+                    )
+                )).one()
+                values["cost_input_tokens"] = int(usage_row[0] or 0)
+                values["cost_output_tokens"] = int(usage_row[1] or 0)
+            except Exception:
+                pass  # 用量汇总失败不阻断 eval 写入
+
             existing = await session.execute(
                 select(PipelineEvalResult).where(
                     PipelineEvalResult.pipeline_id == pipe.pipeline_id,
@@ -5796,11 +5815,12 @@ class DevPipelineManager:
                             # pipe is read-only here and expire_on_commit=False, so
                             # accessing its attributes does not touch the outer session.
                             async with async_session_maker() as branch_session:
-                                return await self._run_single_stage(
-                                    pipeline_id, stage_key, stages,
-                                    pipe, fix_feedback, user_input, branch_session,
-                                    on_chunk=on_chunk,
-                                )
+                                async with pipeline_context(pipeline_id, pipe.tenant_id):
+                                    return await self._run_single_stage(
+                                        pipeline_id, stage_key, stages,
+                                        pipe, fix_feedback, user_input, branch_session,
+                                        on_chunk=on_chunk,
+                                    )
 
                         fe_result, be_result = await asyncio.gather(
                             _run_branch(
@@ -5976,17 +5996,18 @@ class DevPipelineManager:
                             for part in (fix_feedback, preview_validation_feedback)
                             if part and part.strip()
                         )
-                        raw_output, parsed = await self._run_single_stage(
-                            pipeline_id, current_stage, stages,
-                            pipe, attempt_feedback, user_input, session,
-                            on_chunk=(
-                                lambda content: emit({
-                                    "type": "chunk",
-                                    "stage": current_stage,
-                                    "content": content,
-                                })
-                            ) if stream_callback else None,
-                        )
+                        async with pipeline_context(pipeline_id, pipe.tenant_id):
+                            raw_output, parsed = await self._run_single_stage(
+                                pipeline_id, current_stage, stages,
+                                pipe, attempt_feedback, user_input, session,
+                                on_chunk=(
+                                    lambda content: emit({
+                                        "type": "chunk",
+                                        "stage": current_stage,
+                                        "content": content,
+                                    })
+                                ) if stream_callback else None,
+                            )
                         if attempt_feedback.strip():
                             parsed["applied_feedback"] = attempt_feedback.strip()
 
