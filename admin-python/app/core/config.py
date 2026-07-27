@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     zai_embedding_dimensions: int = 1024
     zai_embedding_batch_size: int = 32
 
+    # GLM 视觉模型（多模态：图像理解/视觉评测）配置 — 复用 zai_api_key
+    zai_vision_model: str = "glm-4v-plus"
+
     # RAG 检索参数
     rag_top_k: int = 5
     rag_min_similarity: float = 0.75

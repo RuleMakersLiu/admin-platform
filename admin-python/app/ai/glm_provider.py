@@ -23,6 +23,10 @@ MODEL_CONFIG = {
     "glm-4-long": (16384, False, False),
     "glm-5": (4096, True, False),
     "glm-5.1": (16384, True, True),
+    # 视觉模型（多模态，OpenAI 兼容 content-array）
+    "glm-4v": (4096, False, False),
+    "glm-4v-plus": (4096, False, False),
+    "glm-4v-flash": (4096, False, False),
 }
 
 # 推理模型需要更多 token（reasoning tokens 计入 max_tokens）
@@ -55,6 +59,24 @@ def _parse_content(raw) -> str:
                 parts.append(str(item))
         return "\n".join(parts)
     return str(raw) if raw is not None else ""
+
+
+def build_vision_messages(
+    prompt: str, image_data_urls: list[str], system: Optional[str] = None
+) -> list[dict]:
+    """构造 GLM-4V（OpenAI 兼容）多模态消息：文本 + 若干图像。
+
+    image_data_urls 元素为 data URI（``data:image/png;base64,...``）或可公网访问的图片 URL。
+    返回可直接传给 ``ChatGLM(model=settings.zai_vision_model).ainvoke`` 的 messages 列表。
+    """
+    content: list = [{"type": "text", "text": prompt}]
+    for url in image_data_urls:
+        content.append({"type": "image_url", "image_url": {"url": url}})
+    messages: list[dict] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": content})
+    return messages
 
 
 class GLMMessage:
