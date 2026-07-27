@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Any, Generic, List, Optional, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # 泛型类型变量
 T = TypeVar('T')
@@ -16,8 +16,7 @@ class PaginatedResult(BaseModel, Generic[T]):
     page_size: int
     total_pages: int
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 # ==================== 通用响应 ====================
@@ -38,8 +37,7 @@ class LoginRequest(BaseModel):
     password: str = Field(..., min_length=6, max_length=128)
     tenant_id: Optional[int] = Field(None, alias="tenantId")
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class LoginResponse(BaseModel):
@@ -51,8 +49,7 @@ class LoginResponse(BaseModel):
     tenant_id: int = Field(alias="tenantId")
     tenant_ids: List[int] = Field(default_factory=list, alias="tenantIds")
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class UserInfo(BaseModel):
@@ -70,8 +67,7 @@ class UserInfo(BaseModel):
     tenant_id: int = Field(alias="tenantId")
     tenant_ids: List[int] = Field(default_factory=list, alias="tenantIds")
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 # ==================== AI分身相关 ====================
@@ -104,8 +100,7 @@ class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=10000)
     agent_type: Optional[str] = Field(None, alias="agentType")
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class ChatResponse(BaseModel):
@@ -116,8 +111,7 @@ class ChatResponse(BaseModel):
     reply: str
     msg_type: str = Field(default="chat", alias="msgType")
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class SessionItem(BaseModel):
@@ -131,8 +125,7 @@ class SessionItem(BaseModel):
     last_message_time: Optional[int] = Field(None, alias="lastMessageTime")
     create_time: int = Field(alias="createTime")
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class SessionListResponse(BaseModel):
@@ -146,8 +139,7 @@ class CreateSessionRequest(BaseModel):
     project_id: Optional[str] = Field(None, alias="projectId")
     title: Optional[str] = None
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 # ==================== 项目相关 ====================
@@ -162,8 +154,7 @@ class ProjectItem(BaseModel):
     priority: str
     create_time: int = Field(alias="createTime")
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class CreateProjectRequest(BaseModel):
@@ -172,8 +163,7 @@ class CreateProjectRequest(BaseModel):
     description: Optional[str] = None
     priority: Optional[str] = "P2"
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 # ==================== 任务相关 ====================
@@ -192,8 +182,7 @@ class TaskItem(BaseModel):
     due_time: Optional[int] = Field(None, alias="dueTime")
     create_time: int = Field(alias="createTime")
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class CreateTaskRequest(BaseModel):
@@ -206,8 +195,7 @@ class CreateTaskRequest(BaseModel):
     acceptance_criteria: Optional[str] = Field(None, alias="acceptanceCriteria")
     due_time: Optional[int] = Field(None, alias="dueTime")
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 # ==================== BUG相关 ====================
@@ -227,8 +215,7 @@ class BugItem(BaseModel):
     assignee: Optional[str] = None
     create_time: int = Field(alias="createTime")
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class CreateBugRequest(BaseModel):
@@ -242,8 +229,7 @@ class CreateBugRequest(BaseModel):
     actual_behavior: Optional[str] = Field(None, alias="actualBehavior")
     assignee: Optional[str] = None
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 # ==================== 通用更新请求 ====================
@@ -253,5 +239,4 @@ class UpdateStatusRequest(BaseModel):
     status: str
     note: Optional[str] = None
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)

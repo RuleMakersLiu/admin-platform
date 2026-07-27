@@ -3,7 +3,7 @@ from functools import lru_cache
 from typing import Optional
 
 from pydantic import model_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Dev-only default; production MUST override via JWT_SECRET (enforced by the validator below).
 DEFAULT_JWT_SECRET = "admin-platform-jwt-secret-key-2026-dev-only"
@@ -103,9 +103,7 @@ class Settings(BaseSettings):
             )
         return self
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 
 @lru_cache

@@ -1,6 +1,6 @@
 """激活体验相关的Schemas"""
 from typing import Optional, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
 
 
@@ -10,8 +10,7 @@ class ActivationStartRequest(BaseModel):
     tenant_id: int = Field(..., alias="tenantId", description="租户ID")
     user_name: Optional[str] = Field(None, alias="userName", description="用户名称")
     
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class ActivationStartResponse(BaseModel):
@@ -21,8 +20,7 @@ class ActivationStartResponse(BaseModel):
     welcome_message: str = Field(..., alias="welcomeMessage", description="欢迎消息")
     suggested_prompts: List[str] = Field(..., alias="suggestedPrompts", description="建议的提示词")
     
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class TemplateItem(BaseModel):
@@ -34,8 +32,7 @@ class TemplateItem(BaseModel):
     category: str = Field(..., description="模板分类")
     icon: Optional[str] = Field(None, description="图标")
     
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class TemplatesResponse(BaseModel):
@@ -50,8 +47,7 @@ class ActivationChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000, description="用户消息")
     use_stream: bool = Field(default=True, alias="useStream", description="是否使用流式响应")
     
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class ActivationCompleteRequest(BaseModel):
@@ -60,8 +56,7 @@ class ActivationCompleteRequest(BaseModel):
     rating: Optional[int] = Field(None, ge=1, le=5, description="评分1-5")
     feedback: Optional[str] = Field(None, max_length=500, description="反馈")
     
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class ActivationCompleteResponse(BaseModel):
@@ -70,8 +65,7 @@ class ActivationCompleteResponse(BaseModel):
     message: str = Field(default="激活完成", description="消息")
     next_steps: List[str] = Field(default=[], alias="nextSteps", description="后续步骤")
     
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class ActivationStatus(BaseModel):
@@ -82,5 +76,4 @@ class ActivationStatus(BaseModel):
     started_at: int = Field(..., alias="startedAt")
     last_activity: int = Field(..., alias="lastActivity")
     
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
