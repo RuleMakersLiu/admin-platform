@@ -64,6 +64,9 @@ target/
 # Docker
 docker/data/
 
+# Database backups (local dev dumps — never commit)
+database/backup_*.sql
+
 # Logs
 *.log
 logs/
