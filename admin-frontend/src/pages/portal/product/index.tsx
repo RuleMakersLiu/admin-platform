@@ -13,6 +13,7 @@ import {
   RocketOutlined,
 } from '@ant-design/icons'
 import { pipelineApi, type FrontendPageCandidate, type FrontendPageCandidates, type PipelineArtifact, type PipelineListItem, type PipelineStatus, type ProjectSkillMatch } from '@/services/pipeline'
+import { type ApiError } from '@/services/api'
 import { saveLastPortalPath, useAuthStore } from '@/stores/auth'
 
 const { Title, Text } = Typography
@@ -496,6 +497,12 @@ export default function ProductPortal() {
       setRunning(nextStatus.status === 'running')
       setLogs((prev) => [`已切换到流水线：${id}`, ...prev].slice(0, 80))
     } catch (error: unknown) {
+      // 流水线不存在或已被删除（软删除）—— 清除失效引用并回到新建态，避免反复 404
+      if (error && (error as ApiError).status === 404) {
+        startNewRequirement()
+        message.warning('该流水线已不存在或已被删除，已为你切换到新建')
+        return
+      }
       message.error(error instanceof Error ? error.message : '加载流水线失败')
     }
   }

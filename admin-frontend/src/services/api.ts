@@ -1,6 +1,12 @@
 import axios, { type AxiosRequestConfig } from 'axios'
 import { useAuthStore } from '@/stores/auth'
 
+// HTTP 错误：携带状态码，便于调用方区分（如 status===404 表示资源不存在/已删除）
+export interface ApiError extends Error {
+  status?: number
+  code?: number
+}
+
 const api = axios.create({
   baseURL: '/api',
   timeout: 120000,
@@ -44,7 +50,10 @@ api.interceptors.response.use(
         window.location.href = '/login'
       }
       const msg = data?.detail || data?.message || '请求失败'
-      return Promise.reject(new Error(msg))
+      const apiError = new Error(msg) as ApiError
+      apiError.status = status
+      if (data?.code !== undefined) apiError.code = data.code
+      return Promise.reject(apiError)
     }
     // 网络不通/超时：如果没有 token 也跳登录页
     if (!useAuthStore.getState().token) {
