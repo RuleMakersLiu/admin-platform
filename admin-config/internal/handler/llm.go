@@ -7,6 +7,7 @@ import (
 	"admin-config/internal/service"
 	"admin-config/pkg/response"
 
+	"admin-common/middleware"
 	"github.com/gin-gonic/gin"
 )
 
@@ -216,46 +217,12 @@ func (h *LLMHandler) TestConnection(c *gin.Context) {
 	}
 }
 
-// getAdminID 从上下文获取管理员ID
+// getAdminID 从上下文获取管理员ID（取 JWT 解析值，忽略可伪造的 X-Admin-Id 头）
 func getAdminID(c *gin.Context) int64 {
-	adminIDStr := c.GetHeader("X-Admin-Id")
-	if adminIDStr == "" {
-		if v, exists := c.Get("adminId"); exists {
-			switch id := v.(type) {
-			case int64:
-				return id
-			case int:
-				return int64(id)
-			case string:
-				if parsed, err := strconv.ParseInt(id, 10, 64); err == nil {
-					return parsed
-				}
-			}
-		}
-		return 0
-	}
-	id, _ := strconv.ParseInt(adminIDStr, 10, 64)
-	return id
+	return middleware.AdminID(c)
 }
 
-// getTenantID 从上下文获取租户ID
+// getTenantID 从上下文获取租户ID（取 JWT 解析值，忽略可伪造的 X-Tenant-Id 头）
 func getTenantID(c *gin.Context) int64 {
-	tenantIDStr := c.GetHeader("X-Tenant-Id")
-	if tenantIDStr == "" {
-		if v, exists := c.Get("tenantId"); exists {
-			switch id := v.(type) {
-			case int64:
-				return id
-			case int:
-				return int64(id)
-			case string:
-				if parsed, err := strconv.ParseInt(id, 10, 64); err == nil {
-					return parsed
-				}
-			}
-		}
-		return 1 // 默认租户
-	}
-	id, _ := strconv.ParseInt(tenantIDStr, 10, 64)
-	return id
+	return middleware.TenantID(c)
 }

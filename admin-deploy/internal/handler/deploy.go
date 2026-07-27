@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"admin-common/middleware"
 	"github.com/gin-gonic/gin"
 )
 
@@ -32,7 +33,7 @@ type CreateProjectRequest struct {
 
 // ListProjects 获取项目列表
 func ListProjects(c *gin.Context) {
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	tenantID := middleware.TenantID(c)
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
 
@@ -51,7 +52,7 @@ func ListProjects(c *gin.Context) {
 // GetProject 获取项目详情
 func GetProject(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	tenantID := middleware.TenantID(c)
 
 	project, err := deployService.GetProjectByID(id, tenantID)
 	if err != nil {
@@ -70,7 +71,7 @@ func CreateProject(c *gin.Context) {
 		return
 	}
 
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	tenantID := middleware.TenantID(c)
 
 	project := &service.DeployProject{
 		Name:         req.Name,
@@ -97,7 +98,7 @@ func CreateProject(c *gin.Context) {
 // UpdateProject 更新项目
 func UpdateProject(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	tenantID := middleware.TenantID(c)
 
 	var updates map[string]interface{}
 	if err := c.ShouldBindJSON(&updates); err != nil {
@@ -129,7 +130,7 @@ func UpdateProject(c *gin.Context) {
 // DeleteProject 删除项目
 func DeleteProject(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	tenantID := middleware.TenantID(c)
 
 	if err := deployService.DeleteProject(id, tenantID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
@@ -141,7 +142,7 @@ func DeleteProject(c *gin.Context) {
 
 // ListTasks 获取任务列表
 func ListTasks(c *gin.Context) {
-	adminID, _ := strconv.ParseInt(c.GetHeader("X-Admin-Id"), 10, 64)
+	adminID := middleware.AdminID(c)
 
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
@@ -179,8 +180,8 @@ func CreateTask(c *gin.Context) {
 		return
 	}
 
-	adminID, _ := strconv.ParseInt(c.GetHeader("X-Admin-Id"), 10, 64)
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	adminID := middleware.AdminID(c)
+	tenantID := middleware.TenantID(c)
 
 	task, err := deployService.CreateTask(req.Project, req.Env, req.Type, adminID, tenantID)
 	if err != nil {

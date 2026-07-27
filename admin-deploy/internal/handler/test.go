@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"admin-common/middleware"
 	"github.com/gin-gonic/gin"
 )
 
@@ -26,8 +27,8 @@ func CreateTestTask(c *gin.Context) {
 		return
 	}
 
-	adminID, _ := strconv.ParseInt(c.GetHeader("X-Admin-Id"), 10, 64)
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	adminID := middleware.AdminID(c)
+	tenantID := middleware.TenantID(c)
 
 	task, err := testService.CreateTestTask(req.ProjectID, req.Type, req.DockerImage, req.TestCmd, adminID, tenantID)
 	if err != nil {
@@ -77,7 +78,7 @@ func GetTestTask(c *gin.Context) {
 // ListTestTasks 获取测试任务列表
 func ListTestTasks(c *gin.Context) {
 	projectID, _ := strconv.ParseInt(c.Query("project_id"), 10, 64)
-	adminID, _ := strconv.ParseInt(c.GetHeader("X-Admin-Id"), 10, 64)
+	adminID := middleware.AdminID(c)
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
 

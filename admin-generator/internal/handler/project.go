@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"admin-common/middleware"
 	"github.com/gin-gonic/gin"
 )
 
@@ -18,7 +19,7 @@ var projectService = service.NewProjectService()
 
 // ListTemplates 获取模板列表
 func ListTemplates(c *gin.Context) {
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	tenantID := middleware.TenantID(c)
 	language := c.Query("language")
 
 	templates, err := templateService.ListTemplates(tenantID, language)
@@ -65,7 +66,7 @@ func CreateTemplate(c *gin.Context) {
 		return
 	}
 
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	tenantID := middleware.TenantID(c)
 
 	tmpl := &service.ProjectTemplate{
 		Name:        req.Name,
@@ -152,8 +153,8 @@ func CreateProject(c *gin.Context) {
 		return
 	}
 
-	adminID, _ := strconv.ParseInt(c.GetHeader("X-Admin-Id"), 10, 64)
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	adminID := middleware.AdminID(c)
+	tenantID := middleware.TenantID(c)
 
 	project, files, err := projectService.CreateProject(&req, adminID, tenantID)
 	if err != nil {
@@ -173,8 +174,8 @@ func CreateProject(c *gin.Context) {
 
 // ListProjects 获取项目列表
 func ListProjects(c *gin.Context) {
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
-	adminID, _ := strconv.ParseInt(c.GetHeader("X-Admin-Id"), 10, 64)
+	tenantID := middleware.TenantID(c)
+	adminID := middleware.AdminID(c)
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
 
@@ -193,7 +194,7 @@ func ListProjects(c *gin.Context) {
 // GetProject 获取项目详情
 func GetProject(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	tenantID := middleware.TenantID(c)
 
 	project, err := projectService.GetProjectByID(id, tenantID)
 	if err != nil {
@@ -207,7 +208,7 @@ func GetProject(c *gin.Context) {
 // DeleteProject 删除项目
 func DeleteProject(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	tenantID := middleware.TenantID(c)
 
 	if err := projectService.DeleteProject(id, tenantID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
@@ -220,7 +221,7 @@ func DeleteProject(c *gin.Context) {
 // RegenerateProject 重新生成项目代码
 func RegenerateProject(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	tenantID := middleware.TenantID(c)
 
 	files, err := projectService.RegenerateProject(id, tenantID)
 	if err != nil {
@@ -234,7 +235,7 @@ func RegenerateProject(c *gin.Context) {
 // DownloadProject 下载项目代码(ZIP)
 func DownloadProject(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	tenantID := middleware.TenantID(c)
 
 	project, files, err := projectService.GetProjectWithFiles(id, tenantID)
 	if err != nil {
@@ -261,7 +262,7 @@ func DownloadProject(c *gin.Context) {
 // PreviewProject 预览项目文件
 func PreviewProject(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	tenantID := middleware.TenantID(c)
 
 	project, files, err := projectService.GetProjectWithFiles(id, tenantID)
 	if err != nil {
@@ -283,7 +284,7 @@ func PreviewProject(c *gin.Context) {
 // GetProjectTestConfig 获取项目的测试配置
 func GetProjectTestConfig(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	tenantID := middleware.TenantID(c)
 
 	project, err := projectService.GetProjectByID(id, tenantID)
 	if err != nil {
@@ -313,7 +314,7 @@ func GetProjectTestConfig(c *gin.Context) {
 // UpdateProject 更新项目
 func UpdateProject(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	tenantID := middleware.TenantID(c)
 
 	var updates map[string]interface{}
 	if err := c.ShouldBindJSON(&updates); err != nil {
@@ -352,7 +353,7 @@ func UpdateProject(c *gin.Context) {
 		return
 	}
 	if len(tenantScopeIDs) > 0 {
-		adminID, _ := strconv.ParseInt(c.GetHeader("X-Admin-Id"), 10, 64)
+		adminID := middleware.AdminID(c)
 		if err := projectService.UpdateProjectTenantScopes(id, tenantID, tenantScopeIDs, adminID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
 			return
@@ -370,8 +371,8 @@ func ImportProject(c *gin.Context) {
 		return
 	}
 
-	adminID, _ := strconv.ParseInt(c.GetHeader("X-Admin-Id"), 10, 64)
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	adminID := middleware.AdminID(c)
+	tenantID := middleware.TenantID(c)
 
 	project, err := projectService.ImportProject(&req, adminID, tenantID)
 	if err != nil {

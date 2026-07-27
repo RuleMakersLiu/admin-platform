@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"admin-common/middleware"
 	"github.com/gin-gonic/gin"
 )
 
@@ -41,8 +42,8 @@ func Chat(c *gin.Context) {
 		return
 	}
 
-	adminID, _ := strconv.ParseInt(c.GetHeader("X-Admin-Id"), 10, 64)
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	adminID := middleware.AdminID(c)
+	tenantID := middleware.TenantID(c)
 
 	if req.SessionID == "" {
 		req.SessionID = time.Now().Format("20060102150405") + "_" + strconv.FormatInt(adminID, 10)
@@ -100,7 +101,7 @@ func GenerateCode(c *gin.Context) {
 		return
 	}
 
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	tenantID := middleware.TenantID(c)
 
 	config, err := generatorService.GetConfigByID(req.ConfigID, tenantID)
 	if err != nil {
@@ -115,7 +116,7 @@ func GenerateCode(c *gin.Context) {
 // PreviewCode 预览代码
 func PreviewCode(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	tenantID := middleware.TenantID(c)
 
 	config, err := generatorService.GetConfigByID(id, tenantID)
 	if err != nil {
@@ -138,7 +139,7 @@ func PreviewCode(c *gin.Context) {
 // DownloadCode 下载代码
 func DownloadCode(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	tenantID := middleware.TenantID(c)
 
 	config, err := generatorService.GetConfigByID(id, tenantID)
 	if err != nil {
@@ -166,7 +167,7 @@ func DownloadCode(c *gin.Context) {
 
 // ListConfig 列表配置
 func ListConfig(c *gin.Context) {
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	tenantID := middleware.TenantID(c)
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
 
@@ -190,7 +191,7 @@ func CreateConfig(c *gin.Context) {
 		return
 	}
 
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	tenantID := middleware.TenantID(c)
 	now := time.Now().UnixMilli()
 	req.FunctionConfig.TenantID = tenantID
 	req.FunctionConfig.CreateTime = now
@@ -207,7 +208,7 @@ func CreateConfig(c *gin.Context) {
 // GetConfig 获取配置
 func GetConfig(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	tenantID := middleware.TenantID(c)
 
 	config, err := generatorService.GetConfigByID(id, tenantID)
 	if err != nil {
@@ -221,7 +222,7 @@ func GetConfig(c *gin.Context) {
 // UpdateConfig 更新配置
 func UpdateConfig(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	tenantID := middleware.TenantID(c)
 
 	var req UpdateConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -240,7 +241,7 @@ func UpdateConfig(c *gin.Context) {
 // DeleteConfig 删除配置
 func DeleteConfig(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	tenantID, _ := strconv.ParseInt(c.GetHeader("X-Tenant-Id"), 10, 64)
+	tenantID := middleware.TenantID(c)
 
 	if err := generatorService.DeleteConfig(id, tenantID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
