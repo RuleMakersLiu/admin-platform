@@ -159,8 +159,22 @@ class BaseAgent(ABC):
         self._llm = AgentFactory.build_llm(self.agent_type)
         return self._llm
 
-    def _build_messages(self, message: str, history: Optional[list[dict]] = None) -> list[dict]:
-        """构建消息列表"""
+    def _get_vision_llm(self):
+        """多模态视觉模型（消息含图像时使用）；无 api_key 时返回 None 走模拟回复。"""
+        try:
+            from app.ai.glm_provider import ChatGLM
+
+            return ChatGLM(model=settings.zai_vision_model)
+        except Exception:
+            return None
+
+    def _build_messages(
+        self,
+        message: str,
+        history: Optional[list[dict]] = None,
+        images: Optional[list[str]] = None,
+    ) -> list[dict]:
+        """构建消息列表；images 非空时用户消息为多模态 content-array（文本 + 图像）。"""
         messages = [{"role": "system", "content": self.system_prompt}]
         if history:
             for msg in _truncate_history(history):
@@ -168,16 +182,22 @@ class BaseAgent(ABC):
                     "role": msg.get("role", "user"),
                     "content": msg.get("content", ""),
                 })
-        messages.append({"role": "user", "content": message})
+        if images:
+            content: list = [{"type": "text", "text": message}]
+            for url in images:
+                content.append({"type": "image_url", "image_url": {"url": url}})
+            messages.append({"role": "user", "content": content})
+        else:
+            messages.append({"role": "user", "content": message})
         return messages
 
-    async def process(self, message: str, history: Optional[list[dict]] = None) -> str:
+    async def process(self, message: str, history: Optional[list[dict]] = None, images: Optional[list[str]] = None) -> str:
         """处理消息（非流式，用于 pipeline）"""
-        llm = self._get_llm()
+        llm = self._get_vision_llm() if images else self._get_llm()
         if not llm:
             return f"[模拟回复] {self.agent_type} 收到消息：{message}\n\n请配置 AI API Key 来获得真实回复。"
 
-        messages = self._build_messages(message, history)
+        messages = self._build_messages(message, history, images)
         response = await llm.ainvoke(messages)
 
         usage = getattr(response, "usage", {})
@@ -199,19 +219,19 @@ class BaseAgent(ABC):
             return "\n".join(parts)
         return str(content) if content is not None else ""
 
-    async def astream(self, message: str, history: Optional[list[dict]] = None) -> AsyncGenerator[str, None]:
+    async def astream(self, message: str, history: Optional[list[dict]] = None, images: Optional[list[str]] = None) -> AsyncGenerator[str, None]:
         """流式处理消息（用于前端实时渲染）"""
-        llm = self._get_llm()
+        llm = self._get_vision_llm() if images else self._get_llm()
         if not llm:
             yield f"[模拟回复] {self.agent_type} 收到消息：{message}"
             return
 
         if not hasattr(llm, "astream"):
-            result = await self.process(message, history)
+            result = await self.process(message, history, images)
             yield result
             return
 
-        messages = self._build_messages(message, history)
+        messages = self._build_messages(message, history, images)
         async for chunk in llm.astream(messages):
             yield chunk
 
@@ -368,11 +388,12 @@ class AgentService:
         message: str,
         agent_type: str = AgentType.PM,
         project_id: Optional[str] = None,
+        images: Optional[list[str]] = None,
     ) -> dict:
         """处理对话（非流式）"""
         agent = AgentFactory.get_agent(agent_type)
         history = self.sessions.get(session_id, [])
-        reply = await agent.process(message, history)
+        reply = await agent.process(message, history, images)
 
         if session_id not in self.sessions:
             self.sessions[session_id] = []
@@ -395,13 +416,14 @@ class AgentService:
         session_id: str,
         message: str,
         agent_type: str = AgentType.PM,
+        images: Optional[list[str]] = None,
     ) -> AsyncGenerator[str, None]:
         """流式对话"""
         agent = AgentFactory.get_agent(agent_type)
         history = self.sessions.get(session_id, [])
 
         full_reply = ""
-        async for chunk in agent.astream(message, history):
+        async for chunk in agent.astream(message, history, images):
             full_reply += chunk
             yield chunk
 
