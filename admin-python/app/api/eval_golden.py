@@ -1,11 +1,13 @@
 """评测 Golden Case CRUD API（租户隔离 + 软删除）。"""
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.eval_judge import judge_output
 from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.models.eval_golden_case import EvalGoldenCase
@@ -137,3 +139,32 @@ async def delete_case(
     case.update_time = int(time.time() * 1000)
     await db.commit()
     return {"code": 200, "message": "删除成功"}
+
+
+class JudgeRequest(BaseModel):
+    golden_case_id: Optional[int] = None
+    input_spec: Optional[Any] = None
+    output: str
+    criteria: Optional[Any] = None
+
+
+@router.post("/judge")
+async def judge_endpoint(
+    req: JudgeRequest,
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """LLM-as-judge：按评判标准对产物逐项打分。可带 golden_case_id 自动取需求与标准。"""
+    input_spec = req.input_spec
+    criteria = req.criteria
+    if req.golden_case_id is not None:
+        case = await _load_owned(req.golden_case_id, user["tenantId"], db)
+        input_spec = from_storage(case.input_spec)
+        if criteria is None:
+            criteria = from_storage(case.expected_criteria)
+    result = await judge_output(
+        input_spec if input_spec is not None else "",
+        req.output,
+        criteria if criteria is not None else "",
+    )
+    return {"code": 200, "message": "评审完成", "data": result}
