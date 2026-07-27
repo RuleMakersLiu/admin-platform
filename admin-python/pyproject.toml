@@ -44,6 +44,12 @@ dependencies = [
     # YAML (skills parsing)
     "pyyaml>=6.0",
 
+    # Document parsing (multimodal attachments: PDF / Word / Excel / PPT)
+    "pypdf>=4.0",
+    "python-docx>=1.1",
+    "openpyxl>=3.1",
+    "python-pptx>=0.6",
+
     # Utilities
     "httpx>=0.26.0",
     "tenacity>=8.2.0",

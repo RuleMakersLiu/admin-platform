@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     # GLM 视觉模型（多模态：图像理解/视觉评测）配置 — 复用 zai_api_key
     zai_vision_model: str = "glm-4v-plus"
 
+    # ASR 语音转写（OpenAI 兼容 Whisper 端点；可指向 OpenAI / Groq / 本地 whisper-server）
+    asr_base_url: str = ""
+    asr_api_key: str = ""
+    asr_model: str = "whisper-1"
+
     # RAG 检索参数
     rag_top_k: int = 5
     rag_min_similarity: float = 0.75

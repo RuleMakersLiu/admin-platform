@@ -46,23 +46,39 @@ def test_build_messages_history_strings_plus_vision_user():
     assert isinstance(msgs[-1]["content"], list)  # user is vision
 
 
-def test_process_with_images_uses_vision_llm_and_content_array():
+def test_process_with_image_attachment_uses_vision_llm_and_content_array():
     agent = AgentFactory.get_agent("FE")
     fake = _FakeLLM(model="glm-4v-plus")
     agent._get_vision_llm = lambda: fake
-    reply = _run(agent.process("describe the UI", None, ["data:image/png;base64,AAA"]))
+    attachments = [{"type": "image", "mime": "image/png", "filename": "a.png", "data_uri": "data:image/png;base64,AAA"}]
+    reply = _run(agent.process("describe the UI", None, attachments))
     assert reply == "ok"
     assert isinstance(fake.captured[-1]["content"], list)
     assert fake.captured[-1]["content"][1]["type"] == "image_url"
 
 
-def test_process_without_images_uses_text_llm_string_content():
+def test_process_without_attachments_uses_text_llm_string_content():
     agent = AgentFactory.get_agent("PM")
     fake = _FakeLLM(model="glm-4-flash")
     agent._get_llm = lambda: fake
     reply = _run(agent.process("plain question"))
     assert reply == "ok"
     assert isinstance(fake.captured[-1]["content"], str)
+
+
+def test_process_with_text_document_merges_into_prompt():
+    import base64
+
+    agent = AgentFactory.get_agent("PM")
+    fake = _FakeLLM()
+    agent._get_llm = lambda: fake
+    payload = base64.b64encode("需求：实现登录页面".encode("utf-8")).decode()
+    attachments = [{"type": "document", "mime": "text/plain", "filename": "req.txt",
+                    "data_uri": f"data:text/plain;base64,{payload}"}]
+    _run(agent.process("按附件实现", None, attachments))
+    user_content = fake.captured[-1]["content"]
+    assert isinstance(user_content, str)
+    assert "需求：实现登录页面" in user_content
 
 
 def test_get_vision_llm_returns_chatglm_when_key_set(monkeypatch):

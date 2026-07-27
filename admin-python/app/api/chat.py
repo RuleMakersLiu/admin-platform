@@ -19,11 +19,18 @@ router = APIRouter(prefix="/chat", tags=["AI 聊天"])
 _agent_service = AgentService()
 
 
+class Attachment(BaseModel):
+    type: Optional[str] = Field(default=None, description="image | document | audio；留空自动按 mime/扩展名判断")
+    mime: str = Field(default="", description="MIME，如 application/pdf、image/png、audio/mpeg")
+    filename: str = Field(default="", description="文件名（用于扩展名判断与提示）")
+    data_uri: str = Field(default="", description="内联上传：data:<mime>;base64,<payload>")
+
+
 class ChatRequest(BaseModel):
     message: str = Field(..., description="用户消息")
     session_id: Optional[str] = Field(default=None, description="会话ID，不传则创建新会话")
     agent_type: str = Field(default="PM", description="Agent 类型: PM, PJM, BE, FE, QA, RPT")
-    images: list[str] = Field(default_factory=list, description="图像 data URI 或 URL 列表（多模态输入）")
+    attachments: list[Attachment] = Field(default_factory=list, description="多模态附件：图像 / 文档(PDF·Word·Excel·PPT·文本) / 语音")
 
 
 class ChatResponse(BaseModel):
@@ -49,7 +56,7 @@ async def chat_stream(request: ChatRequest, http_request: Request, user: dict = 
                 session_id=session_id,
                 message=request.message,
                 agent_type=request.agent_type,
-                images=request.images,
+                attachments=[a.model_dump() for a in request.attachments],
             ):
                 yield f"data: {chunk}\n\n"
         except Exception as e:
@@ -78,7 +85,7 @@ async def chat(request: ChatRequest, http_request: Request, user: dict = Depends
         session_id=session_id,
         message=request.message,
         agent_type=request.agent_type,
-        images=request.images,
+        attachments=[a.model_dump() for a in request.attachments],
     )
     return ChatResponse(**result)
 
@@ -111,7 +118,7 @@ async def chat_websocket(websocket: WebSocket, token: Optional[str] = Query(defa
             data = await websocket.receive_json()
             message = data.get("message", "")
             agent_type = data.get("agent_type", "PM")
-            images = data.get("images", [])
+            attachments = data.get("attachments", [])
 
             if not message:
                 await websocket.send_json({"type": "error", "message": "消息不能为空"})
@@ -123,7 +130,7 @@ async def chat_websocket(websocket: WebSocket, token: Optional[str] = Query(defa
                     session_id=session_id,
                     message=message,
                     agent_type=agent_type,
-                    images=images,
+                    attachments=attachments,
                 ):
                     full_reply += chunk
                     await websocket.send_json({
@@ -141,7 +148,7 @@ async def chat_websocket(websocket: WebSocket, token: Optional[str] = Query(defa
                     session_id=session_id,
                     message=message,
                     agent_type=agent_type,
-                    images=images,
+                    attachments=attachments,
                 )
                 await websocket.send_json({
                     "type": "reply",
