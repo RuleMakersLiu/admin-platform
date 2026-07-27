@@ -24,9 +24,10 @@ MODEL_CONFIG = {
     "glm-5": (4096, True, False),
     "glm-5.1": (16384, True, True),
     # 视觉模型（多模态，OpenAI 兼容 content-array）
-    "glm-4v": (4096, False, False),
-    "glm-4v-plus": (4096, False, False),
-    "glm-4v-flash": (4096, False, False),
+    # NOTE: GLM-4V 系列 max_tokens 上限 2048（>2048 报 1210「max_tokens参数非法」），故首位置 2048。
+    "glm-4v": (2048, False, False),
+    "glm-4v-plus": (2048, False, False),
+    "glm-4v-flash": (2048, False, False),
 }
 
 # 推理模型需要更多 token（reasoning tokens 计入 max_tokens）
