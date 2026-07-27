@@ -11,6 +11,7 @@ import socket
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy import text
@@ -808,7 +809,18 @@ server.listen(port, host, () => {
             clone_url = repo_url.replace("http://", f"http://oauth2:{token}@", 1)
         elif token and repo_url.startswith("https://"):
             clone_url = repo_url.replace("https://", f"https://oauth2:{token}@", 1)
-        return {"repo_url": repo_url, "clone_url": clone_url, "branch": branch}
+        git_host = ""
+        try:
+            git_host = urlparse(repo_url).netloc
+        except Exception:
+            git_host = ""
+        return {
+            "repo_url": repo_url,
+            "clone_url": clone_url,
+            "branch": branch,
+            "token": token,
+            "git_host": git_host,
+        }
 
     def _canonical_git_url(self, url: str) -> str:
         url = (url or "").strip()
@@ -830,7 +842,7 @@ server.listen(port, host, () => {
             args = ["git", "clone", "--depth", "1", git_info["clone_url"], str(root)]
             code, output = await self._run(args, root.parent, timeout=180)
         if code != 0:
-            raise RuntimeError(f"克隆前端项目失败: {output[-500:]}")
+            raise RuntimeError(await self._diagnose_clone_failure(git_info, output[-500:]))
         (root / ".sandbox-preview-project.json").write_text(
             json.dumps({
                 "project_id": project_info.get("project_id") or "",
@@ -840,6 +852,41 @@ server.listen(port, host, () => {
             }, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+
+    async def _probe_git_token(self, scheme: str, host: str, token: str) -> str:
+        """Probe token validity against the Git host; return a human hint or '' if unknown."""
+        if not host or not token:
+            return ""
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.get(
+                    f"{scheme}://{host}/api/v4/user",
+                    headers={"PRIVATE-TOKEN": token},
+                )
+        except Exception:
+            return ""
+        if resp.status_code == 401:
+            return "Git 令牌无效或已过期（账户开启 2FA 时须用个人访问令牌 PAT，不能用密码），请在「Git 配置」中更新 token。"
+        if resp.status_code == 403:
+            return "Git 令牌权限不足，请在「Git 配置」中改用具备 read_repository/api 权限的 token。"
+        if resp.status_code == 200:
+            return "令牌本身有效但克隆仍被拒，请检查目标仓库/分支是否存在，或令牌是否具备该仓库的读权限。"
+        return ""
+
+    async def _diagnose_clone_failure(self, git_info: Dict[str, Any], raw_output: str) -> str:
+        repo_url = git_info.get("repo_url") or ""
+        token = git_info.get("token") or ""
+        if not token:
+            return (
+                f"克隆前端项目失败: 未匹配到该仓库（{repo_url}）的有效 Git 凭据，"
+                f"请在「Git 配置」中为其绑定 access_token（或检查 git 配置记录是否启用）。原始错误: {raw_output}"
+            )
+        host = git_info.get("git_host") or ""
+        scheme = "https" if repo_url.startswith("https://") else "http"
+        hint = await self._probe_git_token(scheme, host, token)
+        if hint:
+            return f"克隆前端项目失败: {hint} 原始错误: {raw_output}"
+        return f"克隆前端项目失败: {raw_output}"
 
     async def _prepare_project_root(self, root: Path, project_info: Dict[str, Any]) -> None:
         if not project_info.get("project_id") and not project_info.get("repo_url"):

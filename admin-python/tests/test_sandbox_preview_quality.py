@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 from pathlib import Path
@@ -1782,3 +1783,70 @@ def test_preview_proxy_targets_use_configured_test_api_proxy(monkeypatch):
         "java": "https://malladmin-jdagent.hctest.tech",
         "log": "https://malladmin-jdagent.hctest.tech",
     }
+
+
+def test_diagnose_clone_failure_reports_missing_credentials():
+    service = SandboxPreviewService()
+    git_info = {
+        "repo_url": "http://gitlab.example.cn/web/widget",
+        "clone_url": "http://gitlab.example.cn/web/widget",
+        "branch": "main",
+        "token": "",
+        "git_host": "gitlab.example.cn",
+    }
+    msg = asyncio.run(service._diagnose_clone_failure(git_info, "fatal: Authentication failed"))
+    assert "未匹配到" in msg
+    assert "Git 凭据" in msg
+    assert "http://gitlab.example.cn/web/widget" in msg
+
+
+def test_diagnose_clone_failure_reports_expired_token_on_401(monkeypatch):
+    service = SandboxPreviewService()
+
+    class _Resp:
+        status_code = 401
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, headers=None):
+            return _Resp()
+
+    monkeypatch.setattr("app.services.sandbox_preview_service.httpx.AsyncClient", _Client)
+
+    git_info = {
+        "repo_url": "http://gitlab.example.cn/web/widget",
+        "clone_url": "http://oauth2:glpat-x@gitlab.example.cn/web/widget",
+        "branch": "main",
+        "token": "glpat-xxxxxxxxxxxxxxxxxxxx",
+        "git_host": "gitlab.example.cn",
+    }
+    msg = asyncio.run(service._diagnose_clone_failure(git_info, "fatal: Authentication failed"))
+    assert "令牌无效或已过期" in msg
+    assert "2FA" in msg
+
+
+def test_probe_git_token_returns_empty_on_network_error(monkeypatch):
+    service = SandboxPreviewService()
+
+    class _BoomClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            raise OSError("connection refused")
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr("app.services.sandbox_preview_service.httpx.AsyncClient", _BoomClient)
+
+    hint = asyncio.run(service._probe_git_token("http", "gitlab.example.cn", "glpat-x"))
+    assert hint == ""
