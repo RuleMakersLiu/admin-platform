@@ -26,6 +26,10 @@ _AUDIO_MIMES = {
 }
 _AUDIO_EXTS = {".mp3", ".wav", ".webm", ".ogg", ".m4a", ".aac", ".flac"}
 
+# 防滥用上限（后端独立于前端强制，客户端可绕过前端校验）
+MAX_DATA_URI_LEN = 25_000_000  # ~25MB 字符串 ≈ ~18MB 解码后字节
+MAX_ATTACHMENTS = 10
+
 
 def _decode_data_uri(data_uri: str) -> tuple[str, bytes]:
     """拆解 data URI -> (mime, bytes)。非 data URI 时按原始 URL 处理（返回空 bytes）。"""
@@ -64,13 +68,16 @@ async def process_attachments(attachments: list[Any]) -> tuple[str, list[str]]:
     extra_parts: list[str] = []
     image_urls: list[str] = []
 
-    for att in attachments or []:
+    for att in (attachments or [])[:MAX_ATTACHMENTS]:
         if not isinstance(att, dict):
             continue
         mime = att.get("mime", "")
         filename = att.get("filename", "") or att.get("name", "")
         data_uri = att.get("data_uri", "") or att.get("url", "")
         if not data_uri:
+            continue
+        if len(data_uri) > MAX_DATA_URI_LEN:
+            extra_parts.append(f"[附件 {filename}] 超过大小限制（约 18MB），已跳过")
             continue
 
         category = att.get("type") or _category(mime, filename)

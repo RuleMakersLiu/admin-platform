@@ -67,6 +67,21 @@ def test_category_helpers():
     assert attachments._category("application/pdf", "r.pdf") == "document"
 
 
+def test_oversized_attachment_is_skipped():
+    big = "data:text/plain;base64," + "A" * (attachments.MAX_DATA_URI_LEN + 10)
+    extra, images = _run(attachments.process_attachments([
+        {"type": "document", "mime": "text/plain", "filename": "huge.txt", "data_uri": big},
+    ]))
+    assert images == []
+    assert "超过大小限制" in extra
+
+
+def test_too_many_attachments_capped():
+    atts = [{"type": "image", "data_uri": _b64("image/png", b"X")} for _ in range(attachments.MAX_ATTACHMENTS + 5)]
+    _extra, images = _run(attachments.process_attachments(atts))
+    assert len(images) == attachments.MAX_ATTACHMENTS
+
+
 def test_asr_unconfigured(monkeypatch):
     from app.core.config import settings
 
