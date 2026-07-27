@@ -49,6 +49,7 @@ from app.models.collaboration import (
 )
 from app.models.pipeline_eval import PipelineEvalResult
 from app.models.eval_golden_case import EvalGoldenCase
+from app.models.eval_run import EvalRun
 from app.models.llm_usage_log import LLMUsageLog
 
 __all__ = [
@@ -95,5 +96,6 @@ __all__ = [
     # Eval 评测
     "PipelineEvalResult",
     "EvalGoldenCase",
+    "EvalRun",
     "LLMUsageLog",
 ]

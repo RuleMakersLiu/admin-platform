@@ -60,3 +60,13 @@ def test_storage_none():
 def test_update_schema_exclude_unset():
     u = GoldenCaseUpdate(name="新名字")
     assert u.model_dump(exclude_unset=True) == {"name": "新名字"}
+
+
+def test_eval_run_model_construction():
+    from app.models.eval_run import EvalRun
+
+    r = EvalRun(tenant_id=1, golden_case_id=5, pipeline_id="pipe_x", status="running")
+    assert r.tenant_id == 1
+    assert r.golden_case_id == 5
+    assert r.pipeline_id == "pipe_x"
+    assert r.status == "running"

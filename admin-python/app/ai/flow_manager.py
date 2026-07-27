@@ -5723,6 +5723,44 @@ class DevPipelineManager:
                 rec = PipelineEvalResult(**values, create_time=now)
                 session.add(rec)
             await session.commit()
+            # 自动评审：若该 pipeline 关联了 golden case（EvalRun），评审并回写
+            try:
+                await self._auto_judge_eval_runs(pipe, session)
+            except Exception as e:
+                logger.warning("auto-judge eval runs failed for %s: %s", pipe.pipeline_id, e)
+
+    async def _auto_judge_eval_runs(self, pipe: "DevPipeline", session: AsyncSession) -> None:
+        """管线终态：对该 pipeline 关联的待评审 EvalRun 自动评审并回写。"""
+        from app.models.eval_run import EvalRun
+        from app.models.eval_golden_case import EvalGoldenCase
+        from app.ai.eval_judge import extract_pipeline_output, judge_output
+
+        stmt = select(EvalRun).where(
+            EvalRun.pipeline_id == pipe.pipeline_id,
+            EvalRun.is_deleted == 0,
+            EvalRun.status.in_(["running", "pending"]),
+        )
+        runs = (await session.execute(stmt)).scalars().all()
+        if not runs:
+            return
+        output = extract_pipeline_output(pipe.stages_data)
+        for run in runs:
+            case = (await session.execute(
+                select(EvalGoldenCase).where(
+                    EvalGoldenCase.id == run.golden_case_id,
+                    EvalGoldenCase.is_deleted == 0,
+                )
+            )).scalar_one_or_none()
+            if not case:
+                run.status = "failed"
+                run.judgment = json.dumps({"error": "golden case 不存在或已删除"}, ensure_ascii=False)
+                continue
+            result = await judge_output(case.input_spec, output, case.expected_criteria)
+            run.status = "failed" if result.get("error") else "judged"
+            run.overall_score = result.get("overall_score")
+            run.judgment = json.dumps(result, ensure_ascii=False)
+            run.update_time = int(time.time() * 1000)
+        await session.commit()
 
     async def _record_eval_safe(self, pipe: "DevPipeline", stages: Dict[str, Any]) -> None:
         """Record pipeline eval in fail-soft mode (completed + failed terminal paths)."""

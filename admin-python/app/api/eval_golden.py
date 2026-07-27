@@ -1,4 +1,5 @@
 """评测 Golden Case CRUD API（租户隔离 + 软删除）。"""
+import json
 import time
 from typing import Any, Optional
 
@@ -206,14 +207,14 @@ async def run_golden_case(
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """从 Golden case 的输入创建一条开发流水线（pending）。
+    """从 Golden case 创建并自动执行一条开发流水线；执行完成自动评审（写入 eval_run）。
 
-    复用 pipeline_manager.create_pipeline；流水线创建后到流水线页执行，
-    完成后用 /eval/golden-cases/{id}/judge-pipeline/{pipeline_id} 评审 → 形成
-    golden case → 跑管线 → 评审 的闭环。
+    完整无人值守闭环：golden case → 创建管线(+EvalRun) → 后台执行 → 终态自动评审。
     """
     from app.ai.eval_judge import input_spec_to_request_text
     from app.ai.flow_manager import pipeline_manager
+    from app.api.flow import _ensure_pipeline_background_task
+    from app.models.eval_run import EvalRun
 
     case = await _load_owned(case_id, user["tenantId"], db)
     user_request = input_spec_to_request_text(from_storage(case.input_spec))
@@ -226,13 +227,34 @@ async def run_golden_case(
         creator_id=user["adminId"],
         pipeline_mode="full",
     )
+
+    # 关联 EvalRun —— 管线终态时 _record_pipeline_eval 据此自动评审
+    run = EvalRun(
+        tenant_id=user["tenantId"],
+        golden_case_id=case_id,
+        pipeline_id=pipeline_id,
+        status="running",
+    )
+    db.add(run)
+    await db.commit()
+    await db.refresh(run)
+
+    # 触发后台执行（与产品门户同一执行路径）
+    try:
+        await _ensure_pipeline_background_task(pipeline_id, user_request)
+    except Exception as exc:
+        run.status = "failed"
+        run.judgment = json.dumps({"error": f"启动执行失败: {exc}"}, ensure_ascii=False)
+        await db.commit()
+        raise HTTPException(status_code=500, detail=f"流水线已创建但启动执行失败: {exc}")
+
     return {
         "code": 200,
-        "message": "已从 Golden case 创建流水线",
+        "message": "已从 Golden case 创建并启动流水线，完成后自动评审",
         "data": {
             "pipeline_id": pipeline_id,
-            "status": "pending",
+            "eval_run_id": run.id,
             "golden_case_id": case_id,
-            "note": "流水线已创建，请在流水线页执行；完成后用 judge-pipeline 评审",
+            "status": "running",
         },
     }
