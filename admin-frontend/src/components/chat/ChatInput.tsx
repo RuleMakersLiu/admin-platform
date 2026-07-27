@@ -1,4 +1,4 @@
-import React, { memo, useState, useRef, useCallback, useEffect } from 'react';
+import React, { memo, useState, useRef, useCallback } from 'react';
 import { Input, Button, Tooltip, Dropdown, Space, Typography, Tag } from 'antd';
 import {
   SendOutlined,
@@ -157,13 +157,9 @@ const ChatInput: React.FC<ChatInputProps> = memo(({
     ],
   };
 
-  // 自动调整高度
-  useEffect(() => {
-    if (textAreaRef.current) {
-      textAreaRef.current.style.height = 'auto';
-      textAreaRef.current.style.height = `${Math.min(textAreaRef.current.scrollHeight, 200)}px`;
-    }
-  }, [message]);
+  // NOTE: 高度自适应由 antd TextArea 的 autoSize={{ minRows, maxRows }} 负责。
+  // 切勿手动设置 ref.style.height —— Input.TextArea 的 ref 是 antd 组件实例（非 DOM 节点），
+  // 直接访问 .style 会抛 "Cannot set properties of undefined (setting 'height')" 并白屏整个聊天输入区。
 
   const canSend = (message.trim().length > 0 || attachments.length > 0) && !disabled;
 

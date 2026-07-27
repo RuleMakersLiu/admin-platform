@@ -1,52 +1,48 @@
 import React, { useEffect, useCallback, useState, useMemo } from 'react';
-import { Layout, Badge, Tooltip, Button, Drawer, Typography, Space, message, Segmented } from 'antd';
+import { Layout, Badge, Tooltip, Button, Typography, Space, message, Segmented, Drawer } from 'antd';
 import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   SettingOutlined,
   BulbOutlined,
   BulbFilled,
-  ReloadOutlined,
   MessageOutlined,
   AppstoreOutlined,
   SplitCellsOutlined,
 } from '@ant-design/icons';
 import { SessionList, MessageList, ChatInput, CanvasPanel } from '@/components/chat';
 import { useChatStore } from '@/stores/chat';
-import { useWebSocket } from '@/services/websocket';
+import { useChatStream } from '@/hooks/useChatStream';
 import { useThemeSwitch, useResponsive, useId } from '@/hooks/useChat';
-import type { Attachment, Message, Session } from '@/types/chat';
+import type { Attachment, Session } from '@/types/chat';
 import { extractHtmlBlocks } from '@/utils/sanitize';
 import './index.css';
 
 const { Sider, Content, Header } = Layout;
 const { Title } = Typography;
 
-// WebChat 页面
+// WebChat 页面 —— 走 Python SSE 后端 /api/chat/stream（多模态：图片/文档/语音 均在此链路）
 const WebChatPage: React.FC = () => {
   // Store
   const {
     sessions,
     currentSessionId,
-    connectionStatus,
     settings,
     sidebarCollapsed,
     addSession,
     updateSession,
     deleteSession,
     setCurrentSession,
-    addMessage,
-    updateMessage,
-    appendMessageContent,
     getCurrentMessages,
-    setConnectionStatus,
     setSidebarCollapsed,
   } = useChatStore();
 
   // Hooks
   const { theme, toggleTheme } = useThemeSwitch();
   const { isMobile } = useResponsive();
-  const { isConnected, connect, wsManager } = useWebSocket();
+  const { sendMessage, cancel, isStreaming } = useChatStream({
+    onError: (err) => message.error(err || '生成回复失败'),
+  });
   const generateUniqueId = useId();
 
   // 本地状态
@@ -68,88 +64,26 @@ const WebChatPage: React.FC = () => {
     return blocks.length > 0;
   }, [latestAiMessage]);
 
-  // 连接状态指示器颜色
-  const getStatusColor = () => {
-    switch (connectionStatus) {
-      case 'connected':
-        return 'green';
-      case 'connecting':
-        return 'orange';
-      case 'error':
-        return 'red';
-      default:
-        return 'default';
-    }
-  };
-
-  // 初始化 WebSocket 连接
+  // 没有会话时自动创建一个，避免用户面对空状态无法输入
   useEffect(() => {
-    connect({
-      onOpen: () => {
-        setConnectionStatus('connected');
-        message.success('WebSocket 已连接');
-      },
-      onClose: () => {
-        setConnectionStatus('disconnected');
-      },
-      onError: () => {
-        setConnectionStatus('error');
-      },
-      onMessage: (msg) => {
-        console.log('收到消息:', msg);
-      },
-      onStream: (event) => {
-        handleStreamEvent(event);
-      },
-    });
+    if (sessions.length === 0) {
+      const newSession: Session = {
+        id: generateUniqueId(),
+        title: `新对话 ${sessions.length + 1}`,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messageCount: 0,
+      };
+      addSession(newSession);
+      setCurrentSession(newSession.id);
+    } else if (!currentSessionId) {
+      setCurrentSession(sessions[0].id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 处理流式事件
-  const handleStreamEvent = useCallback(
-    (event: any) => {
-      switch (event.type) {
-        case 'start': {
-          // 创建 AI 回复消息
-          const aiMessageId = generateUniqueId();
-          addMessage({
-            id: aiMessageId,
-            sessionId: currentSessionId!,
-            type: 'assistant',
-            content: '',
-            status: 'streaming',
-            createdAt: Date.now(),
-          });
-          break;
-        }
-
-        case 'content':
-          // 追加内容
-          if (event.messageId) {
-            appendMessageContent(event.messageId, event.content || '');
-          }
-          break;
-
-        case 'complete':
-          // 完成消息
-          if (event.messageId) {
-            updateMessage(event.messageId, { status: 'completed' });
-          }
-          break;
-
-        case 'error':
-          // 错误处理
-          if (event.messageId) {
-            updateMessage(event.messageId, {
-              status: 'error',
-              error: event.error,
-            });
-          }
-          message.error(event.error || '生成回复失败');
-          break;
-      }
-    },
-    [currentSessionId, addMessage, appendMessageContent, updateMessage, generateUniqueId]
-  );
+  // 会话是否就绪（SSE 无需维持长连接，选了会话即可对话）
+  const chatReady = !!currentSessionId;
 
   // 创建新会话
   const handleCreateSession = useCallback(() => {
@@ -160,16 +94,12 @@ const WebChatPage: React.FC = () => {
       updatedAt: Date.now(),
       messageCount: 0,
     };
-
     addSession(newSession);
-
-    // 发送 WebSocket 创建会话
-    wsManager.createSession(newSession.title);
-
+    setCurrentSession(newSession.id);
     if (isMobile) {
       setMobileDrawerVisible(false);
     }
-  }, [sessions.length, addSession, wsManager, isMobile, generateUniqueId]);
+  }, [sessions.length, addSession, setCurrentSession, isMobile, generateUniqueId]);
 
   // 选择会话
   const handleSelectSession = useCallback(
@@ -182,61 +112,37 @@ const WebChatPage: React.FC = () => {
     [setCurrentSession, isMobile]
   );
 
-  // 重命名会话
+  // 重命名会话（仅本地，SSE 后端按 session_id 维持上下文）
   const handleRenameSession = useCallback(
     (sessionId: string, title: string) => {
       updateSession(sessionId, { title, updatedAt: Date.now() });
-      wsManager.renameSession(sessionId, title);
     },
-    [updateSession, wsManager]
+    [updateSession]
   );
 
   // 删除会话
   const handleDeleteSession = useCallback(
     (sessionId: string) => {
       deleteSession(sessionId);
-      wsManager.deleteSession(sessionId);
     },
-    [deleteSession, wsManager]
+    [deleteSession]
   );
 
-  // 发送消息
+  // 发送消息（走 SSE /api/chat/stream，附件随消息一同发送）
   const handleSendMessage = useCallback(
     (content: string, attachments?: Attachment[]) => {
       if (!currentSessionId || (!content.trim() && !(attachments && attachments.length))) return;
 
-      // 创建用户消息
-      const userMessage: Message = {
-        id: generateUniqueId(),
-        sessionId: currentSessionId,
-        type: 'user',
-        content: content.trim(),
-        attachments,
-        status: 'completed',
-        createdAt: Date.now(),
-      };
+      sendMessage(content, attachments);
 
-      addMessage(userMessage);
-
-      // 更新会话
+      // 更新会话摘要
       updateSession(currentSessionId, {
         updatedAt: Date.now(),
         messageCount: currentMessages.length + 1,
         lastMessage: content.slice(0, 50) || (attachments?.length ? `[附件×${attachments.length}]` : ''),
       });
-
-      // 发送到 WebSocket（附件随消息一同发送）
-      wsManager.sendChatMessage(currentSessionId, content, settings.streamEnabled, attachments);
     },
-    [
-      currentSessionId,
-      currentMessages.length,
-      settings.streamEnabled,
-      addMessage,
-      updateSession,
-      wsManager,
-      generateUniqueId,
-    ]
+    [currentSessionId, currentMessages.length, sendMessage, updateSession]
   );
 
   // 重试消息
@@ -244,31 +150,18 @@ const WebChatPage: React.FC = () => {
     (messageId: string) => {
       const msg = currentMessages.find((m) => m.id === messageId);
       if (msg && msg.type === 'user') {
-        handleSendMessage(msg.content);
+        sendMessage(msg.content, msg.attachments);
       }
     },
-    [currentMessages, handleSendMessage]
+    [currentMessages, sendMessage]
   );
 
   // 清空当前会话消息
   const handleClearMessages = useCallback(() => {
     if (currentSessionId) {
-      // 这里可以调用清空消息的 API
       message.success('对话已清空');
     }
   }, [currentSessionId]);
-
-  // 重新连接
-  const handleReconnect = useCallback(() => {
-    if (!isConnected) {
-      connect({
-        onOpen: () => {
-          setConnectionStatus('connected');
-          message.success('重新连接成功');
-        },
-      });
-    }
-  }, [isConnected, connect, setConnectionStatus]);
 
   // 侧边栏切换
   const toggleSidebar = () => {
@@ -386,24 +279,10 @@ const WebChatPage: React.FC = () => {
                 />
               )}
 
-              {/* 连接状态 */}
-              <Tooltip title={`连接状态: ${connectionStatus}`}>
-                <Badge
-                  status={getStatusColor() as any}
-                  text={isMobile ? '' : connectionStatus}
-                />
+              {/* 就绪状态 */}
+              <Tooltip title={chatReady ? '已就绪：可发送消息（含附件）' : '未选择会话'}>
+                <Badge status={chatReady ? 'success' : 'default'} text={isMobile ? '' : chatReady ? '就绪' : '待选会话'} />
               </Tooltip>
-
-              {/* 重连按钮 */}
-              {!isConnected && (
-                <Tooltip title="重新连接">
-                  <Button
-                    type="text"
-                    icon={<ReloadOutlined />}
-                    onClick={handleReconnect}
-                  />
-                </Tooltip>
-              )}
 
               {/* 主题切换 */}
               <Tooltip title={theme === 'dark' ? '切换亮色模式' : '切换暗色模式'}>
@@ -484,8 +363,10 @@ const WebChatPage: React.FC = () => {
         <div className="webchat-input-area">
           <ChatInput
             onSend={handleSendMessage}
+            onCancel={cancel}
             onClear={handleClearMessages}
-            disabled={!isConnected || !currentSessionId}
+            disabled={!chatReady}
+            isStreaming={isStreaming}
             settings={settings}
           />
         </div>

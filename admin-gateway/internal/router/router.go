@@ -71,6 +71,24 @@ func Setup(r *gin.Engine) {
 				// 智能体流程（流水线） -> Python后端
 				protected.Any("/flow/*action", handler.ProxyToPython)
 
+				// AI 聊天（多模态：图片/文档/语音） -> Python后端
+				protected.Any("/chat/*action", handler.ProxyToPython)
+
+				// 评测 Golden Cases -> Python后端
+				protected.Any("/eval/*action", handler.ProxyToPython)
+
+				// 智能体状态 -> Python后端
+				protected.Any("/agents/*action", handler.ProxyToPython)
+
+				// AI 自动升级 -> Python后端
+				protected.Any("/ai-upgrade/*action", handler.ProxyToPython)
+
+				// 看板管理 -> Python后端
+				protected.Any("/kanban/*action", handler.ProxyToPython)
+
+				// 任务管理 -> Python后端
+				protected.Any("/tasks/*action", handler.ProxyToPython)
+
 				// 代码生成
 				protected.Any("/generator/*action", handler.ProxyToGenerator)
 
