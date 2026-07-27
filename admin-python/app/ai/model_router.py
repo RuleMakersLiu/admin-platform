@@ -7,12 +7,26 @@
 """
 import logging
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import Enum
 from threading import Lock
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# 当前 pipeline 归因上下文：flow_manager 运行管线时 bind，record_usage 自动归因到该管线
+_pipeline_ctx: ContextVar = ContextVar("llm_pipeline_ctx", default=None)
+
+
+def bind_pipeline_context(pipeline_id: str, tenant_id: Optional[int] = None):
+    """绑定当前管线上下文，返回 token（配合 reset_pipeline_context）。"""
+    return _pipeline_ctx.set((pipeline_id, tenant_id))
+
+
+def reset_pipeline_context(token):
+    """解除绑定。"""
+    _pipeline_ctx.reset(token)
 
 
 class TaskComplexity(str, Enum):
@@ -40,6 +54,8 @@ class UsageRecord:
     output_tokens: int = 0
     cost: float = 0.0
     timestamp: float = 0.0
+    pipeline_id: Optional[str] = None
+    tenant_id: Optional[int] = None
 
 
 # Agent 类型到任务复杂度的映射
@@ -130,8 +146,16 @@ class ModelRouter:
         """直接按复杂度获取模型"""
         return self._models.get(complexity, self._models[TaskComplexity.MEDIUM])
 
-    def record_usage(self, model: str, input_tokens: int, output_tokens: int):
-        """记录 token 使用量"""
+    def record_usage(self, model: str, input_tokens: int, output_tokens: int,
+                     pipeline_id: Optional[str] = None, tenant_id: Optional[int] = None):
+        """记录 token 使用量；pipeline_id/tenant_id 缺省时取当前管线上下文。"""
+        ctx = _pipeline_ctx.get()
+        if ctx:
+            if pipeline_id is None:
+                pipeline_id = ctx[0]
+            if tenant_id is None:
+                tenant_id = ctx[1]
+
         config = None
         for c in self._models.values():
             if c.model_name == model:
@@ -149,12 +173,41 @@ class ModelRouter:
             output_tokens=output_tokens,
             cost=cost,
             timestamp=time.time(),
+            pipeline_id=pipeline_id,
+            tenant_id=tenant_id,
         )
 
         with self._usage_lock:
             self._usage.append(record)
             if len(self._usage) > 10000:
                 self._usage = self._usage[-5000:]
+
+    async def flush_usage(self, session) -> int:
+        """把缓冲区的用量批量写入 llm_usage_log，返回写入条数；失败回灌避免丢失。"""
+        with self._usage_lock:
+            if not self._usage:
+                return 0
+            batch = self._usage[:]
+            self._usage.clear()
+        try:
+            from app.models.llm_usage_log import LLMUsageLog
+
+            now = int(time.time() * 1000)
+            session.add_all([
+                LLMUsageLog(
+                    tenant_id=r.tenant_id, pipeline_id=r.pipeline_id, model=r.model,
+                    input_tokens=r.input_tokens, output_tokens=r.output_tokens,
+                    cost=r.cost, create_time=now,
+                )
+                for r in batch
+            ])
+            await session.commit()
+            return len(batch)
+        except Exception as e:
+            logger.error(f"flush_usage failed: {e}")
+            with self._usage_lock:
+                self._usage = batch + self._usage
+            return 0
 
     def get_usage_stats(self, hours: int = 24) -> Dict:
         """获取最近 N 小时的使用统计"""

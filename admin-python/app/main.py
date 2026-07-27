@@ -62,6 +62,24 @@ async def _embedding_backfill_task():
             await asyncio.sleep(300)  # 失败后等 5 分钟重试
 
 
+async def _usage_flush_task():
+    """后台任务：周期性把 LLM 用量缓冲区持久化到 llm_usage_log。"""
+    while True:
+        try:
+            await asyncio.sleep(30)
+            from app.core.database import async_session_maker
+            from app.ai.model_router import model_router
+            async with async_session_maker() as session:
+                flushed = await model_router.flush_usage(session)
+                if flushed:
+                    logger.info(f"LLM usage flushed {flushed} record(s)")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"LLM usage flush failed: {e}")
+            await asyncio.sleep(60)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
@@ -93,11 +111,16 @@ async def lifespan(app: FastAPI):
     embedding_task = asyncio.create_task(_embedding_backfill_task())
     logger.info("✅ 知识库 embedding 回填任务已启动 (每 60s)")
 
+    # 启动 LLM 用量持久化任务（每 30s 把缓冲区写入 llm_usage_log）
+    usage_task = asyncio.create_task(_usage_flush_task())
+    logger.info("✅ LLM 用量持久化任务已启动 (每 30s)")
+
     yield
 
     # 关闭时
     upgrade_task.cancel()
     embedding_task.cancel()
+    usage_task.cancel()
     try:
         from app.messaging.setup import shutdown_messaging
         await shutdown_messaging()
