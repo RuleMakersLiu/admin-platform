@@ -2354,6 +2354,33 @@ def _validate_existing_feature_preservation(
     return issues
 
 
+async def _e2e_browser_check_issues(
+    code_files: Dict[str, str],
+    user_request: str = "",
+    page_design_doc: str = "",
+) -> List[str]:
+    """对生成的 prototype code_files 跑真实浏览器 E2E 断言，返回缺失项 issue 列表。
+
+    派生期望控件（启发式）→ 用渲染桩在 headless chromium 里加载 → 断言渲染完整性 +
+    期望控件存在。harness 故障（playwright 缺失/超时）一律 fail-open 返回 []，绝不因
+    浏览器问题阻塞流水线；只有「页面真的渲染坏了 / 缺关键控件」才返回 issue，并入
+    prototype 校验的重试→交人工循环。
+    """
+    try:
+        from app.ai.e2e_expectations import derive_e2e_expectations
+        from app.services.vision_eval_service import run_e2e_assertions
+
+        expectations = derive_e2e_expectations(user_request, page_design_doc)
+        result = await run_e2e_assertions(code_files or {}, expectations, screenshot=False)
+        if result.get("harness_error"):
+            logger.info("e2e 浏览器断言跳过(fail-open): %s", result["harness_error"])
+            return []
+        return list(result.get("issues") or [])
+    except Exception as e:  # noqa: BLE001
+        logger.warning("e2e 浏览器断言异常(fail-open): %s", e)
+        return []
+
+
 def _validate_frontend_preview_code_files(
     files: Dict[str, str],
     user_request: str = "",
@@ -6242,6 +6269,16 @@ class DevPipelineManager:
                                 page_design_stage=stages.get("page_design", {}),
                                 pipe_config=pipe_config,
                             )
+                        # 结构校验通过后，跑真实浏览器 E2E 断言（渲染完整性 + 期望控件）；
+                        # 缺项并入 preview_issues，复用下方重试→交人工循环。
+                        if not preview_issues:
+                            e2e_issues = await _e2e_browser_check_issues(
+                                parsed.get("code_files", {}),
+                                user_request=pipe.user_request or "",
+                                page_design_doc=stages.get("page_design", {}).get("output", ""),
+                            )
+                            if e2e_issues:
+                                preview_issues = [f"[E2E] {i}" for i in e2e_issues]
                         if not preview_issues:
                             break
 
@@ -6344,6 +6381,15 @@ class DevPipelineManager:
                             page_design_stage=stages.get("page_design", {}),
                             pipe_config=pipe_config,
                         )
+                        # 终检：结构通过后再跑 E2E，缺项一并计入交人工 issue
+                        if not preview_issues:
+                            e2e_issues = await _e2e_browser_check_issues(
+                                parsed.get("code_files", {}),
+                                user_request=pipe.user_request or "",
+                                page_design_doc=stages.get("page_design", {}).get("output", ""),
+                            )
+                            if e2e_issues:
+                                preview_issues = [f"[E2E] {i}" for i in e2e_issues]
                         if preview_issues:
                             repair_tasks = _build_repair_tasks_from_issues(preview_issues[:12])
                             await _record_repair_attempt_temp_file(

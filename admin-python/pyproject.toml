@@ -55,6 +55,9 @@ dependencies = [
     "tenacity>=8.2.0",
     "orjson>=3.9.0",
     "gitpython>=3.1.40",
+
+    # E2E 浏览器测试（prototype 阶段 Playwright 断言；chromium 浏览器二进制见 Dockerfile）
+    "playwright>=1.40.0",
 ]
 
 [project.optional-dependencies]
