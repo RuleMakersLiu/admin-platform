@@ -41,6 +41,23 @@ LLM_STAGE_TIMEOUT = 600  # 单阶段 LLM 调用最大超时（秒）
 LLM_STREAM_IDLE_TIMEOUT = 45  # seconds without stream chunks before fallback
 LLM_FINAL_REPLY_TIMEOUT = 90  # seconds to wait for non-stream fallback reply
 
+# 子智能体评审关卡（步骤 2/3/5）：顺序阶段的产物经 LLM-as-judge 评审；不过则带意见
+# 重生成，重试 MAX_FIX_ITERATIONS 次仍不过 → 交人工。backend_dev 走 fan-out（非顺序），
+# 其"3次→人工"由下游 code_review 修复循环兜底（耗尽已改 escalate）。
+REVIEW_GATE_PASS_SCORE = 60
+REVIEW_GATE_CRITERIA: Dict[str, List[str]] = {
+    "requirement": [
+        "需求描述清晰、可执行，无歧义",
+        "覆盖了用户提出的核心功能点",
+        "无明显矛盾、遗漏或不合理假设",
+    ],
+    "delivery": [
+        "API 契约完整：每个接口含路径、方法、请求字段、响应字段",
+        "前后端字段命名与类型对齐",
+        "覆盖需求中的核心交互与数据流",
+    ],
+}
+
 
 class PipelineStatus(str, Enum):
     PENDING = "pending"
@@ -49,6 +66,8 @@ class PipelineStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    # 某阶段重试耗尽，暂停等人工修改/确认（非终态：不写 eval；重启后自然存活）
+    NEEDS_HUMAN = "needs_human"
 
 
 async def recover_stale_running_pipelines() -> int:
@@ -1852,17 +1871,38 @@ def _validate_api_response_envelope(
 
 
 def _permission_keys_from_design(document: str) -> List[str]:
-    keys = re.findall(r"`([A-Za-z][\w-]*(?::[A-Za-z][\w-]*)+)`", document or "")
-    keys.extend(re.findall(r"\b([A-Za-z][\w-]*(?::[A-Za-z][\w-]*)+)\b", document or ""))
+    """从页面设计文档抽取【显式声明】的权限 key。
+
+    只认出现在「权限/permission」上下文行里的 ns:action 形 token，避免把 JSON 示例、
+    CSS、URL 片段、普通字段名等误判为权限声明——否则登录页这类无权限页也会被误伤。
+    """
+    if not document:
+        return []
     excluded_prefixes = {"http", "https"}
     result: List[str] = []
     seen = set()
-    for key in keys:
-        if key.split(":", 1)[0] in excluded_prefixes or key in seen:
-            continue
-        seen.add(key)
-        result.append(key)
+    for line in document.splitlines():
+        if not re.search(r"权限|permission", line, re.I):
+            continue  # 仅在显式提到权限的行里找权限码
+        for tok in re.findall(r"\b([A-Za-z][\w-]*(?::[A-Za-z][\w-]*)+)\b", line):
+            if tok.split(":", 1)[0] in excluded_prefixes or tok in seen:
+                continue
+            seen.add(tok)
+            result.append(tok)
     return result[:20]
+
+
+def _generated_pages_look_auth_only(files: Dict[str, str]) -> bool:
+    """生成的页面是否全是登录/注册/鉴权类（这类页本就无需权限控制）。"""
+    auth_re = re.compile(r"(login|logout|signin|signup|register|auth|forgot|reset|登录|注册|鉴权)", re.I)
+    page_paths = [
+        str(p).replace("\\", "/").lstrip("/")
+        for p, c in files.items()
+        if isinstance(c, str) and str(p).replace("\\", "/").lstrip("/").endswith((".vue", ".tsx", ".jsx"))
+    ]
+    if not page_paths:
+        return False
+    return all(bool(auth_re.search(p)) for p in page_paths)
 
 
 def _api_endpoint_requirements_from_design(document: str) -> List[str]:
@@ -2079,7 +2119,11 @@ def _validate_page_design_frontend_coverage(
         )
 
     permission_keys = _permission_keys_from_design(document)
-    if permission_keys and not re.search(r"\bv-action\b|hasPermission|permission|权限", combined_pages, re.I):
+    if (
+        permission_keys
+        and not _generated_pages_look_auth_only(files)
+        and not re.search(r"\bv-action\b|hasPermission|permission|权限", combined_pages, re.I)
+    ):
         issues.append(
             "页面设计声明了按钮/页面权限 key，但前端页面未体现 v-action、hasPermission 或等效权限控制"
         )
@@ -5780,6 +5824,106 @@ class DevPipelineManager:
                 f"Pipeline eval record suppressed for {getattr(pipe, 'pipeline_id', '?')}: {exc}"
             )
 
+    async def _escalate_to_human(
+        self,
+        session: AsyncSession,
+        pipe: "DevPipeline",
+        stages: Dict[str, Any],
+        stage_key: str,
+        reason: str,
+        issues: Optional[List[str]] = None,
+        file_hints: Optional[List[str]] = None,
+        line_hints: Optional[List[str]] = None,
+        emit: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """某阶段重试耗尽 → 暂停交人工（非终态，不写 eval）。
+
+        把失败上下文（issue/文件/行号/重试次数）写进 stages_data，置流水线 NEEDS_HUMAN，
+        emit `needs_human` 事件，返回 needs_human 结果。前端介入队列据此展示，人工用
+        `update_stage_output` 改产物后调 `/resume`（approve/retry）恢复。
+        """
+        stage = stages.get(stage_key)
+        if not isinstance(stage, dict):
+            stage = {}
+            stages[stage_key] = stage
+        retry_count = stage.get("retry_count", 0)
+        stage["status"] = PipelineStatus.NEEDS_HUMAN.value
+        stage["error"] = reason
+        stage["human_review"] = {
+            "stage": stage_key,
+            "reason": reason,
+            "issues": issues or [],
+            "file_hints": file_hints or [],
+            "line_hints": line_hints or [],
+            "retry_count": retry_count,
+        }
+        pipe.status = PipelineStatus.NEEDS_HUMAN.value
+        pipe.current_stage = stage_key
+        pipe.stages_data = json.dumps(stages, ensure_ascii=False)
+        pipe.update_time = int(time.time() * 1000)
+        await session.commit()
+        logger.info(
+            f"Pipeline {pipe.pipeline_id}: stage {stage_key} escalated to human after "
+            f"{retry_count} retries — {reason[:120]}"
+        )
+        if emit is not None:
+            try:
+                await emit({
+                    "type": "needs_human",
+                    "stage": stage_key,
+                    "reason": reason,
+                    "issues": issues or [],
+                    "file_hints": file_hints or [],
+                    "line_hints": line_hints or [],
+                    "retry_count": retry_count,
+                })
+            except Exception:  # noqa: BLE001
+                pass
+        return {
+            "pipeline_id": pipe.pipeline_id,
+            "stage": stage_key,
+            "status": PipelineStatus.NEEDS_HUMAN.value,
+            "error": reason,
+            "issues": issues or [],
+            "need_human": True,
+        }
+
+    def _review_gate_input(self, stage_key: str, pipe: "DevPipeline", stages: Dict[str, Any]) -> str:
+        """评审关卡的 input_spec：requirement 用原始需求；其余用需求文档作上下文。"""
+        if stage_key == "requirement":
+            return pipe.user_request or ""
+        req = (stages.get("requirement") or {}).get("output") or ""
+        return req or (pipe.user_request or "")
+
+    async def _run_stage_review(
+        self, stage_key: str, pipe: "DevPipeline", stages: Dict[str, Any], raw_output: str
+    ) -> Dict[str, Any]:
+        """子智能体评审关卡：用 LLM-as-judge 评审该阶段产物。
+
+        返回 {passed, score, feedback, issues, judge_error?}。judge 本身出错时 passed=True
+        放行（避免评审故障卡死流水线）。纯评审，不改状态——重试/交人工由调用方处理。
+        """
+        from app.ai.eval_judge import judge_output
+
+        criteria = REVIEW_GATE_CRITERIA[stage_key]
+        input_spec = self._review_gate_input(stage_key, pipe, stages)
+        result = await judge_output(input_spec, raw_output, criteria)
+        if result.get("error"):
+            return {"passed": True, "score": None, "feedback": "", "issues": [], "judge_error": result["error"]}
+
+        score = result.get("overall_score")
+        per = result.get("per_criterion") or []
+        failed = [p for p in per if not p.get("passed")]
+        passed = (score is not None and score >= REVIEW_GATE_PASS_SCORE) and not failed
+        feedback = ""
+        issues: List[str] = []
+        if failed:
+            feedback = "子智能体评审未通过，请按以下意见完善：\n" + "\n".join(
+                f"- {p.get('criterion', '')}：{p.get('reason', '')}" for p in failed
+            )
+            issues = [f"{p.get('criterion', '')}：{p.get('reason', '')}" for p in failed]
+        return {"passed": passed, "score": score, "feedback": feedback, "issues": issues}
+
     async def _complete_pipeline(
         self,
         session: AsyncSession,
@@ -5925,25 +6069,12 @@ class DevPipelineManager:
                         user_input = ""
                         fix_feedback = ""
 
-                        # code_review need_confirm → 暂停
-                        if _stage_needs_confirm("code_review"):
-                            pipe.status = PipelineStatus.WAITING_CONFIRM.value
-                            pipe.update_time = int(time.time() * 1000)
-                            await session.commit()
-                            await emit({
-                                "type": "waiting_confirm",
-                                "stage": "code_review",
-                                "need_confirm": True,
-                            })
-                            return {
-                                "pipeline_id": pipeline_id,
-                                "stage": "frontend_dev+backend_dev",
-                                "status": "waiting_confirm",
-                                "output": fe_output[:500] + "\n---\n" + be_output[:500],
-                                "need_confirm": True,
-                                "parallel": True,
-                            }
-                        continue  # 不需要确认，继续循环执行 code_review
+                        # 直接 continue 进入循环执行 code_review（不再提前 return 暂停）：
+                        # 顺序执行路径会真正跑 code_review，跑完后若 need_confirm 再经
+                        # 「分支 1」自行暂停等确认。此前在这里提前 return + 由 confirm_stage
+                        # 推进到 testing，会导致 code_review 从未执行就被跳过（full 模式下
+                        # 的结构性缺陷——审查阶段永远 pending）。
+                        continue
 
                     except (asyncio.TimeoutError, Exception) as e:
                         err_msg = str(e) if not isinstance(e, asyncio.TimeoutError) \
@@ -6138,15 +6269,20 @@ class DevPipelineManager:
                         })
                         if attempt >= max_attempts:
                             error_msg = _build_preview_failure_message(repair_tasks, preview_issues[:8])
+                            # 保留产物供人工查看；重试耗尽 → 交人工（不再整条 failed）
                             stages[current_stage].update({
-                                "status": "failed",
                                 "output": raw_output,
                                 "structured_output": parsed,
                                 "preview_html": parsed.get("preview_html", ""),
                                 "code_files": parsed.get("code_files", {}),
-                                "error": error_msg,
                             })
-                            raise ValueError(error_msg)
+                            stages[current_stage]["retry_count"] = attempt
+                            return await self._escalate_to_human(
+                                session, pipe, stages, current_stage,
+                                reason=f"前端预览重试 {attempt} 次仍未通过校验：{error_msg}",
+                                issues=preview_issues[:12],
+                                emit=emit,
+                            )
 
                     if user_input:
                         user_input = ""
@@ -6219,15 +6355,20 @@ class DevPipelineManager:
                                 source_stage="prototype_validation_final",
                             )
                             error_msg = _build_preview_failure_message(repair_tasks, preview_issues[:8])
+                            # 终检仍不通过 → 交人工（保留产物）
                             stages[current_stage].update({
-                                "status": "failed",
                                 "output": raw_output,
                                 "structured_output": parsed,
                                 "preview_html": parsed.get("preview_html", ""),
                                 "code_files": parsed.get("code_files", {}),
-                                "error": error_msg,
                             })
-                            raise ValueError(error_msg)
+                            stages[current_stage]["retry_count"] = max_attempts
+                            return await self._escalate_to_human(
+                                session, pipe, stages, current_stage,
+                                reason=f"前端预览终检未通过：{error_msg}",
+                                issues=preview_issues[:12],
+                                emit=emit,
+                            )
                     if current_stage == "ui_preview" and not (parsed.get("preview_html") or "").strip():
                         raise ValueError("预览生成阶段没有产出可渲染 HTML，请重新生成")
 
@@ -6339,19 +6480,30 @@ class DevPipelineManager:
                             )
                             continue  # 继续循环，重新执行修复阶段
                         else:
-                            pipe.status = PipelineStatus.FAILED.value
-                            pipe.stages_data = json.dumps(stages, ensure_ascii=False)
-                            pipe.update_time = int(time.time() * 1000)
-                            await session.commit()
-                            await self._record_eval_safe(pipe, stages)
-                            await _cleanup_pipeline_temp_files(pipeline_id)
-                            return {
-                                "pipeline_id": pipeline_id,
-                                "stage": current_stage,
-                                "status": "failed",
-                                "error": f"代码审查在 {MAX_FIX_ITERATIONS} 次修复后仍未通过",
-                                "retry_count": pipe.retry_count,
-                            }
+                            # 修复耗尽 → 交人工，带文件/行号（取自审查 field_mismatches）
+                            cr_issues = [
+                                str(p) for p in (
+                                    parsed.get("contract_alignment", ""),
+                                    parsed.get("fix_suggestions", ""),
+                                ) if p and str(p).strip()
+                            ]
+                            fm = parsed.get("field_mismatches") or []
+                            file_hints, line_hints = [], []
+                            for item in fm if isinstance(fm, list) else []:
+                                loc = str(item.get("location") or "").strip()
+                                if loc:
+                                    file_hints.append(loc)
+                                    if item.get("fix"):
+                                        line_hints.append(str(item["fix"]))
+                            stages[current_stage]["retry_count"] = pipe.retry_count
+                            return await self._escalate_to_human(
+                                session, pipe, stages, current_stage,
+                                reason=f"代码审查在 {MAX_FIX_ITERATIONS} 次自动修复后仍未通过",
+                                issues=cr_issues or ["代码审查未通过，请人工复核"],
+                                file_hints=file_hints,
+                                line_hints=line_hints,
+                                emit=emit,
+                            )
 
                     # 分支 0b: 测试失败 → 自动回退到前端开发阶段修复 Bug
                     if current_stage == "testing" and not parsed.get("tests_passed", True):
@@ -6378,19 +6530,60 @@ class DevPipelineManager:
                                        f"looping back to {loop_stage} (iteration {pipe.retry_count}/{MAX_FIX_ITERATIONS})")
                             continue
                         else:
-                            pipe.status = PipelineStatus.FAILED.value
-                            pipe.stages_data = json.dumps(stages, ensure_ascii=False)
-                            pipe.update_time = int(time.time() * 1000)
-                            await session.commit()
-                            await self._record_eval_safe(pipe, stages)
-                            await _cleanup_pipeline_temp_files(pipeline_id)
-                            return {
-                                "pipeline_id": pipeline_id,
-                                "stage": current_stage,
-                                "status": "failed",
-                                "error": f"自动化测试在 {MAX_FIX_ITERATIONS} 次修复后仍有问题",
-                                "retry_count": pipe.retry_count,
-                            }
+                            # 测试修复耗尽 → 交人工，带 bug 详情
+                            test_issues = []
+                            bug_details = parsed.get("bug_details") or raw_output[:800]
+                            if bug_details:
+                                test_issues = [ln.strip() for ln in str(bug_details).splitlines() if ln.strip()][:12]
+                            stages[current_stage]["retry_count"] = pipe.retry_count
+                            return await self._escalate_to_human(
+                                session, pipe, stages, current_stage,
+                                reason=f"自动化测试在 {MAX_FIX_ITERATIONS} 次自动修复后仍有问题",
+                                issues=test_issues or ["自动化测试未通过，请人工复核"],
+                                emit=emit,
+                            )
+
+                    # 子智能体评审关卡（requirement/delivery）：不过则带意见重生成，
+                    # 重试 MAX_FIX_ITERATIONS 次仍不过 → 交人工（步骤 2/3/5）
+                    if current_stage in REVIEW_GATE_CRITERIA and not auto_review_fix_active:
+                        gate = await self._run_stage_review(current_stage, pipe, stages, raw_output)
+                        if not gate["passed"]:
+                            rc = int(stages[current_stage].get("retry_count", 0)) + 1
+                            stages[current_stage]["retry_count"] = rc
+                            stage_name = STAGE_NAMES.get(current_stage, current_stage)
+                            if rc <= MAX_FIX_ITERATIONS:
+                                fix_feedback = gate["feedback"]
+                                stages[current_stage].update({
+                                    "status": "pending",
+                                    "output": "",
+                                    "structured_output": {},
+                                    "code_files": {},
+                                    "preview_html": "",
+                                    "error": "",
+                                    "revision_feedback": gate["feedback"],
+                                })
+                                pipe.current_stage = current_stage
+                                pipe.status = PipelineStatus.RUNNING.value
+                                pipe.stages_data = json.dumps(stages, ensure_ascii=False)
+                                pipe.update_time = int(time.time() * 1000)
+                                await session.commit()
+                                await emit({
+                                    "type": "stage_retry",
+                                    "stage": current_stage,
+                                    "attempt": rc,
+                                    "max_attempts": MAX_FIX_ITERATIONS,
+                                    "reason": "review_gate_failed",
+                                    "score": gate.get("score"),
+                                    "issues": gate["issues"],
+                                })
+                                continue
+                            return await self._escalate_to_human(
+                                session, pipe, stages, current_stage,
+                                reason=f"{stage_name} 子智能体评审 {MAX_FIX_ITERATIONS} 次重生成后仍未通过"
+                                       f"（评分 {gate.get('score')}）",
+                                issues=gate["issues"],
+                                emit=emit,
+                            )
 
                     # 分支 1: 需要用户确认 → 暂停
                     should_pause = _should_pause_for_stage(current_stage, auto_review_fix_active)
@@ -6703,6 +6896,112 @@ class DevPipelineManager:
                 "message": f"已推进到 {STAGE_NAMES.get(next_stage, next_stage)}",
             }
 
+    async def resume_from_human(self, pipeline_id: str, action: str,
+                                feedback: str = "") -> Dict[str, Any]:
+        """人工介入恢复：从 needs_human 状态继续。
+
+        - action="approve"：接受人工（可能已用 update_stage_output 改过）产物，推进到下一阶段。
+        - action="retry"：置回 pending + revision_feedback，由前端调 execute 重新生成。
+        两路都重置该阶段 retry_count，并清掉 human_review 标记。
+        """
+        async with async_session_maker() as session:
+            pipe = await self._load_pipeline(session, pipeline_id)
+            if pipe.status != PipelineStatus.NEEDS_HUMAN.value:
+                return {"pipeline_id": pipeline_id, "error": "当前流水线不在待人工状态"}
+
+            stages = self._parse_stages(pipe)
+            current_stage = pipe.current_stage
+            stage = stages.get(current_stage)
+            if not isinstance(stage, dict):
+                stage = {}
+                stages[current_stage] = stage
+
+            stage["retry_count"] = 0
+            stage.pop("human_review", None)
+
+            if action == "retry":
+                stage.update({
+                    "status": "pending",
+                    "output": "",
+                    "structured_output": {},
+                    "preview_html": "",
+                    "code_files": {},
+                    "error": "",
+                    "revision_feedback": (feedback.strip() if feedback else stage.get("error", "")),
+                })
+                pipe.status = PipelineStatus.PENDING.value
+                pipe.current_stage = current_stage
+                pipe.stages_data = json.dumps(stages, ensure_ascii=False)
+                pipe.update_time = int(time.time() * 1000)
+                await session.commit()
+                return {
+                    "pipeline_id": pipeline_id,
+                    "stage": current_stage,
+                    "status": "pending",
+                    "message": "已退回重新生成，请执行当前阶段",
+                }
+
+            # action == "approve"（默认）：标记本阶段完成，推进到下一阶段
+            stage["status"] = "completed"
+            stage["error"] = ""
+            if not stage.get("completed_at"):
+                stage["completed_at"] = datetime.now().isoformat()
+            pipe_config = json.loads(pipe.skill_config or "{}")
+            stage_keys = _stage_keys_for_mode(pipe_config.get("pipeline_mode", "full"))
+            try:
+                idx = stage_keys.index(current_stage)
+            except ValueError:
+                idx = len(stage_keys) - 1
+            if idx + 1 >= len(stage_keys):
+                pipe.status = PipelineStatus.COMPLETED.value
+                pipe.stages_data = json.dumps(stages, ensure_ascii=False)
+                pipe.update_time = int(time.time() * 1000)
+                await self._record_user_evolution(session, pipe, stages)
+                await self._record_delivery_knowledge(pipe, stages)
+                await session.commit()
+                return {"pipeline_id": pipeline_id, "status": "completed"}
+
+            next_stage = stage_keys[idx + 1]
+            pipe.current_stage = next_stage
+            pipe.status = PipelineStatus.PENDING.value
+            pipe.stages_data = json.dumps(stages, ensure_ascii=False)
+            pipe.update_time = int(time.time() * 1000)
+            await session.commit()
+            return {
+                "pipeline_id": pipeline_id,
+                "stage": next_stage,
+                "status": "pending",
+                "need_confirm": _stage_needs_confirm(next_stage),
+                "message": f"人工通过 {STAGE_NAMES.get(current_stage, current_stage)}，已推进到 {STAGE_NAMES.get(next_stage, next_stage)}",
+            }
+
+    async def list_intervention_pipelines(self, tenant_id: int) -> List[Dict[str, Any]]:
+        """列出租户内所有 needs_human 流水线（供开发人员介入队列）。"""
+        async with async_session_maker() as session:
+            stmt = select(DevPipeline).where(
+                DevPipeline.tenant_id == tenant_id,
+                DevPipeline.status == PipelineStatus.NEEDS_HUMAN.value,
+                DevPipeline.is_deleted == 0,
+            ).order_by(DevPipeline.update_time.desc())
+            rows = (await session.execute(stmt)).scalars().all()
+            result: List[Dict[str, Any]] = []
+            for pipe in rows:
+                stages = self._parse_stages(pipe)
+                stage = stages.get(pipe.current_stage) or {}
+                human_review = stage.get("human_review") or {}
+                result.append({
+                    "pipeline_id": pipe.pipeline_id,
+                    "current_stage": pipe.current_stage,
+                    "current_stage_name": STAGE_NAMES.get(pipe.current_stage, pipe.current_stage),
+                    "user_request": (pipe.user_request or "")[:120],
+                    "update_time": pipe.update_time,
+                    "reason": human_review.get("reason") or stage.get("error", ""),
+                    "issues": human_review.get("issues", []),
+                    "file_hints": human_review.get("file_hints", []),
+                    "retry_count": human_review.get("retry_count", 0),
+                })
+            return result
+
     # ==================== 查询方法 ====================
 
     async def get_pipeline_status(self, pipeline_id: str) -> Dict[str, Any]:
@@ -6800,7 +7099,8 @@ class DevPipelineManager:
                 "code_files": stage_data.get("code_files", {}),
             }
 
-    async def update_stage_output(self, pipeline_id: str, stage: str, output: str) -> Dict[str, Any]:
+    async def update_stage_output(self, pipeline_id: str, stage: str, output: str,
+                                  skip_validation: bool = False) -> Dict[str, Any]:
         target = str(stage or "").strip()
         if not target:
             raise ValueError("阶段不能为空")
@@ -6844,7 +7144,11 @@ class DevPipelineManager:
                         expected_pages=_expected_prototype_pages_from_page_design(stages.get("page_design", {})),
                     )
                     if preview_issues:
-                        raise ValueError("保存内容未通过可运行性约束: " + "；".join(preview_issues[:6]))
+                        # needs_human 下人工介入保存：不强制拦截，仅记录为警告，允许人工覆盖后继续
+                        if skip_validation:
+                            parsed["_manual_override_warnings"] = preview_issues[:8]
+                        else:
+                            raise ValueError("保存内容未通过可运行性约束: " + "；".join(preview_issues[:6]))
 
             stage_data["output"] = output
             stage_data["structured_output"] = parsed

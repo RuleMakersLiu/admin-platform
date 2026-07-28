@@ -212,7 +212,8 @@ def input_spec_to_request_text(input_spec: Any) -> str:
     if isinstance(input_spec, str):
         return input_spec.strip()
     if isinstance(input_spec, dict):
-        for key in ("requirement", "user_request", "prompt", "需求", "description"):
+        # 兼容多种常见 key（含 "request"）——命中即取其文本，避免把整个 JSON 当需求灌进流水线
+        for key in ("requirement", "user_request", "request", "prompt", "需求", "description"):
             v = input_spec.get(key)
             if isinstance(v, str) and v.strip():
                 return v.strip()

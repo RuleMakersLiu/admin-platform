@@ -729,18 +729,21 @@ export const styles: Styles = {
       status === 'running' ? 'rgba(59, 130, 246, 0.14)' :
       status === 'completed' ? 'rgba(34, 197, 94, 0.12)' :
       status === 'failed' ? 'rgba(239, 68, 68, 0.12)' :
+      status === 'needs_human' ? 'rgba(234, 88, 12, 0.14)' :
       status === 'waiting_confirm' ? 'rgba(245, 158, 11, 0.13)' :
       'rgba(148, 163, 184, 0.08)',
     color:
       status === 'running' ? '#315cf6' :
       status === 'completed' ? '#16a34a' :
       status === 'failed' ? '#dc2626' :
+      status === 'needs_human' ? '#ea580c' :
       status === 'waiting_confirm' ? '#b45309' :
       '#667085',
     border: `1px solid ${
       status === 'running' ? 'rgba(59, 130, 246, 0.28)' :
       status === 'completed' ? 'rgba(34, 197, 94, 0.26)' :
       status === 'failed' ? 'rgba(239, 68, 68, 0.26)' :
+      status === 'needs_human' ? 'rgba(234, 88, 12, 0.30)' :
       status === 'waiting_confirm' ? 'rgba(245, 158, 11, 0.28)' :
       'rgba(148, 163, 184, 0.12)'
     }`,

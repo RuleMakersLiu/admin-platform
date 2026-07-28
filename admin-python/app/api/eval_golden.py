@@ -301,6 +301,10 @@ async def _eval_auto_run_pipeline(pipeline_id: str, user_request: str, max_iters
         status = st.get("status")
         if status in ("completed", "failed"):
             return
+        # needs_human：某阶段重试耗尽，暂停等人工。绝不自动放行——否则待人工的流水线
+        # 会被无人值守 watcher 越过。交由开发人员介入队列处理，人工 resume 后另起 watcher。
+        if status == "needs_human":
+            return
         if status == "waiting_confirm":
             try:
                 await pipeline_manager.confirm_stage(pipeline_id, True, "")

@@ -12,7 +12,7 @@ import {
   ThunderboltOutlined, BranchesOutlined, HistoryOutlined,
   ExclamationCircleOutlined, PlayCircleOutlined, ArrowLeftOutlined,
   UndoOutlined, SettingOutlined, ReloadOutlined,
-  EditOutlined, SaveOutlined,
+  EditOutlined, SaveOutlined, ToolOutlined,
 } from '@ant-design/icons'
 import { useSearchParams } from 'react-router-dom'
 import { pipelineApi, type PipelineStatus, type PipelineStreamEvent } from '@/services/pipeline'
@@ -117,7 +117,7 @@ const PipelinePage: React.FC = () => {
         }
       }
       setPipeline(data)
-      if (['waiting_confirm', 'completed', 'failed', 'cancelled'].includes(data.status)) {
+      if (['waiting_confirm', 'completed', 'failed', 'cancelled', 'needs_human'].includes(data.status)) {
         setExecutionActive(false)
       } else if (data.status === 'running') {
         setExecutionActive(true)
@@ -306,7 +306,7 @@ const PipelinePage: React.FC = () => {
       return
     }
 
-    if (['waiting_confirm', 'completed', 'failed', 'done', 'error'].includes(event.type)) {
+    if (['waiting_confirm', 'completed', 'failed', 'needs_human', 'done', 'error'].includes(event.type)) {
       setExecutionActive(false)
       streamReconnectKeyRef.current = ''
       if ((event.type === 'failed' || event.type === 'error') && event.stage) {
@@ -541,7 +541,8 @@ const PipelinePage: React.FC = () => {
     if (!pipelineId || !editingStage) return
     setStageOutputSaving(true)
     try {
-      await pipelineApi.updateStageOutput(pipelineId, editingStage, editedStageOutput)
+      // needs_human 下人工介入保存：跳过可运行性强校验，允许人工覆盖后继续
+      await pipelineApi.updateStageOutput(pipelineId, editingStage, editedStageOutput, isNeedsHuman)
       message.success('已保存当前阶段内容')
       setStreamOutputByStage((prev) => {
         const next = { ...prev }
@@ -558,6 +559,29 @@ const PipelinePage: React.FC = () => {
     }
   }
 
+  const handleResume = async (action: 'approve' | 'retry') => {
+    if (!pipelineId) return
+    setLoading(true)
+    try {
+      const res = await pipelineApi.resume(pipelineId, action, feedback)
+      if (res?.error) {
+        message.error(res.error)
+        return
+      }
+      message.success(action === 'approve' ? '已通过并推进到下一阶段' : '已退回，将重新生成')
+      setFeedback('')
+      setSelectedStage('')
+      await refreshStatus(pipelineId)
+      // 推进/重生成后，触发下一阶段执行（watcher 或前端驱动）
+      await runPipelineStream(pipelineId, action === 'retry' ? feedback : undefined)
+    } catch (e: any) {
+      message.error(e?.message || '恢复失败')
+      await refreshStatus(pipelineId)
+    } finally {
+      setLoading(false)
+    }
+  }
+
 
   const getStepsStatus = (stageKey: string): 'wait' | 'process' | 'finish' | 'error' => {
     if (!pipeline) return 'wait'
@@ -565,11 +589,12 @@ const PipelinePage: React.FC = () => {
     if (!stage) return 'wait'
     if (stage.status === 'completed') return 'finish'
     if (stage.status === 'running') return 'process'
-    if (stage.status === 'failed') return 'error'
+    if (stage.status === 'failed' || stage.status === 'needs_human') return 'error'
     return 'wait'
   }
 
   const isWaitingConfirm = pipeline?.status === 'waiting_confirm'
+  const isNeedsHuman = pipeline?.status === 'needs_human'
 
   // Active stage key: use selectedStage if set, otherwise current stage
   const activeStageKey = selectedStage || pipeline?.current_stage || ''
@@ -916,7 +941,8 @@ const PipelinePage: React.FC = () => {
             {isCompleted && <CheckCircleOutlined style={{ fontSize: 11 }} />}
             {isFailed && <CloseCircleOutlined style={{ fontSize: 11 }} />}
             {isWaitingConfirm && <ExclamationCircleOutlined style={{ fontSize: 11 }} />}
-            {pipeline.status}
+            {isNeedsHuman && <ToolOutlined style={{ fontSize: 11 }} />}
+            {isNeedsHuman ? '待人工处理' : pipeline.status}
           </span>
           {pipeline.user_request && (
             <Tooltip title={pipeline.user_request}>
@@ -1072,11 +1098,13 @@ const PipelinePage: React.FC = () => {
               </Tag>
               <span style={styles.statusBadge(
                 isViewingCurrent && isRunning ? 'running' :
+                isViewingCurrent && isNeedsHuman ? 'needs_human' :
                 isViewingCurrent && isWaitingConfirm ? 'waiting_confirm' :
                 currentStage?.status === 'completed' ? 'completed' :
                 currentStage?.status === 'failed' ? 'failed' : 'pending'
               )}>
                 {isViewingCurrent && isRunning ? '执行中' :
+                 isViewingCurrent && isNeedsHuman ? '待人工' :
                  isViewingCurrent && isWaitingConfirm ? '等待确认' :
                  currentStage?.status === 'completed' ? '已完成' :
                  currentStage?.status === 'failed' ? '失败' : '待执行'}
@@ -1385,6 +1413,73 @@ const PipelinePage: React.FC = () => {
                   </div>
                 </div>
               )}
+
+              {/* Needs Human Panel — 重试耗尽，暂停交人工 */}
+              {isNeedsHuman && isViewingCurrent && (() => {
+                const review: any = (currentStage as any)?.human_review || {}
+                const issues: string[] = review.issues || []
+                const fileHints: string[] = review.file_hints || []
+                const lineHints: string[] = review.line_hints || []
+                return (
+                  <div style={styles.failPanel}>
+                    <Alert
+                      message={`待人工处理：${STAGE_NAMES[activeStageKey] || activeStageKey}自动重试 ${review.retry_count ?? 3} 次仍未通过`}
+                      description={currentStage?.error || review.reason || '请人工修改后继续'}
+                      type="warning"
+                      showIcon
+                      style={{
+                        marginBottom: 14,
+                        background: 'rgba(234, 88, 12, 0.10)',
+                        border: '1px solid rgba(234, 88, 12, 0.28)',
+                        borderRadius: 8,
+                      }}
+                    />
+                    {(issues.length > 0 || fileHints.length > 0) && (
+                      <div style={{ marginBottom: 12, padding: 12, background: 'rgba(148,163,184,0.06)', borderRadius: 8 }}>
+                        {issues.map((it, i) => (
+                          <div key={`i-${i}`} style={{ color: 'rgba(255,255,255,0.78)', fontSize: 13, marginBottom: 4 }}>
+                            • {it}
+                          </div>
+                        ))}
+                        {fileHints.map((f, i) => (
+                          <div key={`f-${i}`} style={{ color: '#f59e0b', fontSize: 12, fontFamily: 'monospace', marginTop: 4 }}>
+                            📄 {f}{lineHints[i] ? ` — ${lineHints[i]}` : ''}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <Text style={{ display: 'block', color: 'rgba(255,255,255,0.55)', fontSize: 12, marginBottom: 8 }}>
+                      可点上方「编辑内容」修改产物后通过，或带反馈重新生成。
+                    </Text>
+                    <TextArea
+                      rows={2}
+                      placeholder="重新生成的修订意见（可选）..."
+                      value={feedback}
+                      onChange={(e) => setFeedback(e.target.value)}
+                      style={{ marginBottom: 10, borderRadius: 8 }}
+                    />
+                    <div style={styles.confirmPanelActions}>
+                      <Button
+                        type="primary"
+                        icon={<CheckCircleOutlined />}
+                        onClick={() => handleResume('approve')}
+                        loading={loading}
+                        style={{ borderRadius: 8 }}
+                      >
+                        人工通过并继续
+                      </Button>
+                      <Button
+                        icon={<ReloadOutlined />}
+                        onClick={() => handleResume('retry')}
+                        loading={loading}
+                        style={{ borderRadius: 8 }}
+                      >
+                        带反馈重新生成
+                      </Button>
+                    </div>
+                  </div>
+                )
+              })()}
 
               {/* Fail Panel */}
               {isFailed && (

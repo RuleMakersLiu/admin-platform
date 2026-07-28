@@ -1,0 +1,130 @@
+"""Tests for the 智能流水线 needs_human / review-gate additions (offline; LLM mocked).
+
+Covers:
+- _permission_keys_from_design: 收紧后只在「权限/permission」上下文行抽取权限码
+- _generated_pages_look_auth_only: 登录/注册类页面判定
+- _run_stage_review: 子智能体评审关卡（注入假 judge，验 passed/feedback 推导）
+"""
+import asyncio
+from types import SimpleNamespace
+
+from app.ai import flow_manager, eval_judge
+
+
+def _run(coro):
+    return asyncio.run(coro)
+
+
+# ---------- 权限键抽取（收紧） ----------
+
+def test_permission_keys_only_from_permission_context():
+    doc = """
+    # 页面设计
+    接口：GET /api/login，字段 username/password。
+    示例响应：{ "code": "0", "data": { "token:abc" } }
+    权限：按钮 user:add、页面 user:list。
+    """
+    keys = flow_manager._permission_keys_from_design(doc)
+    # 只应抽出权限行里的 user:add / user:list，而非 token:abc（在非权限行的示例里）
+    assert "user:add" in keys
+    assert "user:list" in keys
+    assert "token:abc" not in keys
+
+
+def test_permission_keys_empty_when_no_permission_section():
+    # 登录页设计：完全没提权限 → 不应抽出任何权限码（修复前会误抽 ns:action）
+    doc = """
+    # 登录页
+    接口 POST /api/auth/login。
+    字段：username、password、captcha。
+    路由：/login。
+    """
+    assert flow_manager._permission_keys_from_design(doc) == []
+
+
+# ---------- auth 页判定 ----------
+
+def test_generated_pages_look_auth_only_true_for_login():
+    files = {"src/views/login/index.vue": "<template>login</template>"}
+    assert flow_manager._generated_pages_look_auth_only(files) is True
+
+
+def test_generated_pages_look_auth_only_false_for_mixed():
+    files = {
+        "src/views/login/index.vue": "x",
+        "src/views/dashboard/index.vue": "y",
+    }
+    assert flow_manager._generated_pages_look_auth_only(files) is False
+
+
+def test_generated_pages_look_auth_only_false_when_no_pages():
+    assert flow_manager._generated_pages_look_auth_only({}) is False
+
+
+# ---------- 子智能体评审关卡（注入假 judge） ----------
+
+class _FakePipe:
+    def __init__(self, user_request):
+        self.user_request = user_request
+        self.pipeline_id = "pipe_test"
+
+
+def _patched_judge(result):
+    async def _fake(input_spec, output, criteria, llm=None):
+        return result
+    return _fake
+
+
+def test_review_gate_passes_when_score_high(monkeypatch):
+    monkeypatch.setattr(eval_judge, "judge_output", _patched_judge({
+        "overall_score": 90,
+        "per_criterion": [
+            {"criterion": "清晰", "score": 90, "passed": True, "reason": "ok"},
+        ],
+        "summary": "good",
+    }))
+    mgr = flow_manager.DevPipelineManager.__new__(flow_manager.DevPipelineManager)
+    res = _run(mgr._run_stage_review(
+        "requirement", _FakePipe("做一个登录页"), {"requirement": {"output": "需求..."}}, "需求..."
+    ))
+    assert res["passed"] is True
+    assert res["score"] == 90
+
+
+def test_review_gate_fails_with_feedback(monkeypatch):
+    monkeypatch.setattr(eval_judge, "judge_output", _patched_judge({
+        "overall_score": 30,
+        "per_criterion": [
+            {"criterion": "覆盖核心功能点", "score": 30, "passed": False, "reason": "缺少验证码"},
+        ],
+        "summary": "bad",
+    }))
+    mgr = flow_manager.DevPipelineManager.__new__(flow_manager.DevPipelineManager)
+    res = _run(mgr._run_stage_review(
+        "requirement", _FakePipe("做一个登录页"), {"requirement": {"output": ""}}, "简短需求"
+    ))
+    assert res["passed"] is False
+    assert "缺少验证码" in res["feedback"]
+    assert any("缺少验证码" in i for i in res["issues"])
+
+
+def test_review_gate_passes_when_judge_errors(monkeypatch):
+    # judge 本身报错 → 放行（不因评审故障卡死流水线）
+    monkeypatch.setattr(eval_judge, "judge_output", _patched_judge({"error": "API 超时"}))
+    mgr = flow_manager.DevPipelineManager.__new__(flow_manager.DevPipelineManager)
+    res = _run(mgr._run_stage_review(
+        "requirement", _FakePipe("x"), {"requirement": {"output": ""}}, "y"
+    ))
+    assert res["passed"] is True
+    assert res.get("judge_error")
+
+
+def test_review_gate_only_for_configured_stages():
+    # backend_dev 不在 Phase1 顺序关卡里
+    assert "requirement" in flow_manager.REVIEW_GATE_CRITERIA
+    assert "delivery" in flow_manager.REVIEW_GATE_CRITERIA
+    assert "backend_dev" not in flow_manager.REVIEW_GATE_CRITERIA
+
+
+def test_needs_human_status_enum_exists():
+    assert flow_manager.PipelineStatus.NEEDS_HUMAN.value == "needs_human"

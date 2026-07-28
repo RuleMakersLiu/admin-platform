@@ -11,7 +11,7 @@ export interface StageDef {
 export interface StageResult {
   stage: string
   agent_type: string
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'waiting_confirm'
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'waiting_confirm' | 'needs_human'
   output: string
   structured_output: Record<string, any>
   preview_html: string
@@ -149,7 +149,7 @@ export interface PipelineActionResult {
 }
 
 export interface PipelineStreamEvent {
-  type: 'stage_started' | 'stage_retry' | 'stage_auto_fixed' | 'chunk' | 'stage_completed' | 'waiting_confirm' | 'stage_advanced' | 'completed' | 'failed' | 'done' | 'error' | 'heartbeat'
+  type: 'stage_started' | 'stage_retry' | 'stage_auto_fixed' | 'chunk' | 'stage_completed' | 'waiting_confirm' | 'needs_human' | 'stage_advanced' | 'completed' | 'failed' | 'done' | 'error' | 'heartbeat'
   pipeline_id?: string
   stage?: string
   status?: string
@@ -315,8 +315,30 @@ export const pipelineApi = {
   getOutput: (id: string, stage?: string) =>
     http.get<PipelineActionResult>(`${BASE}/${id}/output`, { params: { stage: stage || '' } }),
 
-  updateStageOutput: (id: string, stage: string, output: string) =>
-    http.put<PipelineActionResult>(`${BASE}/${id}/stages/${stage}/output`, { output }),
+  updateStageOutput: (id: string, stage: string, output: string, skipValidation = false) =>
+    http.put<PipelineActionResult>(`${BASE}/${id}/stages/${stage}/output`, {
+      output,
+      skip_validation: skipValidation,
+    }),
+
+  resume: (id: string, action: 'approve' | 'retry', feedback?: string) =>
+    http.post<PipelineActionResult>(`${BASE}/${id}/resume`, {
+      action,
+      feedback: feedback || '',
+    }, { timeout: 300000 }),
+
+  interventionList: () =>
+    http.get<Array<{
+      pipeline_id: string
+      current_stage: string
+      current_stage_name: string
+      user_request: string
+      update_time: number
+      reason: string
+      issues: string[]
+      file_hints: string[]
+      retry_count: number
+    }>>(`${BASE}/intervention/list`),
 
   list: () =>
     http.get<PipelineListItem[]>(`${BASE}/list`),

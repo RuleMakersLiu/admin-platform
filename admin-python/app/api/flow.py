@@ -56,6 +56,12 @@ class ConfirmStageRequest(BaseModel):
 
 class UpdateStageOutputRequest(BaseModel):
     output: str = Field(default="", description="编辑后的阶段输出")
+    skip_validation: bool = Field(default=False, description="跳过可运行性校验（needs_human 下人工覆盖）")
+
+
+class ResumePipelineRequest(BaseModel):
+    action: str = Field(default="approve", description="approve=人工通过并推进；retry=带反馈重新生成")
+    feedback: Optional[str] = Field(default="", description="重新生成的修订反馈")
 
 
 class UpdateProjectSkillRequest(BaseModel):
@@ -581,12 +587,38 @@ async def get_stage_output(pipeline_id: str, stage: str = ""):
 async def update_stage_output(pipeline_id: str, stage: str, request: UpdateStageOutputRequest):
     """编辑并保存阶段输出，后续阶段会读取保存后的内容。"""
     try:
-        output = await pipeline_manager.update_stage_output(pipeline_id, stage, request.output)
+        output = await pipeline_manager.update_stage_output(
+            pipeline_id, stage, request.output, skip_validation=request.skip_validation
+        )
         return {"code": 200, "message": "保存成功", "data": output}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/pipeline/{pipeline_id}/resume")
+async def resume_pipeline(pipeline_id: str, request: ResumePipelineRequest):
+    """人工介入恢复：从 needs_human 状态继续（approve 推进 / retry 重新生成）。"""
+    try:
+        result = await pipeline_manager.resume_from_human(
+            pipeline_id, request.action, request.feedback or ""
+        )
+        if result.get("error"):
+            raise HTTPException(status_code=400, detail=result["error"])
+        return {"code": 200, "message": "已恢复", "data": result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/pipeline/intervention/list")
+async def intervention_list(http_request: Request):
+    """待人工介入的流水线队列（开发人员视角）。"""
+    tenant_id = _get_tenant_id(http_request)
+    pipelines = await pipeline_manager.list_intervention_pipelines(tenant_id)
+    return {"code": 200, "message": "查询成功", "data": pipelines}
 
 
 @router.get("/pipeline/list")
