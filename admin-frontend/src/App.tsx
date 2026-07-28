@@ -34,6 +34,7 @@ const DeveloperPortal = lazy(() => import('@/pages/portal/developer'))
 const ProductPortal = lazy(() => import('@/pages/portal/product'))
 const PipelineEval = lazy(() => import('@/pages/pipeline-eval'))
 const EvalGolden = lazy(() => import('@/pages/eval-golden'))
+const AiMetrics = lazy(() => import('@/pages/ai-metrics'))
 
 class ErrorBoundary extends Component<{ children: React.ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null }
@@ -174,6 +175,7 @@ function App() {
               <Route path="advanced" element={<RedirectWithSearch to="/pipeline/development" />} />
               <Route path="eval" element={withPermission(PIPELINE_PAGE_PERMISSIONS, <PipelineEval />)} />
               <Route path="eval-golden" element={withPermission(PIPELINE_PAGE_PERMISSIONS, <EvalGolden />)} />
+              <Route path="ai-metrics" element={withPermission(PIPELINE_PAGE_PERMISSIONS, <AiMetrics />)} />
             </Route>
 
             <Route path="skills">

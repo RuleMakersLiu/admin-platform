@@ -59,7 +59,7 @@ class ModelConfig:
 
 @dataclass
 class UsageRecord:
-    """Token 使用记录"""
+    """Token 使用 + 性能记录（支撑 AI 效果评测：响应速度/准确率/幻觉/成本）"""
     model: str
     input_tokens: int = 0
     output_tokens: int = 0
@@ -67,6 +67,11 @@ class UsageRecord:
     timestamp: float = 0.0
     pipeline_id: Optional[str] = None
     tenant_id: Optional[int] = None
+    latency_ms: Optional[int] = None   # 单次调用总延迟
+    ttft_ms: Optional[int] = None      # 流式首字延迟
+    success: bool = True
+    error: Optional[str] = None
+    stage: Optional[str] = None        # 调用来源/阶段
 
 
 # Agent 类型到任务复杂度的映射
@@ -158,8 +163,11 @@ class ModelRouter:
         return self._models.get(complexity, self._models[TaskComplexity.MEDIUM])
 
     def record_usage(self, model: str, input_tokens: int, output_tokens: int,
-                     pipeline_id: Optional[str] = None, tenant_id: Optional[int] = None):
-        """记录 token 使用量；pipeline_id/tenant_id 缺省时取当前管线上下文。"""
+                     pipeline_id: Optional[str] = None, tenant_id: Optional[int] = None,
+                     latency_ms: Optional[int] = None, ttft_ms: Optional[int] = None,
+                     success: bool = True, error: Optional[str] = None,
+                     stage: Optional[str] = None):
+        """记录 token 用量 + 性能/成功指标；pipeline_id/tenant_id 缺省时取当前管线上下文。"""
         ctx = _pipeline_ctx.get()
         if ctx:
             if pipeline_id is None:
@@ -186,6 +194,11 @@ class ModelRouter:
             timestamp=time.time(),
             pipeline_id=pipeline_id,
             tenant_id=tenant_id,
+            latency_ms=latency_ms,
+            ttft_ms=ttft_ms,
+            success=success,
+            error=(error[:255] if error else None),
+            stage=stage,
         )
 
         with self._usage_lock:
@@ -209,6 +222,8 @@ class ModelRouter:
                     tenant_id=r.tenant_id, pipeline_id=r.pipeline_id, model=r.model,
                     input_tokens=r.input_tokens, output_tokens=r.output_tokens,
                     cost=r.cost, create_time=now,
+                    latency_ms=r.latency_ms, ttft_ms=r.ttft_ms,
+                    success=1 if r.success else 0, error=r.error, stage=r.stage,
                 )
                 for r in batch
             ])

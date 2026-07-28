@@ -302,3 +302,84 @@ async def judge_output_vision(
     result["model"] = getattr(llm, "model", None)
     result["mode"] = "vision"
     return result
+
+
+def build_hallucination_prompt(requirement: Any, output: str) -> str:
+    """构造幻觉/事实一致性评审 prompt（纯函数）。"""
+    return f"""你是严格的「事实一致性」审查官。判断【产物】中是否存在【需求】未支撑的虚构内容，例如：
+- 引用不存在的 API / 第三方库 / import
+- 编造的函数 / 类 / 字段 / 类型
+- 虚构的配置项 / 文件路径 / URL / 环境变量
+- 与需求无关或无中生有的功能声明
+只判「是否虚构 / 可证伪」，不判代码风格或功能完整度。
+
+【需求】
+{_stringify(requirement)}
+
+【产物】
+{output}
+
+严格按以下 JSON 输出（仅输出 JSON，不要额外文字）：
+{{
+  "hallucination_score": "0-100 整数，100=完全有据无虚构，0=大量虚构",
+  "flagged": [{{"claim": "虚构点原文片段", "why": "为何判定为虚构/无支撑"}}],
+  "summary": "总体说明"
+}}
+要求：flagged 只列确有虚构嫌疑的条目，没有就给空数组。"""
+
+
+def parse_hallucination(content: Any) -> dict:
+    """解析幻觉评审输出。"""
+    empty = {"hallucination_score": None, "flagged": [], "summary": ""}
+    if not content:
+        return {**empty, "error": "空响应"}
+    text = content.strip() if isinstance(content, str) else str(content)
+    data = _extract_json(text)
+    if not data:
+        return {**empty, "error": "无法解析评审 JSON", "raw": text[:500]}
+
+    score = data.get("hallucination_score")
+    try:
+        score = int(score)
+    except (TypeError, ValueError):
+        score = None
+
+    flagged = []
+    for item in data.get("flagged") or []:
+        if isinstance(item, dict):
+            flagged.append({
+                "claim": item.get("claim", ""),
+                "why": item.get("why", ""),
+            })
+
+    return {
+        "hallucination_score": score,
+        "flagged": flagged,
+        "summary": data.get("summary", ""),
+    }
+
+
+async def judge_hallucination(
+    requirement: Any, output: str, llm: Optional[Any] = None
+) -> dict:
+    """幻觉评审：检测产物中【需求】未支撑的虚构内容（编造 API/库/路径/配置等）。
+
+    hallucination_score：100=完全有据无虚构，0=大量虚构；flagged 列出具体虚构嫌疑。
+    与 judge_output（功能对不对）正交——本函数判「有没有瞎编」。
+    """
+    if llm is None:
+        llm = build_judge_llm()
+    if llm is None:
+        return {"hallucination_score": None, "flagged": [], "summary": "", "error": "AI 未配置（缺少 API Key）"}
+
+    prompt = build_hallucination_prompt(requirement, output)
+    try:
+        resp = await llm.ainvoke([{"role": "user", "content": prompt}])
+    except Exception as exc:
+        logger.warning("hallucination judge LLM call failed: %s", exc)
+        return {"hallucination_score": None, "flagged": [], "summary": "", "error": f"幻觉评审调用失败: {exc}"}
+
+    result = parse_hallucination(resp.content)
+    result["model"] = getattr(llm, "model", None)
+    result["mode"] = "hallucination"
+    return result

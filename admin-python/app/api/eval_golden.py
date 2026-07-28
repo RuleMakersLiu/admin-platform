@@ -5,10 +5,15 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.eval_judge import extract_pipeline_output, judge_output, judge_output_vision
+from app.ai.eval_judge import (
+    extract_pipeline_output,
+    judge_hallucination,
+    judge_output,
+    judge_output_vision,
+)
 from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.models.eval_golden_case import EvalGoldenCase
@@ -243,6 +248,39 @@ async def judge_pipeline_vision(
     return {"code": 200, "message": "视觉评审完成", "data": result}
 
 
+@router.post("/{case_id}/judge-pipeline-hallucination/{pipeline_id}")
+async def judge_pipeline_hallucination(
+    case_id: int,
+    pipeline_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """幻觉评审：检测流水线产物中【需求】未支撑的虚构内容（编造 API/库/路径/配置等）。
+
+    hallucination_score：100=完全有据无虚构，0=大量虚构；flagged 列出具体嫌疑。
+    与 judge-pipeline（功能对不对）正交——本接口判「有没有瞎编」。
+    """
+    from app.models.agent_models import DevPipeline
+
+    case = await _load_owned(case_id, user["tenantId"], db)
+    stmt = select(DevPipeline).where(
+        DevPipeline.pipeline_id == pipeline_id,
+        DevPipeline.tenant_id == user["tenantId"],
+        DevPipeline.is_deleted == 0,
+    )
+    pipe = (await db.execute(stmt)).scalar_one_or_none()
+    if not pipe:
+        raise HTTPException(status_code=404, detail="流水线不存在")
+
+    output = extract_pipeline_output(pipe.stages_data)
+    result = await judge_hallucination(
+        from_storage(case.input_spec),
+        output,
+    )
+    result["pipeline_id"] = pipeline_id
+    return {"code": 200, "message": "幻觉评审完成", "data": result}
+
+
 async def _eval_auto_run_pipeline(pipeline_id: str, user_request: str, max_iters: int = 80) -> None:
     """无人值守驱动 golden-case 流水线：自动执行各阶段 + 自动确认 confirm 关卡，直到终态。
 
@@ -332,3 +370,122 @@ async def run_golden_case(
             "status": "running",
         },
     }
+
+
+metrics_router = APIRouter(prefix="/eval", tags=["AI 评测指标"])
+
+
+@metrics_router.get("/metrics")
+async def ai_metrics(
+    hours: int = Query(24, ge=1, le=720),
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """AI 效果评测指标汇总：响应速度 / 准确率 / 生成效果 / 成本（按模型，时间窗口）。
+
+    数据源：llm_usage_log（每次 LLM 调用的延迟/成功/token/成本）+ eval_run（golden 通过率/均分）。
+    """
+    tid = user["tenantId"]
+    since_ms = int(time.time() * 1000) - hours * 3600 * 1000
+
+    # 响应速度 + 成本（按模型；只统计已打延迟的调用，所有聚合在同一集合上，避免分子分母不一致）
+    speed_q = text("""
+        SELECT model,
+            COUNT(*) AS calls,
+            COUNT(*) FILTER (WHERE success = 1) AS ok,
+            COALESCE(AVG(latency_ms), 0) AS avg_latency,
+            COALESCE(SUM(latency_ms), 0) AS sum_latency,
+            COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms), 0) AS p50,
+            COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms), 0) AS p95,
+            COALESCE(AVG(ttft_ms), 0) AS avg_ttft,
+            COALESCE(SUM(input_tokens), 0) AS input_tokens,
+            COALESCE(SUM(output_tokens), 0) AS output_tokens,
+            COALESCE(SUM(cost), 0) AS cost
+        FROM llm_usage_log
+        WHERE create_time >= :since
+          AND (tenant_id = :tid OR tenant_id IS NULL)
+          AND latency_ms IS NOT NULL
+        GROUP BY model
+    """)
+    rows = (await db.execute(speed_q, {"since": since_ms, "tid": tid})).mappings().all()
+
+    by_model, tot_calls, tot_ok, tot_in, tot_out, tot_cost = [], 0, 0, 0, 0, 0.0
+    tot_sum_lat = 0.0
+    for r in rows:
+        m = r["model"] or "unknown"
+        calls = int(r["calls"] or 0)
+        ok = int(r["ok"] or 0)
+        in_tok = int(r["input_tokens"] or 0)
+        out_tok = int(r["output_tokens"] or 0)
+        lat = float(r["avg_latency"] or 0)
+        sum_lat = float(r["sum_latency"] or 0)
+        cost = float(r["cost"] or 0)
+        tot_calls += calls
+        tot_ok += ok
+        tot_in += in_tok
+        tot_out += out_tok
+        tot_sum_lat += sum_lat
+        tot_cost += cost
+        by_model.append({
+            "model": m,
+            "calls": calls,
+            "success_rate": round(ok / calls * 100, 1) if calls else None,
+            "avg_latency_ms": round(lat, 1),
+            "p50_ms": round(float(r["p50"]), 1),
+            "p95_ms": round(float(r["p95"]), 1),
+            "avg_ttft_ms": round(float(r["avg_ttft"]), 1),
+            "tokens_per_s": round(out_tok / (sum_lat / 1000), 1) if sum_lat else None,
+            "input_tokens": in_tok,
+            "output_tokens": out_tok,
+            "cost": round(cost, 4),
+        })
+    overall_lat = (tot_sum_lat / tot_calls) if tot_calls else 0
+    speed = {
+        "overall": {
+            "calls": tot_calls,
+            "success_rate": round(tot_ok / tot_calls * 100, 1) if tot_calls else None,
+            "avg_latency_ms": round(overall_lat, 1),
+            "tokens_per_s": round(tot_out / (tot_sum_lat / 1000), 1) if tot_sum_lat else None,
+            "input_tokens": tot_in,
+            "output_tokens": tot_out,
+            "cost": round(tot_cost, 4),
+        },
+        "by_model": sorted(by_model, key=lambda x: x["calls"], reverse=True),
+    }
+
+    # 准确率 / 生成效果（golden case 评审通过率与均分）
+    acc_q = text("""
+        SELECT
+            COUNT(*) FILTER (WHERE status = 'judged') AS judged,
+            COUNT(*) FILTER (WHERE status = 'judged' AND overall_score >= 60) AS passed,
+            COALESCE(AVG(overall_score) FILTER (WHERE status = 'judged'), 0) AS avg_score
+        FROM eval_run
+        WHERE update_time >= :since AND tenant_id = :tid AND is_deleted = 0
+    """)
+    a = (await db.execute(acc_q, {"since": since_ms, "tid": tid})).mappings().first()
+    judged = int(a["judged"] or 0)
+    passed = int(a["passed"] or 0)
+    avg_score = round(float(a["avg_score"] or 0), 1)
+    accuracy = {
+        "judged": judged,
+        "passed": passed,
+        "pass_rate": round(passed / judged * 100, 1) if judged else None,
+        "avg_score": avg_score,
+    }
+
+    return {"code": 200, "message": "查询成功", "data": {
+        "window_hours": hours,
+        "speed": speed,
+        "accuracy": accuracy,
+        "quality": {"avg_score": avg_score, "judged": judged},
+        "cost": {
+            "input_tokens": tot_in,
+            "output_tokens": tot_out,
+            "cost": round(tot_cost, 4),
+            "by_model": [
+                {"model": x["model"], "input_tokens": x["input_tokens"],
+                 "output_tokens": x["output_tokens"], "cost": x["cost"]}
+                for x in by_model
+            ],
+        },
+    }}

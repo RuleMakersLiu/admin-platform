@@ -4,6 +4,8 @@
 """
 import json
 import logging
+import time
+from contextvars import ContextVar
 from typing import AsyncGenerator, Optional
 
 import httpx
@@ -12,6 +14,37 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+# 当前 LLM 调用来源/阶段（chat/vision/judge/requirement/prototype…），供延迟指标归因。
+# flow_manager 执行某阶段前 bind_call_stage(stage_key)，glm_provider 记录时读取。
+_call_stage_ctx: ContextVar = ContextVar("llm_call_stage", default=None)
+
+
+def bind_call_stage(stage: Optional[str]):
+    """设置当前调用阶段；返回 token，用 reset_call_stage(token) 复位。"""
+    return _call_stage_ctx.set(stage)
+
+
+def reset_call_stage(token):
+    try:
+        _call_stage_ctx.reset(token)
+    except (LookupError, ValueError):
+        pass
+
+
+def _safe_record_usage(model: str, input_tokens: int, output_tokens: int,
+                       latency_ms: Optional[int], ttft_ms: Optional[int],
+                       success: bool, error: Optional[str], stage: Optional[str]) -> None:
+    """集中记录单次 LLM 调用的用量+延迟+成功指标。永不抛异常（不影响业务调用）。"""
+    try:
+        from app.ai.model_router import model_router
+        model_router.record_usage(
+            model=model, input_tokens=input_tokens, output_tokens=output_tokens,
+            latency_ms=latency_ms, ttft_ms=ttft_ms, success=success,
+            error=error, stage=stage or _call_stage_ctx.get(),
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("record_usage failed (ignored)", exc_info=True)
 
 GLM_API_URL = "https://open.bigmodel.cn/api/paas/v4"
 
@@ -169,7 +202,28 @@ class ChatGLM:
         return payload
 
     async def ainvoke(self, messages: list) -> GLMMessage:
-        """异步非流式调用"""
+        """异步非流式调用（含延迟/成功指标采集，每条逻辑调用记录一次）。"""
+        t0 = time.monotonic()
+        try:
+            content, usage = await self._do_invoke(messages)
+        except Exception as exc:
+            _safe_record_usage(
+                self.model, 0, 0,
+                latency_ms=int((time.monotonic() - t0) * 1000), ttft_ms=None,
+                success=False, error=str(exc), stage=None,
+            )
+            raise
+        _safe_record_usage(
+            self.model,
+            usage.get("prompt_tokens", 0),
+            usage.get("completion_tokens", 0),
+            latency_ms=int((time.monotonic() - t0) * 1000), ttft_ms=None,
+            success=True, error=None, stage=None,
+        )
+        return GLMMessage(content=content, usage=usage)
+
+    async def _do_invoke(self, messages: list) -> tuple[str, dict]:
+        """实际非流式调用 + 推理模型 max_tokens 自适应重试（不记录指标，避免重复计数）。"""
         client = await self._get_client()
         payload = self._build_payload(messages, stream=False)
 
@@ -196,48 +250,69 @@ class ChatGLM:
                     f"Reasoning model used {reasoning_tokens}/{old_max} tokens for thinking, "
                     f"retrying with max_tokens={self.max_tokens}"
                 )
-                return await self.ainvoke(messages)
+                return await self._do_invoke(messages)
 
-        return GLMMessage(content=content, usage=usage)
+        return content, usage
 
     async def astream(self, messages: list) -> AsyncGenerator[str, None]:
-        """异步流式调用，yield SSE 格式的 JSON 字符串"""
+        """异步流式调用，yield SSE 格式的 JSON 字符串（含首字延迟/总延迟采集）。"""
         client = await self._get_client()
         payload = self._build_payload(messages, stream=True)
 
         full_content = ""
+        t0 = time.monotonic()
+        tfirst: Optional[float] = None
 
-        async with client.stream(
-            "POST",
-            f"{GLM_API_URL}/chat/completions",
-            headers=self._build_headers(),
-            json=payload,
-        ) as response:
-            response.raise_for_status()
+        try:
+            async with client.stream(
+                "POST",
+                f"{GLM_API_URL}/chat/completions",
+                headers=self._build_headers(),
+                json=payload,
+            ) as response:
+                response.raise_for_status()
 
-            async for line in response.aiter_lines():
-                if not line or line == "data: [DONE]":
-                    continue
-                if not line.startswith("data: "):
-                    continue
-
-                try:
-                    data = json.loads(line[6:])
-                    choices = data.get("choices", [])
-                    if not choices:
+                async for line in response.aiter_lines():
+                    if not line or line == "data: [DONE]":
+                        continue
+                    if not line.startswith("data: "):
                         continue
 
-                    delta = choices[0].get("delta", {})
-                    chunk = delta.get("content", "")
-                    if chunk:
-                        full_content += chunk
-                        yield json.dumps({
-                            "type": "chunk",
-                            "content": chunk,
-                            "done": False,
-                        }, ensure_ascii=False)
-                except json.JSONDecodeError:
-                    continue
+                    try:
+                        data = json.loads(line[6:])
+                        choices = data.get("choices", [])
+                        if not choices:
+                            continue
+
+                        delta = choices[0].get("delta", {})
+                        chunk = delta.get("content", "")
+                        if chunk:
+                            if tfirst is None:
+                                tfirst = time.monotonic()
+                            full_content += chunk
+                            yield json.dumps({
+                                "type": "chunk",
+                                "content": chunk,
+                                "done": False,
+                            }, ensure_ascii=False)
+                    except json.JSONDecodeError:
+                        continue
+        except Exception as exc:
+            _safe_record_usage(
+                self.model, 0, max(1, len(full_content) // 3),
+                latency_ms=int((time.monotonic() - t0) * 1000),
+                ttft_ms=int((tfirst - t0) * 1000) if tfirst else None,
+                success=False, error=str(exc), stage=None,
+            )
+            raise
+
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        ttft_ms = int((tfirst - t0) * 1000) if tfirst else None
+        _safe_record_usage(
+            self.model, 0, max(1, len(full_content) // 3),
+            latency_ms=latency_ms, ttft_ms=ttft_ms,
+            success=True, error=None, stage=None,
+        )
 
         yield json.dumps({
             "type": "done",

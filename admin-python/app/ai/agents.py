@@ -200,15 +200,8 @@ class BaseAgent(ABC):
         return llm, prompt, image_urls
 
     async def _invoke(self, llm, messages: list[dict]) -> str:
-        """非流式调用 + 记录 token 用量 + 解析内容。"""
+        """非流式调用 + 解析内容。用量/延迟/成功指标由 glm_provider.ainvoke 集中记录。"""
         response = await llm.ainvoke(messages)
-        usage = getattr(response, "usage", {})
-        if usage:
-            model_router.record_usage(
-                model=llm.model,
-                input_tokens=usage.get("prompt_tokens", 0),
-                output_tokens=usage.get("completion_tokens", 0),
-            )
         content = response.content
         if isinstance(content, list):
             parts = []
