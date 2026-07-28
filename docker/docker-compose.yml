@@ -60,6 +60,7 @@ services:
       - redis
     volumes:
       - pipeline_data:/data/pipelines
+      - ../admin-python/app:/app/app   # 源码挂载：宿主改 app/ 后 restart 即生效，免重建镜像；recreate 不丢改动
     networks:
       - admin-network
 

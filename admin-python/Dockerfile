@@ -7,7 +7,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml README.md ./
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir -e . \
+      -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 COPY . .
 
@@ -26,6 +27,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --from=builder /app /app
+# E2E: 安装 chromium 浏览器二进制 + 系统依赖（prototype 阶段 Playwright 断言用）
+RUN python -m playwright install --with-deps chromium
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
 COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
