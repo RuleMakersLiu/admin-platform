@@ -251,3 +251,54 @@ async def judge_output(
     result = parse_judgment(resp.content)
     result["model"] = getattr(llm, "model", None)
     return result
+
+
+def build_vision_judge_llm():
+    """构造视觉评审用 LLM（GLM-4V，json mode，max_tokens 受限 2048）；未配置返回 None。"""
+    try:
+        from app.ai.glm_provider import ChatGLM
+
+        vision_model = getattr(settings, "zai_vision_model", None) or "glm-4v"
+        llm = ChatGLM(model=vision_model, temperature=0.2)
+        # GLM-4V max_tokens 上限 2048（>2048 → 400 参数非法）
+        try:
+            llm.max_tokens = min(int(llm.max_tokens or 2048), 2048)
+        except (TypeError, ValueError):
+            llm.max_tokens = 2048
+        llm.response_format = {"type": "json_object"}
+        return llm
+    except Exception:
+        return None
+
+
+async def judge_output_vision(
+    image_data_uri: str,
+    input_spec: Any,
+    criteria: Any,
+    llm: Optional[Any] = None,
+) -> dict:
+    """视觉评审：依据评判标准对【渲染后的前端页面截图】逐项打分。
+
+    与 judge_output（读代码文本）互补——本函数让评测覆盖「真正渲染出来对不对」，
+    而非仅「代码里有没有」。image_data_uri 为 data:image/png;base64,... 或可访问图片 URL。
+    """
+    if llm is None:
+        llm = build_vision_judge_llm()
+    if llm is None:
+        return {"overall_score": None, "per_criterion": [], "summary": "", "error": "AI 视觉模型未配置（缺少 API Key）"}
+
+    from app.ai.glm_provider import build_vision_messages
+
+    output_desc = "【产物】见下方截图：这是流水线生成并真实渲染出的前端页面。请基于截图可见内容评审。"
+    prompt = build_judge_prompt(input_spec, output_desc, criteria)
+    messages = build_vision_messages(prompt, [image_data_uri])
+    try:
+        resp = await llm.ainvoke(messages)
+    except Exception as exc:
+        logger.warning("vision judge LLM call failed: %s", exc)
+        return {"overall_score": None, "per_criterion": [], "summary": "", "error": f"视觉评审调用失败: {exc}"}
+
+    result = parse_judgment(resp.content)
+    result["model"] = getattr(llm, "model", None)
+    result["mode"] = "vision"
+    return result

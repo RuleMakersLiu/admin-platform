@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.eval_judge import extract_pipeline_output, judge_output
+from app.ai.eval_judge import extract_pipeline_output, judge_output, judge_output_vision
 from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.models.eval_golden_case import EvalGoldenCase
@@ -199,6 +199,48 @@ async def judge_pipeline(
     )
     result["pipeline_id"] = pipeline_id
     return {"code": 200, "message": "评审完成", "data": result}
+
+
+@router.post("/{case_id}/judge-pipeline-vision/{pipeline_id}")
+async def judge_pipeline_vision(
+    case_id: int,
+    pipeline_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """视觉评测：把流水线生成的前端真实渲染截图，再用 GLM-4V 按评判标准评审渲染结果。
+
+    与 judge-pipeline（读代码文本）互补——本接口评审「真正渲染出来对不对」。
+    返回评审结果 + 截图(data_uri) 便于回看。
+    """
+    from app.services.vision_eval_service import render_pipeline_screenshot
+
+    case = await _load_owned(case_id, user["tenantId"], db)
+    from app.models.agent_models import DevPipeline
+
+    stmt = select(DevPipeline).where(
+        DevPipeline.pipeline_id == pipeline_id,
+        DevPipeline.tenant_id == user["tenantId"],
+        DevPipeline.is_deleted == 0,
+    )
+    pipe = (await db.execute(stmt)).scalar_one_or_none()
+    if not pipe:
+        raise HTTPException(status_code=404, detail="流水线不存在")
+
+    try:
+        rendered = await render_pipeline_screenshot(pipeline_id)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"渲染截图失败: {exc}")
+
+    result = await judge_output_vision(
+        rendered["data_uri"],
+        from_storage(case.input_spec),
+        from_storage(case.expected_criteria),
+    )
+    result["pipeline_id"] = pipeline_id
+    result["screenshot"] = rendered["data_uri"]
+    result["preview_url"] = rendered.get("preview_url")
+    return {"code": 200, "message": "视觉评审完成", "data": result}
 
 
 async def _eval_auto_run_pipeline(pipeline_id: str, user_request: str, max_iters: int = 80) -> None:
