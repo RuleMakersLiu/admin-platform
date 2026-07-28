@@ -270,10 +270,13 @@
 
 .tech-avatar-wrapper {
   position: relative;
-  display: inline-block; /* 收缩到头像尺寸，让在线状态点锚定在头像右下角 */
+  display: inline-flex; /* flex：消除 inline strut 让 wrapper 精确收缩到头像尺寸 */
+  flex: none; /* 父级 .tech-user-dropdown(flex, align-items:center) 不再把它撑到 header 高度 */
+  line-height: 0;
 }
 
 .tech-avatar {
+  flex: none;
   background: linear-gradient(135deg, #315cf6, #1d9bf0) !important;
   border: 2px solid #dce6ff;
 }
