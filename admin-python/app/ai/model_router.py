@@ -31,13 +31,30 @@ def reset_pipeline_context(token):
 
 
 @asynccontextmanager
-async def pipeline_context(pipeline_id: str, tenant_id: Optional[int] = None):
-    """``async with``：在作用域内把 LLM 用量归因到该 pipeline（自动 bind/reset）。"""
+async def pipeline_context(pipeline_id: str, tenant_id: Optional[int] = None,
+                           stage: Optional[str] = None):
+    """``async with``：在作用域内把 LLM 用量/延迟归因到该 pipeline（+ 可选阶段）。
+
+    stage 传入时同步绑定当前调用阶段，glm_provider 记录延迟时读取，用于按阶段分组。
+    """
     token = bind_pipeline_context(pipeline_id, tenant_id)
+    stage_token = None
+    if stage:
+        try:
+            from app.ai.glm_provider import bind_call_stage
+            stage_token = bind_call_stage(stage)
+        except Exception:  # noqa: BLE001
+            stage_token = None
     try:
         yield
     finally:
         reset_pipeline_context(token)
+        if stage_token is not None:
+            try:
+                from app.ai.glm_provider import reset_call_stage
+                reset_call_stage(stage_token)
+            except Exception:  # noqa: BLE001
+                pass
 
 
 class TaskComplexity(str, Enum):
@@ -55,6 +72,36 @@ class ModelConfig:
     temperature: float = 0.7
     cost_per_1k_input: float = 0.0
     cost_per_1k_output: float = 0.0
+
+
+# 智谱 GLM 官方单价（每 1K tokens，单位：元 ¥，2024-2025 公开价，便于成本看板估算）。
+# record_usage 在 _models（claude 等）未命中时按模型名/前缀查这里。
+GLM_PRICING_PER_1K = {
+    "glm-4-plus": (0.05, 0.05),
+    "glm-4": (0.1, 0.1),
+    "glm-4-air": (0.001, 0.001),
+    "glm-4-airx": (0.001, 0.001),
+    "glm-4-flash": (0.0001, 0.0001),   # 限时免费/极低
+    "glm-4-flashx": (0.0001, 0.0001),
+    "glm-4-long": (0.001, 0.001),
+    "glm-4v": (0.05, 0.05),
+    "glm-4v-plus": (0.05, 0.0),
+    "glm-4v-flash": (0.0001, 0.0001),
+    "glm-5": (0.5, 0.5),
+    "glm-5.1": (0.5, 0.5),
+    "embedding-3": (0.0005, 0.0),
+    "glm-asr-2512": (0.0, 0.0),
+}
+
+
+def _glm_price(model: str) -> tuple[float, float]:
+    """按模型名精确或前缀匹配 GLM 单价 (in, out) per 1K tokens；未匹配返回 (0,0)。"""
+    if model in GLM_PRICING_PER_1K:
+        return GLM_PRICING_PER_1K[model]
+    for key, price in GLM_PRICING_PER_1K.items():
+        if model.startswith(key):
+            return price
+    return (0.0, 0.0)
 
 
 @dataclass
@@ -185,6 +232,11 @@ class ModelRouter:
         if config:
             cost = (input_tokens / 1000 * config.cost_per_1k_input +
                     output_tokens / 1000 * config.cost_per_1k_output)
+        else:
+            # _models 仅含 claude 等；GLM 模型按官方单价估算
+            in_rate, out_rate = _glm_price(model)
+            if in_rate or out_rate:
+                cost = input_tokens / 1000 * in_rate + output_tokens / 1000 * out_rate
 
         record = UsageRecord(
             model=model,

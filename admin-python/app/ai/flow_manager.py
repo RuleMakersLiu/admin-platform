@@ -5733,7 +5733,7 @@ class DevPipelineManager:
         """管线终态：对该 pipeline 关联的待评审 EvalRun 自动评审并回写。"""
         from app.models.eval_run import EvalRun
         from app.models.eval_golden_case import EvalGoldenCase
-        from app.ai.eval_judge import extract_pipeline_output, judge_output
+        from app.ai.eval_judge import extract_pipeline_output, judge_hallucination, judge_output
 
         stmt = select(EvalRun).where(
             EvalRun.pipeline_id == pipe.pipeline_id,
@@ -5756,6 +5756,15 @@ class DevPipelineManager:
                 run.judgment = json.dumps({"error": "golden case 不存在或已删除"}, ensure_ascii=False)
                 continue
             result = await judge_output(case.input_spec, output, case.expected_criteria)
+            # 幻觉评审（与功能评审正交），合并写入 judgment 供看板聚合
+            try:
+                halluc = await judge_hallucination(case.input_spec, output)
+            except Exception as exc:  # noqa: BLE001
+                halluc = {"error": str(exc)}
+            if not halluc.get("error"):
+                result["hallucination_score"] = halluc.get("hallucination_score")
+                result["hallucination_flagged"] = halluc.get("flagged")
+                result["hallucination_summary"] = halluc.get("summary")
             run.status = "failed" if result.get("error") else "judged"
             run.overall_score = result.get("overall_score")
             run.judgment = json.dumps(result, ensure_ascii=False)
@@ -5853,7 +5862,7 @@ class DevPipelineManager:
                             # pipe is read-only here and expire_on_commit=False, so
                             # accessing its attributes does not touch the outer session.
                             async with async_session_maker() as branch_session:
-                                async with pipeline_context(pipeline_id, pipe.tenant_id):
+                                async with pipeline_context(pipeline_id, pipe.tenant_id, stage=stage_key):
                                     return await self._run_single_stage(
                                         pipeline_id, stage_key, stages,
                                         pipe, fix_feedback, user_input, branch_session,
@@ -6034,7 +6043,7 @@ class DevPipelineManager:
                             for part in (fix_feedback, preview_validation_feedback)
                             if part and part.strip()
                         )
-                        async with pipeline_context(pipeline_id, pipe.tenant_id):
+                        async with pipeline_context(pipeline_id, pipe.tenant_id, stage=current_stage):
                             raw_output, parsed = await self._run_single_stage(
                                 pipeline_id, current_stage, stages,
                                 pipe, attempt_feedback, user_input, session,

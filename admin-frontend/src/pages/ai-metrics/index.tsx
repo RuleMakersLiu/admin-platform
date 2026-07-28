@@ -21,6 +21,14 @@ interface ModelRow {
   cost: number
 }
 
+interface StageRow {
+  stage: string
+  calls: number
+  success_rate: number | null
+  avg_latency_ms: number
+  p95_ms: number
+}
+
 interface Metrics {
   window_hours: number
   speed: {
@@ -34,9 +42,11 @@ interface Metrics {
       cost: number
     }
     by_model: ModelRow[]
+    by_stage: StageRow[]
   }
   accuracy: { judged: number; passed: number; pass_rate: number | null; avg_score: number }
   quality: { avg_score: number; judged: number }
+  hallucination: { judged: number; avg_score: number | null }
   cost: { input_tokens: number; output_tokens: number; cost: number }
 }
 
@@ -122,8 +132,15 @@ export default function AiMetricsPage() {
                 </Card>
               </Col>
               <Col xs={24} lg={12} xl={6}>
+                <Card title="幻觉" size="small">
+                  <Statistic title="平均幻觉分" value={data?.hallucination.avg_score ?? '-'} suffix={data?.hallucination.avg_score == null ? '' : '/100'}
+                    valueStyle={{ color: scoreColor(data?.hallucination.avg_score ?? null) }} />
+                  <div style={{ marginTop: 8 }}><Text type="secondary">100=无虚构，越低越多。基于 {data?.hallucination.judged ?? 0} 次</Text></div>
+                </Card>
+              </Col>
+              <Col xs={24} lg={12} xl={6}>
                 <Card title="成本" size="small">
-                  <Statistic title="花费" value={data?.cost.cost ?? 0} precision={4} prefix="$" />
+                  <Statistic title="花费" value={data?.cost.cost ?? 0} precision={4} prefix="¥" />
                   <Row gutter={16} style={{ marginTop: 8 }}>
                     <Col span={12}><Text type="secondary">入 tokens </Text><Text>{data?.cost.input_tokens ?? 0}</Text></Col>
                     <Col span={12}><Text type="secondary">出 tokens </Text><Text>{data?.cost.output_tokens ?? 0}</Text></Col>
@@ -154,11 +171,32 @@ export default function AiMetricsPage() {
                     { title: '首字(ms)', dataIndex: 'avg_ttft_ms', key: 'ttft' },
                     { title: 'tokens/s', dataIndex: 'tokens_per_s', key: 'tps', render: (v: number | null) => v ?? '-' },
                     { title: '出 tokens', dataIndex: 'output_tokens', key: 'out' },
-                    { title: '花费($)', dataIndex: 'cost', key: 'cost', render: (v: number) => v.toFixed(4) },
+                    { title: '花费(¥)', dataIndex: 'cost', key: 'cost', render: (v: number) => v.toFixed(4) },
                   ]}
                 />
               ) : (
                 <Empty description="该时间窗口内还没有已采集的 LLM 调用。发几条对话/跑条流水线后刷新即可。" />
+              )}
+            </Card>
+
+            {/* 按流水线阶段明细 */}
+            <Card title={`按阶段明细 · 近 ${data.window_hours} 小时`} size="small" style={{ marginTop: 16 }}>
+              {data.speed.by_stage.length ? (
+                <Table<StageRow>
+                  rowKey="stage"
+                  size="small"
+                  pagination={false}
+                  dataSource={data.speed.by_stage}
+                  columns={[
+                    { title: '阶段', dataIndex: 'stage', key: 'stage' },
+                    { title: '调用', dataIndex: 'calls', key: 'calls', sorter: (a, b) => a.calls - b.calls },
+                    { title: '成功率', dataIndex: 'success_rate', key: 'success_rate', render: (v: number | null) => v == null ? '-' : <Tag color={scoreColor(v)}>{v}%</Tag> },
+                    { title: '均延迟(ms)', dataIndex: 'avg_latency_ms', key: 'avg', sorter: (a, b) => a.avg_latency_ms - b.avg_latency_ms },
+                    { title: 'P95(ms)', dataIndex: 'p95_ms', key: 'p95', sorter: (a, b) => a.p95_ms - b.p95_ms },
+                  ]}
+                />
+              ) : (
+                <Empty description="还没有带阶段归因的调用（跑一条流水线即可看到各阶段延迟）。" />
               )}
             </Card>
           </>

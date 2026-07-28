@@ -439,6 +439,32 @@ async def ai_metrics(
             "output_tokens": out_tok,
             "cost": round(cost, 4),
         })
+    # 按流水线阶段的速度明细（stage 由 pipeline_context(stage=...) 归因）
+    stage_q = text("""
+        SELECT stage,
+            COUNT(*) AS calls,
+            COUNT(*) FILTER (WHERE success = 1) AS ok,
+            COALESCE(AVG(latency_ms), 0) AS avg_latency,
+            COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms), 0) AS p95
+        FROM llm_usage_log
+        WHERE create_time >= :since
+          AND (tenant_id = :tid OR tenant_id IS NULL)
+          AND latency_ms IS NOT NULL AND stage IS NOT NULL
+        GROUP BY stage
+        ORDER BY avg_latency DESC
+    """)
+    srows = (await db.execute(stage_q, {"since": since_ms, "tid": tid})).mappings().all()
+    by_stage = [
+        {
+            "stage": r["stage"],
+            "calls": int(r["calls"] or 0),
+            "success_rate": round(int(r["ok"] or 0) / int(r["calls"] or 1) * 100, 1) if r["calls"] else None,
+            "avg_latency_ms": round(float(r["avg_latency"] or 0), 1),
+            "p95_ms": round(float(r["p95"]), 1),
+        }
+        for r in srows
+    ]
+
     overall_lat = (tot_sum_lat / tot_calls) if tot_calls else 0
     speed = {
         "overall": {
@@ -451,6 +477,7 @@ async def ai_metrics(
             "cost": round(tot_cost, 4),
         },
         "by_model": sorted(by_model, key=lambda x: x["calls"], reverse=True),
+        "by_stage": by_stage,
     }
 
     # 准确率 / 生成效果（golden case 评审通过率与均分）
@@ -473,11 +500,33 @@ async def ai_metrics(
         "avg_score": avg_score,
     }
 
+    # 幻觉：从 eval_run.judgment 里抽 hallucination_score 聚合（终态自动评审写入）
+    hal_q = text("""
+        SELECT judgment FROM eval_run
+        WHERE status = 'judged' AND update_time >= :since
+          AND tenant_id = :tid AND is_deleted = 0
+    """)
+    hal_rows = (await db.execute(hal_q, {"since": since_ms, "tid": tid})).scalars().all()
+    hal_scores: list = []
+    for j in hal_rows:
+        try:
+            jd = json.loads(j) if j else {}
+        except Exception:  # noqa: BLE001
+            jd = {}
+        s = jd.get("hallucination_score")
+        if isinstance(s, (int, float)):
+            hal_scores.append(s)
+    hallucination = {
+        "judged": len(hal_scores),
+        "avg_score": round(sum(hal_scores) / len(hal_scores), 1) if hal_scores else None,
+    }
+
     return {"code": 200, "message": "查询成功", "data": {
         "window_hours": hours,
         "speed": speed,
         "accuracy": accuracy,
         "quality": {"avg_score": avg_score, "judged": judged},
+        "hallucination": hallucination,
         "cost": {
             "input_tokens": tot_in,
             "output_tokens": tot_out,

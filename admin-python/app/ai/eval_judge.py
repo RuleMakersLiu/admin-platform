@@ -306,12 +306,21 @@ async def judge_output_vision(
 
 def build_hallucination_prompt(requirement: Any, output: str) -> str:
     """构造幻觉/事实一致性评审 prompt（纯函数）。"""
-    return f"""你是严格的「事实一致性」审查官。判断【产物】中是否存在【需求】未支撑的虚构内容，例如：
-- 引用不存在的 API / 第三方库 / import
-- 编造的函数 / 类 / 字段 / 类型
-- 虚构的配置项 / 文件路径 / URL / 环境变量
-- 与需求无关或无中生有的功能声明
-只判「是否虚构 / 可证伪」，不判代码风格或功能完整度。
+    return f"""你是严格的「事实一致性」审查官。判断【产物】中是否存在【确证虚构】的内容——即明显无中生有、
+与需求矛盾、或引用了根本不存在的东西。只判「是否虚构 / 可证伪」，不判代码风格或功能完整度。
+
+【确证虚构】才标记，例如：
+- import 了不存在的第三方库/包（拼写错的、编造的）
+- 编造的不存在的函数名 / 类名 / 类型
+- 与需求明显矛盾、无中生有的功能
+- 虚构的、明显不可能的配置值 / URL
+
+【不要标记】以下都是正常的、不算虚构：
+- 标准库或常见库的 import（vue / react / axios / element-ui / antd / vuex / vue-router 等）
+- 项目内其它文件会实现的 forward reference（如 `@/utils/request`、`@/api/login`、api 端点路径 `/api/auth/login`）
+  —— 这些是正常的模块引用与接口约定，不是虚构
+- 正常的占位 / 示例数据 / mock
+拿不准是否虚构时，倾向【不标记】（宁缺毋滥）。
 
 【需求】
 {_stringify(requirement)}
@@ -321,15 +330,15 @@ def build_hallucination_prompt(requirement: Any, output: str) -> str:
 
 严格按以下 JSON 输出（仅输出 JSON，不要额外文字）：
 {{
-  "hallucination_score": "0-100 整数，100=完全有据无虚构，0=大量虚构",
-  "flagged": [{{"claim": "虚构点原文片段", "why": "为何判定为虚构/无支撑"}}],
+  "hallucination_score": "0-100 的整数（必须有）。100=完全有据无虚构，0=大量确证虚构。无虚构给 100。",
+  "flagged": [{{"claim": "虚构点原文片段", "why": "为何判定为确证虚构"}}],
   "summary": "总体说明"
 }}
-要求：flagged 只列确有虚构嫌疑的条目，没有就给空数组。"""
+要求：flagged 只列【确证虚构】的条目，没有就给空数组；hallucination_score 必须是整数。"""
 
 
 def parse_hallucination(content: Any) -> dict:
-    """解析幻觉评审输出。"""
+    """解析幻觉评审输出。score 缺失时按 flagged 条数兜底推导。"""
     empty = {"hallucination_score": None, "flagged": [], "summary": ""}
     if not content:
         return {**empty, "error": "空响应"}
@@ -351,6 +360,10 @@ def parse_hallucination(content: Any) -> dict:
                 "claim": item.get("claim", ""),
                 "why": item.get("why", ""),
             })
+
+    # 模型偶尔漏给整数分：按确证虚构条数兜底（每条 -12，地板 0）
+    if score is None:
+        score = max(0, 100 - len(flagged) * 12)
 
     return {
         "hallucination_score": score,
