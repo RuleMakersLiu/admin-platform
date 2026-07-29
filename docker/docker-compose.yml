@@ -36,6 +36,25 @@ services:
     networks:
       - admin-network
 
+  # MySQL 沙箱（4b-2 后端 runner 用）：生成的 Spring Boot 工程连接此实例起服务做活契约审查。
+  # 按需启动：docker compose up -d mysql-sandbox（不影响其他服务）。
+  mysql-sandbox:
+    image: mysql:8.0
+    container_name: admin-mysql-sandbox
+    restart: unless-stopped
+    ports:
+      - "43306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: sandbox_root
+      MYSQL_DATABASE: sandbox_db
+      MYSQL_USER: sandbox
+      MYSQL_PASSWORD: sandbox
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql_sandbox_data:/var/lib/mysql
+    networks:
+      - admin-network
+
   # Python后端服务 (AI Agents)
   admin-python:
     build:
@@ -143,6 +162,7 @@ volumes:
   redis_data:
   deploy_data:
   pipeline_data:
+  mysql_sandbox_data:
 
 networks:
   admin-network:

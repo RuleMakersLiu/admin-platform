@@ -533,6 +533,52 @@ async def proxy_sandbox_preview(pipeline_id: str, path: str = "", request: Reque
     return response
 
 
+# ==================== 后端沙箱 runner（4b-2）====================
+
+@router.post("/pipeline/{pipeline_id}/backend-sandbox/start")
+async def start_backend_sandbox(pipeline_id: str):
+    """构建并启动生成的 Java 后端工程（本地 mvn + java -jar），返回直连 backend_url。
+
+    前置：admin-python 镜像含 JDK+maven（rebuild 后），mysql-sandbox 服务可达。
+    """
+    import os
+    from app.services.backend_runner_service import backend_runner_service
+
+    try:
+        status = await pipeline_manager.get_pipeline_status(pipeline_id)
+        workspace = status.get("workspace_path", "")
+        if not workspace or not os.path.isdir(workspace):
+            raise RuntimeError("流水线工作区不存在（后端代码未生成）")
+        result = await backend_runner_service.start(pipeline_id, workspace)
+        return {"code": 200, "message": "后端沙箱已启动", "data": result}
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Failed to start backend sandbox")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/pipeline/{pipeline_id}/backend-sandbox/status")
+async def backend_sandbox_status(pipeline_id: str):
+    from app.services.backend_runner_service import backend_runner_service
+
+    return {
+        "code": 200,
+        "data": {
+            "running": backend_runner_service.is_running(pipeline_id),
+            "backend_url": backend_runner_service.direct_backend_url(pipeline_id),
+        },
+    }
+
+
+@router.post("/pipeline/{pipeline_id}/backend-sandbox/stop")
+async def stop_backend_sandbox(pipeline_id: str):
+    from app.services.backend_runner_service import backend_runner_service
+
+    stopped = await backend_runner_service.stop(pipeline_id)
+    return {"code": 200, "message": "已停止" if stopped else "未在运行", "data": {"stopped": stopped}}
+
+
 @router.get("/pipeline/{pipeline_id}/artifact")
 async def get_pipeline_artifact(pipeline_id: str):
     """Get the first-version deliverables: preview, frontend files, API contract, and review."""

@@ -97,6 +97,16 @@ class Settings(BaseSettings):
     pipeline_preview_port_start: int = 43000
     pipeline_preview_port_end: int = 43100
     pipeline_preview_api_proxy: str = ""
+    # 后端沙箱 runner（4b-2）：生成的 Java Spring Boot 工程本地构建+起的端口段
+    pipeline_backend_host: str = "127.0.0.1"
+    pipeline_backend_port_start: int = 44000
+    pipeline_backend_port_end: int = 44100
+    # 后端沙箱连接的 MySQL（compose 的 mysql-sandbox 服务；admin-python 同网络可达）
+    pipeline_backend_mysql_host: str = "mysql-sandbox"
+    pipeline_backend_mysql_port: int = 3306
+    pipeline_backend_mysql_user: str = "sandbox"
+    pipeline_backend_mysql_password: str = "sandbox"
+    pipeline_backend_mysql_root_password: str = "sandbox_root"
     pipeline_execution_concurrency: int = 8
     pipeline_execution_queue_limit: int = 50
     deploy_service_url: str = "http://admin-deploy:8083"
