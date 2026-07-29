@@ -65,6 +65,20 @@ def test_derive_dedup():
     assert len(pw) == 1, exps
 
 
+def test_derive_login_page_does_not_expect_crud():
+    # 登录页（系统名含"管理"）不该期望数据表格/查询/新增/表单——修复正确登录页 E2E 误报
+    exps = e2e_expectations.derive_e2e_expectations("后台管理系统的登录页，用户名密码登录")
+    kinds = {e["kind"] for e in exps}
+    labels = {e["label"] for e in exps}
+    assert "password" in kinds  # 登录页该有密码框
+    assert "登录提交按钮" in labels
+    assert "table" not in kinds
+    assert "数据表格" not in labels
+    assert "新增按钮" not in labels
+    assert "查询/搜索按钮" not in labels
+    assert "表单输入控件" not in labels
+
+
 # ---------- _e2e_browser_check_issues fail-open + 透传 ----------
 
 def test_e2e_check_failopen_on_harness_error(monkeypatch):

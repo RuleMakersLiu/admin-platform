@@ -10,10 +10,12 @@ Vue2 + antd-vue，并用全局桩替代 import（vuex mapState/mapActions、@/ut
 是「视觉评测」(A4) 的渲染层——让评测覆盖「真正渲染出来对不对」，正面回答
 「什么需要人眼？」：截图 + 视觉模型，全自动，不需要人眼。
 """
+import asyncio
 import base64
 import logging
 import re
 import tempfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
 
@@ -166,18 +168,69 @@ try {{
 """.replace("<script_replaced>", "</script><script>")
 
 
+async def _render_url_screenshot(
+    url: str,
+    viewport_width: int = 1280,
+    viewport_height: int = 800,
+) -> Optional[dict]:
+    """对真实 URL 截图：轮询 body 有内容后截图。页面空白返回 None（调用方回退渲染桩）。"""
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        return None
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        try:
+            ctx = await browser.new_context(
+                viewport={"width": viewport_width, "height": viewport_height},
+                device_scale_factor=1,
+            )
+            page = await ctx.new_page()
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            # 真实 vite dev server：轮询挂载后有内容（非 CDN 桩的同步挂载）
+            body_text = ""
+            for _ in range(24):
+                body_text = await page.evaluate("() => (document.body?.innerText || '').trim()")
+                if body_text:
+                    break
+                await asyncio.sleep(0.5)
+            await asyncio.sleep(1.0)  # 等 antd 组件渲染稳定
+            if not body_text:
+                return None  # 空白 → 回退桩
+            png = await page.screenshot(type="png", full_page=False)
+        finally:
+            await browser.close()
+    data_uri = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+    return {"png_bytes": png, "data_uri": data_uri, "preview_url": url}
+
+
 async def render_pipeline_screenshot(
     pipeline_id: str,
+    live_url: Optional[str] = None,
     viewport_width: int = 1280,
     viewport_height: int = 800,
 ) -> dict:
-    """渲染流水线产物并截图。返回 ``{png_bytes, data_uri, preview_url, source}``；失败抛 RuntimeError。"""
+    """渲染流水线产物并截图。返回 ``{png_bytes, data_uri, preview_url, source}``；失败抛 RuntimeError。
+
+    优先用 ``live_url``（真实沙箱预览，能渲染 Vue3+antd 等桩渲染不了的页）；失败/空白
+    回退 Vue2 渲染桩（``build_renderable_html``）。桩对 Vue3 页返回 None → 抛 RuntimeError，
+    eval 据此写 vision_error 静默跳过。
+    """
+    # 1) 优先真实预览 URL
+    if live_url:
+        shot = await _render_url_screenshot(live_url, viewport_width, viewport_height)
+        if shot is not None:
+            shot["source"] = "live"
+            logger.info("vision_eval: 真实预览截图 pipeline=%s size=%dB", pipeline_id, len(shot["png_bytes"]))
+            return shot
+        logger.info("vision_eval: 真实预览为空，回退渲染桩 pipeline=%s", pipeline_id)
+
+    # 2) 回退 Vue2 渲染桩
     try:
         from playwright.async_api import async_playwright
     except ImportError as exc:
         raise RuntimeError("admin-python 容器未安装 playwright，无法进行视觉评测") from exc
 
-    from app.ai.eval_judge import extract_pipeline_output  # noqa: F401  (kept for parity)
     from app.ai.flow_manager import pipeline_manager
 
     artifact = await pipeline_manager.get_pipeline_artifact(pipeline_id)
@@ -192,8 +245,6 @@ async def render_pipeline_screenshot(
     tmp = Path(tempfile.mkstemp(suffix=".html", prefix="eval_render_")[1])
     tmp.write_text(html, encoding="utf-8")
     url = tmp.as_uri()
-
-    import asyncio
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -224,8 +275,50 @@ async def render_pipeline_screenshot(
         pass
 
     data_uri = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
-    logger.info("vision_eval: 截图完成 pipeline=%s size=%dB errs=%s", pipeline_id, len(png), errs[:3])
+    logger.info("vision_eval: 桩截图完成 pipeline=%s size=%dB errs=%s", pipeline_id, len(png), errs[:3])
     return {"png_bytes": png, "data_uri": data_uri, "preview_url": url, "source": "harness"}
+
+
+@asynccontextmanager
+async def acquire_live_preview(pipeline_id: str):
+    """为 eval 视觉/E2E 提供真实沙箱预览 URL 的上下文管理器，yield 出 URL 或 None。
+
+    - 预览已在跑 → 复用（不归本上下文管，退出不停，避免打断用户正在看的预览）。
+    - 未在跑 → start 一个（180s 超时兜底），退出时 stop（用完即停，不占端口）。
+    - 任何失败 → yield None（调用方回退渲染桩，绝不让视觉/E2E 阻塞 eval）。
+    """
+    from app.services.sandbox_preview_service import sandbox_preview_service
+
+    owned = False
+    url = sandbox_preview_service.direct_preview_url(pipeline_id)
+    if not url:
+        try:
+            from app.ai.flow_manager import pipeline_manager
+
+            artifact = await pipeline_manager.get_pipeline_artifact(pipeline_id)
+            project_info = await pipeline_manager.get_pipeline_frontend_project_snapshot(pipeline_id)
+            await asyncio.wait_for(
+                sandbox_preview_service.start(
+                    pipeline_id,
+                    artifact.get("frontend_files") or {},
+                    project_info,
+                ),
+                timeout=180,
+            )
+            url = sandbox_preview_service.direct_preview_url(pipeline_id)
+            owned = bool(url)
+        except asyncio.TimeoutError:
+            logger.info("eval live preview start 超时，回退渲染桩 pipeline=%s", pipeline_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("eval live preview start 失败，回退渲染桩 pipeline=%s: %s", pipeline_id, str(exc)[:200])
+    try:
+        yield url
+    finally:
+        if owned:
+            try:
+                await sandbox_preview_service.stop(pipeline_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("eval live preview stop 失败 pipeline=%s: %s", pipeline_id, exc)
 
 
 async def _expectation_present(page, exp: dict) -> bool:
@@ -259,20 +352,62 @@ async def _expectation_present(page, exp: dict) -> bool:
     return False
 
 
+async def _assert_loaded_page(page, expectations: list, screenshot: bool = True) -> dict:
+    """在已加载页面上做渲染完整性 + 期望控件断言（stub / 真实预览共用）。
+
+    harness 挂载失败置 window.__MOUNT_FAILED（Vue2/Vue3 通用）。挂载成功但无内容/控件
+    → 桩不兼容（模块化 UI 库未注册），放行不升级。返回 ``{passed, issues, data_uri, [stub_incompatible]}``。
+    """
+    data_uri = None
+    mount_failed = await page.evaluate("() => !!window.__MOUNT_FAILED")
+    body_text = await page.evaluate("() => (document.body?.innerText || '').trim()")
+    interactive_n = await page.evaluate(
+        "() => document.querySelectorAll("
+        "'button,input,textarea,select,a,[role=button]'"
+        ").length"
+    )
+
+    # 挂载成功但无内容/控件：多为 antd-vue v3+/element 等模块化 UI 库未注册
+    # （桩无全局构建可用，组件渲染成未知标签）→ 无法判定，放行不升级。
+    if not mount_failed and len(body_text) == 0 and interactive_n == 0:
+        return {"passed": True, "issues": [], "data_uri": data_uri, "stub_incompatible": True}
+
+    issues: list = []
+    if mount_failed:
+        issues.append("页面渲染失败：组件在浏览器中挂载报错（可能缺依赖或脚本错误）")
+    elif interactive_n == 0 and len(body_text) < 5:
+        issues.append("页面没有任何可交互控件（按钮/输入/链接）")
+
+    for exp in expectations or []:
+        if not isinstance(exp, dict):
+            continue
+        if not await _expectation_present(page, exp):
+            issues.append(f"缺少期望控件：{exp.get('label', exp)}")
+
+    if screenshot:
+        try:
+            png = await page.screenshot(type="png", full_page=False)
+            data_uri = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+        except Exception as e:  # noqa: BLE001
+            logger.debug("e2e screenshot failed: %s", e)
+    return {"passed": not issues, "issues": issues, "data_uri": data_uri}
+
+
 async def run_e2e_assertions(
     code_files: dict,
     expectations: list,
     viewport_width: int = 1280,
     viewport_height: int = 800,
     screenshot: bool = True,
+    live_url: Optional[str] = None,
 ) -> dict:
     """对生成的 code_files 做真实浏览器 E2E 断言。
 
-    复用 build_renderable_html 构造可渲染页面 + Playwright launch/file:// 加载，然后：
-    1. 渲染完整性：#app 有内容、无 mount 失败报错、有可交互控件；
+    加载方式：优先 ``live_url``（真实沙箱预览，能断言 Vue3+antd 等桩渲染不了的页），
+    否则用 ``build_renderable_html`` 渲染桩 file:// 加载。然后：
+    1. 渲染完整性：无 mount 失败、有可交互控件；
     2. 期望控件：逐条断言 expectations 在 DOM 中存在。
-    返回 ``{"passed", "issues", "data_uri"}``。harness 自身故障时 fail-open
-    （passed=True + harness_error），绝不因浏览器问题阻塞流水线。
+    返回 ``{"passed", "issues", "data_uri"}``。harness 故障 fail-open（passed=True + harness_error）。
     """
     try:
         from playwright.async_api import async_playwright
@@ -280,19 +415,22 @@ async def run_e2e_assertions(
         logger.warning("e2e: playwright 未安装，跳过浏览器断言: %s", exc)
         return {"passed": True, "issues": [], "data_uri": None, "harness_error": "playwright missing"}
 
-    html = build_renderable_html(code_files or {})
-    if not html:
-        # 构造不出可渲染 HTML（非 .vue/.html 主页面）→ 无法做浏览器断言，放行
-        return {"passed": True, "issues": [], "data_uri": None, "harness_error": "no renderable html"}
-
-    import asyncio
     import tempfile
 
-    tmp = Path(tempfile.mkstemp(suffix=".html", prefix="e2e_render_")[1])
-    try:
+    # 加载目标：优先真实预览 URL，否则渲染桩 file://
+    tmp: Optional[Path] = None
+    if live_url:
+        url = live_url
+    else:
+        html = build_renderable_html(code_files or {})
+        if not html:
+            # 构造不出可渲染 HTML（非 .vue/.html 主页面）→ 无法做浏览器断言，放行
+            return {"passed": True, "issues": [], "data_uri": None, "harness_error": "no renderable html"}
+        tmp = Path(tempfile.mkstemp(suffix=".html", prefix="e2e_render_")[1])
         tmp.write_text(html, encoding="utf-8")
         url = tmp.as_uri()
 
+    try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             try:
@@ -303,66 +441,35 @@ async def run_e2e_assertions(
                 page = await ctx.new_page()
                 page_errors: list = []
                 page.on("pageerror", lambda e: page_errors.append(str(e)))
-                for _ in range(20):
-                    try:
-                        await page.goto(url, wait_until="networkidle", timeout=20000)
-                        break
-                    except Exception:
-                        await asyncio.sleep(1)
+                if live_url:
+                    # 真实 vite dev server：domcontentloaded + 轮询挂载后有内容
+                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    for _ in range(24):
+                        body_text = await page.evaluate("() => (document.body?.innerText || '').trim()")
+                        if body_text:
+                            break
+                        await asyncio.sleep(0.5)
+                    await asyncio.sleep(1.0)
                 else:
-                    await page.goto(url, wait_until="domcontentloaded", timeout=20000)
-                await asyncio.sleep(2.5)  # 等 Vue 挂载 + 组件渲染
-
-                # --- 渲染完整性：harness 挂载失败会置 window.__MOUNT_FAILED（Vue2/Vue3 通用）---
-                data_uri = None
-                mount_failed = await page.evaluate("() => !!window.__MOUNT_FAILED")
-                body_text = await page.evaluate(
-                    "() => (document.body?.innerText || '').trim()"
-                )
-                interactive_n = await page.evaluate(
-                    "() => document.querySelectorAll("
-                    "'button,input,textarea,select,a,[role=button]'"
-                    ").length"
-                )
-
-                # 挂载成功但无内容/控件：多为 antd-vue v3+/element 等模块化 UI 库未注册
-                # （桩无全局构建可用，组件渲染成未知标签）→ 桩不兼容，无法判定，放行不升级。
-                if not mount_failed and len(body_text) == 0 and interactive_n == 0:
-                    return {
-                        "passed": True, "issues": [], "data_uri": data_uri,
-                        "stub_incompatible": True,
-                    }
-
-                issues: list = []
-                if mount_failed:
-                    issues.append("页面渲染失败：组件在浏览器中挂载报错（可能缺依赖或脚本错误）")
-                elif interactive_n == 0 and len(body_text) < 5:
-                    issues.append("页面没有任何可交互控件（按钮/输入/链接）")
-
-                # --- 期望控件断言（仅对桩成功渲染出内容的页面有意义）---
-                for exp in expectations or []:
-                    if not isinstance(exp, dict):
-                        continue
-                    if not await _expectation_present(page, exp):
-                        issues.append(f"缺少期望控件：{exp.get('label', exp)}")
-
-                data_uri = None
-                if screenshot:
-                    try:
-                        png = await page.screenshot(type="png", full_page=False)
-                        data_uri = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
-                    except Exception as e:  # noqa: BLE001
-                        logger.debug("e2e screenshot failed: %s", e)
+                    for _ in range(20):
+                        try:
+                            await page.goto(url, wait_until="networkidle", timeout=20000)
+                            break
+                        except Exception:
+                            await asyncio.sleep(1)
+                    else:
+                        await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                    await asyncio.sleep(2.5)  # 等 Vue 挂载 + 组件渲染
+                return await _assert_loaded_page(page, expectations, screenshot)
             finally:
                 await browser.close()
     except Exception as e:  # noqa: BLE001 - harness 故障必须 fail-open
         logger.warning("e2e: 浏览器断言 harness 故障，放行: %s", e)
         return {"passed": True, "issues": [], "data_uri": None, "harness_error": str(e)[:200]}
     finally:
-        try:
-            tmp.unlink()
-        except Exception:
-            pass
-
-    return {"passed": not issues, "issues": issues, "data_uri": data_uri}
+        if tmp:
+            try:
+                tmp.unlink()
+            except Exception:
+                pass
 

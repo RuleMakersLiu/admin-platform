@@ -33,6 +33,11 @@ def derive_e2e_expectations(user_request: str, page_design_doc: str = "") -> Lis
 
     exps: List[Dict[str, Any]] = []
 
+    # auth 页（登录/注册）：单页，只期望密码框 + 提交按钮。
+    # 注意：CRUD/表单期望只在「非 auth 页」追加——登录页是单页渲染，不该有数据表格/查询/新增
+    # （否则会把"管理系统"这类系统名里的"管理"误判成列表页，让正确的登录页 E2E 误报失败）。
+    is_auth = _has(text, r"登录|登陆|login|sign\s*in|注册|register|sign\s*up")
+
     if _has(text, r"登录|登陆|login|sign\s*in"):
         exps.append({"label": "密码输入框", "kind": "password"})
         exps.append({"label": "登录提交按钮", "kind": "button_text",
@@ -43,20 +48,21 @@ def derive_e2e_expectations(user_request: str, page_design_doc: str = "") -> Lis
         exps.append({"label": "注册提交按钮", "kind": "button_text",
                      "texts": ["注册", "Register", "Sign up", "提交", "确定"]})
 
-    if _has(text, r"列表|表格|查询|管理|list|table|search"):
-        exps.append({"label": "数据表格", "kind": "table"})
-        exps.append({"label": "查询/搜索按钮", "kind": "button_text",
-                     "texts": ["查询", "搜索", "Search", "筛选", "查找"]})
+    if not is_auth:
+        if _has(text, r"列表|表格|查询|管理|list|table|search"):
+            exps.append({"label": "数据表格", "kind": "table"})
+            exps.append({"label": "查询/搜索按钮", "kind": "button_text",
+                         "texts": ["查询", "搜索", "Search", "筛选", "查找"]})
 
-    if _has(text, r"新增|添加|创建|新建|add|create"):
-        exps.append({"label": "新增按钮", "kind": "button_text",
-                     "texts": ["新增", "添加", "创建", "新建", "New", "Add", "Create"]})
+        if _has(text, r"新增|添加|创建|新建|add|create"):
+            exps.append({"label": "新增按钮", "kind": "button_text",
+                         "texts": ["新增", "添加", "创建", "新建", "New", "Add", "Create"]})
 
-    # 表单/配置类页面（团购配置、商品、订单、设置等）→ 期望有表单输入 + 提交/保存按钮
-    if _has(text, r"团购|商品|订单|表单|配置|设置|form|config|product|order|group\s*buy"):
-        exps.append({"label": "表单输入控件", "kind": "has_input"})
-        exps.append({"label": "提交/保存按钮", "kind": "button_text",
-                     "texts": ["提交", "保存", "确定", "Submit", "Save", "保存"]})
+        # 表单/配置类页面（团购配置、商品、订单、设置等）→ 期望有表单输入 + 提交/保存按钮
+        if _has(text, r"团购|商品|订单|表单|配置|设置|form|config|product|order|group\s*buy"):
+            exps.append({"label": "表单输入控件", "kind": "has_input"})
+            exps.append({"label": "提交/保存按钮", "kind": "button_text",
+                         "texts": ["提交", "保存", "确定", "Submit", "Save", "保存"]})
 
     # 去重（同 kind+label）
     seen = set()

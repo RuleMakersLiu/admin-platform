@@ -1504,18 +1504,7 @@ server.listen(port, host, () => {
                 if existing.get("ready") and existing.get("files_hash") == files_hash:
                     self._issue_token(existing)
                     return self._response(pipeline_id, existing)
-                existing["process"].terminate()
-                try:
-                    await asyncio.wait_for(existing["process"].wait(), timeout=5)
-                except asyncio.TimeoutError:
-                    existing["process"].kill()
-                    await existing["process"].wait()
-                output_task = existing.get("output_task")
-                if output_task:
-                    output_task.cancel()
-                async with self._process_lock:
-                    if self._processes.get(pipeline_id) is existing:
-                        self._processes.pop(pipeline_id, None)
+                await self._teardown_entry(pipeline_id, existing)
 
             port: Optional[int] = None
             async with self._start_semaphore:
@@ -1644,11 +1633,7 @@ server.listen(port, host, () => {
             try:
                 await self._wait_ready(pipeline_id, port, preview_path=entry.get("html_preview_path") or "")
             except Exception:
-                if entry["process"].returncode is None:
-                    entry["process"].terminate()
-                async with self._process_lock:
-                    if self._processes.get(pipeline_id) is entry:
-                        self._processes.pop(pipeline_id, None)
+                await self._teardown_entry(pipeline_id, entry)
                 raise
             entry["ready"] = True
             return self._response(pipeline_id, entry)
@@ -1690,6 +1675,43 @@ server.listen(port, host, () => {
     def is_running(self, pipeline_id: str) -> bool:
         entry = self._processes.get(pipeline_id)
         return bool(entry and entry["process"].returncode is None)
+
+    def direct_preview_url(self, pipeline_id: str) -> Optional[str]:
+        """已就绪预览的容器内直连 vite URL（http://host:port/preview_base），未就绪返回 None。
+
+        供 eval 视觉截图 / E2E 直接命中真实渲染页（绕过 Vue2 渲染桩）。
+        """
+        entry = self._processes.get(pipeline_id)
+        if not entry or entry["process"].returncode is not None or not entry.get("ready"):
+            return None
+        return f"http://{settings.pipeline_preview_host}:{entry['port']}{self._preview_base(pipeline_id)}"
+
+    async def _teardown_entry(self, pipeline_id: str, entry: Dict[str, Any]) -> None:
+        """终止预览进程、等待退出、取消输出 drain、从注册表摘除（start/stop 共用）。"""
+        process = entry.get("process")
+        if process and process.returncode is None:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+        output_task = entry.get("output_task")
+        if output_task:
+            output_task.cancel()
+        async with self._process_lock:
+            if self._processes.get(pipeline_id) is entry:
+                self._processes.pop(pipeline_id, None)
+
+    async def stop(self, pipeline_id: str) -> bool:
+        """终止该流水线的运行中预览。返回是否确实停掉了一个活预览（供 eval 用完即停）。"""
+        pipeline_lock = await self._pipeline_lock(pipeline_id)
+        async with pipeline_lock:
+            entry = self._processes.get(pipeline_id)
+            if not entry or entry["process"].returncode is not None:
+                return False
+            await self._teardown_entry(pipeline_id, entry)
+            return True
 
     def generated_preview_path(self, pipeline_id: str) -> str:
         entry = self._processes.get(pipeline_id) or {}

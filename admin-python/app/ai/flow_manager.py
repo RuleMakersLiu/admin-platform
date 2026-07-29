@@ -1334,6 +1334,26 @@ def _format_eval_report(structured: Dict[str, Any]) -> str:
         if vision.get("summary"):
             lines.append(f"\n> {vision['summary']}")
 
+    if structured.get("e2e_error"):
+        lines.append("")
+        lines.append(f"## E2E 浏览器断言　（跳过：{str(structured['e2e_error'])[:60]}）")
+    elif isinstance(structured.get("e2e"), dict):
+        e2e = structured["e2e"]
+        passed = e2e.get("passed")
+        mark = "✅ 通过" if passed else "❌ 未通过"
+        src = e2e.get("source") or ""
+        src_label = "（真实预览）" if src == "live" else "（渲染桩）"
+        lines.append("")
+        lines.append(f"## E2E 浏览器断言　{mark}{src_label}")
+        issues = e2e.get("issues") or []
+        if issues:
+            for iss in issues:
+                lines.append(f"- ⚠️ {iss}")
+        elif not e2e.get("note"):
+            lines.append("- 渲染完整，期望控件齐全")
+        if e2e.get("note"):
+            lines.append(f"\n> {e2e['note']}")
+
     return "\n".join(lines)
 
 
@@ -5905,12 +5925,17 @@ class DevPipelineManager:
     async def _run_eval_stage(
         self, pipe: "DevPipeline", stages: Dict[str, Any], emit: Optional[Any] = None
     ) -> Tuple[str, Dict[str, Any]]:
-        """eval 阶段：对流水线产物做自评（功能 judge + 幻觉 + 可选视觉），返回 (markdown, structured)。
+        """eval 阶段：对流水线产物做自评（功能 judge + 幻觉 + 视觉 + E2E），返回 (markdown, structured)。
 
-        无 golden case 时用 DEFAULT_EVAL_CRITERIA；视觉评审 best-effort（渲染桩对 Vue3/antd
-        页常不可用 → 静默跳过）。评测本身不重试、不阻塞报告——失败由调用方兜底为 error 文案。
+        视觉截图与 E2E 断言共用一个真实沙箱预览（生命周期：start→截图/断言→stop），失败各自
+        best-effort 回退 Vue2 渲染桩并静默。无 golden case 时用 DEFAULT_EVAL_CRITERIA。
+        评测本身不重试、不阻塞报告——失败由调用方兜底为 error 文案。
         """
-        from app.ai.eval_judge import extract_pipeline_output, judge_output, judge_hallucination
+        from app.ai.eval_judge import extract_pipeline_output, judge_output, judge_hallucination, judge_output_vision
+        from app.services.vision_eval_service import (
+            acquire_live_preview, render_pipeline_screenshot, run_e2e_assertions,
+        )
+        from app.ai.e2e_expectations import derive_e2e_expectations
 
         output = extract_pipeline_output(pipe.stages_data)
         requirement = (pipe.user_request or "").strip() or stages.get("requirement", {}).get("output", "")
@@ -5922,16 +5947,41 @@ class DevPipelineManager:
         except Exception as exc:  # noqa: BLE001
             structured["hallucination"] = {"error": str(exc)[:200]}
 
-        # 视觉评审 best-effort：渲染桩对 Vue3/antd 页常不可用 → 静默跳过（写 vision_error）
+        # 视觉 + E2E：同一真实沙箱预览上跑（用完即停），各自 best-effort 静默
         try:
-            from app.services.vision_eval_service import render_pipeline_screenshot
-            from app.ai.eval_judge import judge_output_vision
-            shot = await render_pipeline_screenshot(pipe.pipeline_id)
-            structured["vision"] = await judge_output_vision(
-                {"request": requirement}, shot["data_uri"], DEFAULT_EVAL_CRITERIA
-            )
-        except Exception as exc:  # noqa: BLE001
-            structured["vision_error"] = str(exc)[:200]
+            artifact = await self.get_pipeline_artifact(pipe.pipeline_id)
+            frontend_files = artifact.get("frontend_files") or {}
+        except Exception:  # noqa: BLE001
+            frontend_files = {}
+        page_design_doc = stages.get("page_design", {}).get("output") or ""
+        expectations = derive_e2e_expectations(requirement, page_design_doc)
+
+        async with acquire_live_preview(pipe.pipeline_id) as live_url:
+            # 视觉评审：真实预览截图（live）优先，失败回退渲染桩
+            try:
+                shot = await render_pipeline_screenshot(pipe.pipeline_id, live_url=live_url)
+                structured["vision"] = await judge_output_vision(
+                    shot["data_uri"], {"request": requirement}, DEFAULT_EVAL_CRITERIA
+                )
+            except Exception as exc:  # noqa: BLE001
+                structured["vision_error"] = str(exc)[:200]
+
+            # E2E 断言：同一预览上跑（几乎零额外成本）；live 不可用回退桩
+            try:
+                e2e = await run_e2e_assertions(
+                    frontend_files, expectations, screenshot=False, live_url=live_url,
+                )
+                structured["e2e"] = {
+                    "passed": e2e.get("passed"),
+                    "issues": e2e.get("issues") or [],
+                    "source": "live" if live_url else "stub",
+                }
+                if e2e.get("harness_error"):
+                    structured["e2e"]["note"] = e2e["harness_error"]
+                elif e2e.get("stub_incompatible"):
+                    structured["e2e"]["note"] = "桩不兼容（模块化 UI 库未注册），跳过"
+            except Exception as exc:  # noqa: BLE001
+                structured["e2e_error"] = str(exc)[:200]
 
         return _format_eval_report(structured), structured
 
