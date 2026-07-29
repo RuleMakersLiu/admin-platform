@@ -81,7 +81,7 @@ class SandboxPreviewService:
                 return port
         raise RuntimeError("没有可用的预览端口")
 
-    def _safe_write_files(self, root: Path, files: Dict[str, str]) -> None:
+    def _safe_write_files(self, root: Path, files: Dict[str, str], skip_patches: bool = False) -> None:
         root.mkdir(parents=True, exist_ok=True)
         root_resolved = root.resolve()
         for raw_path, content in files.items():
@@ -97,10 +97,11 @@ class SandboxPreviewService:
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
             text_content = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False, indent=2)
-            if safe_path.startswith("src/views/") and safe_path.endswith(".vue"):
-                text_content = self._patch_generated_vue_content(text_content)
-            if safe_path.startswith("src/") and safe_path.endswith((".js", ".ts", ".jsx", ".tsx")):
-                text_content = self._patch_generated_script_content(text_content)
+            if not skip_patches:
+                if safe_path.startswith("src/views/") and safe_path.endswith(".vue"):
+                    text_content = self._patch_generated_vue_content(text_content)
+                if safe_path.startswith("src/") and safe_path.endswith((".js", ".ts", ".jsx", ".tsx")):
+                    text_content = self._patch_generated_script_content(text_content)
             target.write_text(text_content, encoding="utf-8")
 
     def _patch_generated_script_content(self, content: str) -> str:
@@ -609,83 +610,339 @@ server.listen(port, host, () => {
                 return path.relative_to(root / "src").as_posix()
         return None
 
-    def _ensure_vite_scaffold(self, root: Path, pipeline_id: str) -> None:
-        has_vue = any(path.suffix.lower() == ".vue" for path in root.rglob("*"))
-        has_react = any(path.suffix.lower() in (".tsx", ".jsx") for path in root.rglob("*"))
+    @staticmethod
+    def _rel(path: str) -> str:
+        return str(path).replace("\\", "/").lstrip("/")
 
-        if not (root / "package.json").exists():
-            if has_vue:
-                package = {
-                    "scripts": {"dev": "vite"},
-                    "dependencies": {
-                        "@vitejs/plugin-vue2": "^2.3.3",
-                        "ant-design-vue": "^1.7.8",
-                        "vite": "^5.4.21",
-                        "vue": "^2.7.16",
-                    },
-                    "devDependencies": {},
-                }
-            else:
-                package = {
-                    "scripts": {"dev": "vite"},
-                    "dependencies": {
-                        "@vitejs/plugin-react": "^4.3.4",
-                        "antd": "^5.27.0",
-                        "vite": "^5.4.21",
-                        "react": "^18.3.1",
-                        "react-dom": "^18.3.1",
-                        "lucide-react": "^0.468.0",
-                    },
-                    "devDependencies": {"typescript": "^5.9.3"},
-                }
-            (root / "package.json").write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
+    def _generated_code_is_vue3(self, files: Dict[str, str]) -> bool:
+        blob = "\n".join(c for c in files.values() if isinstance(c, str))
+        return ("v-model:" in blob) or ("<script setup" in blob) or ("defineComponent" in blob)
 
-        if not (root / "index.html").exists():
-            (root / "index.html").write_text(
-                '<!doctype html><html><head><meta charset="UTF-8" />'
-                '<meta name="viewport" content="width=device-width, initial-scale=1.0" />'
-                f"<title>{pipeline_id} preview</title></head><body><div id=\"root\"></div>"
-                '<script type="module" src="/src/main.jsx"></script></body></html>',
-                encoding="utf-8",
-            )
+    def _looks_like_web_vue(self, files: Dict[str, str]) -> bool:
+        """无项目快照时，是否值得脚手架 vite 宿主（web Vue，排除 miniapp/原生小程序）。"""
+        if self._miniapp_html_preview_content(files):
+            return False
+        return any(self._rel(p).endswith(".vue") for p in files)
 
-        if has_vue and not (root / "vite.config.js").exists():
-            (root / "vite.config.js").write_text(
-                "import { defineConfig } from 'vite'\n"
-                "import vue from '@vitejs/plugin-vue2'\n\n"
-                "export default defineConfig({ plugins: [vue()] })\n",
-                encoding="utf-8",
-            )
+    def _pick_main_vue_path(self, files: Dict[str, str]) -> Optional[str]:
+        """从生成文件选主页面 .vue（优先 src/views/**/index.vue，再任意 views/pages 下 .vue）。"""
+        best: Optional[tuple] = None  # (score, rel_path)
+        for raw_path in files:
+            p = self._rel(raw_path)
+            if not p.endswith(".vue"):
+                continue
+            score = 0
+            if "index.vue" in p:
+                score += 10
+            if "views/" in p or "pages/" in p:
+                score += 5
+            if best is None or score > best[0]:
+                best = (score, p)
+        return best[1] if best else None
 
-        src = root / "src"
-        src.mkdir(exist_ok=True)
-        if has_vue and not any((src / name).exists() for name in ("main.js", "main.ts")):
-            component = self._detect_first_component(root, (".vue",)) or "App.vue"
-            if not (src / component).exists():
-                (src / "App.vue").write_text("<template><div id=\"preview-root\">Preview</div></template>\n", encoding="utf-8")
-                component = "App.vue"
-            (src / "main.js").write_text(
-                "import Vue from 'vue'\n"
-                "import Antd from 'ant-design-vue'\n"
-                "import 'ant-design-vue/dist/antd.css'\n"
-                f"import App from './{component}'\n\n"
-                "Vue.use(Antd)\nnew Vue({ render: h => h(App) }).$mount('#root')\n",
-                encoding="utf-8",
+    # 生成代码常用 npm 依赖的版本映射（脚手架 package.json 用；未命中用 "*" 让 npm 解析）
+    NPM_VERSIONS_VUE3 = {
+        "vue": "^3.4.38", "vue-router": "^4.4.0", "pinia": "^2.2.0", "vuex": "^4.1.0",
+        "ant-design-vue": "^4.2.3", "@ant-design/icons-vue": "^7.0.1",
+        "axios": "^1.7.0", "echarts": "^5.5.0", "moment": "^2.30.1", "dayjs": "^1.11.0",
+        "lodash-es": "^4.17.21", "qs": "^6.13.0",
+    }
+    NPM_VERSIONS_VUE2 = {
+        "vue": "^2.7.16", "vue-router": "^3.6.5", "vuex": "^3.6.2",
+        "ant-design-vue": "^1.7.8", "axios": "^1.7.0", "echarts": "^5.5.0",
+        "moment": "^2.30.1", "lodash-es": "^4.17.21", "qs": "^6.13.0",
+    }
+
+    def _scan_npm_deps(self, files: Dict[str, str], version_map: Dict[str, str]) -> Dict[str, str]:
+        """扫描生成代码的 npm import（非 @/、非相对），按 version_map 补依赖（未命中用 *）。"""
+        deps: Dict[str, str] = {}
+        for content in files.values():
+            if not isinstance(content, str):
+                continue
+            for m in re.finditer(r"""from\s+['"]([a-zA-Z@][^'"]+)['"]""", content):
+                spec = m.group(1)
+                if spec.startswith("@/") or spec.startswith(".") or spec.startswith("/"):
+                    continue
+                name = spec if spec.startswith("@") else spec.split("/")[0]
+                if spec.startswith("@") and "/" in spec:
+                    name = "/".join(spec.split("/")[:2])
+                if name == "vue" or name.startswith("@vitejs"):
+                    continue
+                deps.setdefault(name, version_map.get(name, "*"))
+        return deps
+
+    def _scan_style_preprocessors(self, files: Dict[str, str]) -> Dict[str, str]:
+        """扫描 <style lang=...>，返回需要的 CSS 预处理器（less/sass/stylus）及版本。"""
+        blob = "\n".join(c for c in files.values() if isinstance(c, str))
+        needed: Dict[str, str] = {}
+        if re.search(r'<style[^>]*lang\s*=\s*["\']less["\']', blob):
+            needed["less"] = "^4.2.0"
+        if re.search(r'<style[^>]*lang\s*=\s*["\'](scss|sass)["\']', blob):
+            needed["sass"] = "^1.77.0"
+        if re.search(r'<style[^>]*lang\s*=\s*["\']stylus["\']', blob):
+            needed["stylus"] = "^0.63.0"
+        return needed
+
+    def _ensure_vite_scaffold(self, root: Path, pipeline_id: str, frontend_files: Optional[Dict[str, str]] = None) -> None:
+        """无项目快照时，从生成的 frontend_files 脚手架最小 vite 宿主（Vue3/Vue2/React 分流）。
+
+        在 ``_safe_write_files`` 之前调用，故 root 为空——框架/主组件一律从 frontend_files 检测，
+        不能 rglob root（那是旧死代码的 bug）。Vue3 用 vue@3+ant-design-vue@4+@vitejs/plugin-vue，
+        让真实生成的 antd 页（v-model:value、<script setup>）能编译渲染。
+        """
+        files = frontend_files or {}
+        is_vue3 = self._generated_code_is_vue3(files)
+        has_vue = is_vue3 or any(self._rel(p).endswith(".vue") for p in files)
+        has_react = (not has_vue) and any(self._rel(p).endswith((".tsx", ".jsx")) for p in files)
+
+        (root / "src").mkdir(parents=True, exist_ok=True)
+        if is_vue3:
+            self._scaffold_vue3_host(root, pipeline_id, files)
+        elif has_vue:
+            self._scaffold_vue2_host(root, pipeline_id, files)
+        elif has_react:
+            self._scaffold_react_host(root, pipeline_id, files)
+
+    def _scaffold_vue3_host(self, root: Path, pipeline_id: str, files: Dict[str, str]) -> None:
+        main_path = self._pick_main_vue_path(files) or "src/App.vue"
+        rel = main_path[len("src/"):] if main_path.startswith("src/") else main_path  # 相对 src/ 的导入路径
+        deps = {
+            "vue": self.NPM_VERSIONS_VUE3["vue"],
+            "ant-design-vue": self.NPM_VERSIONS_VUE3["ant-design-vue"],
+        }
+        deps.update(self._scan_npm_deps(files, self.NPM_VERSIONS_VUE3))
+        package = {
+            "name": f"preview-{pipeline_id}",
+            "scripts": {"dev": "vite", "build": "vite build"},
+            "dependencies": deps,
+            "devDependencies": {
+                "@vitejs/plugin-vue": "^5.1.4",
+                "vite": "^5.4.21",
+                "typescript": "^5.6.3",
+                **self._scan_style_preprocessors(files),
+            },
+        }
+        (root / "package.json").write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
+        # 函数式 defineConfig，便于 _patch_vite_preview_config 注入 base/port/host
+        (root / "vite.config.js").write_text(
+            "import { defineConfig } from 'vite'\n"
+            "import vue from '@vitejs/plugin-vue'\n"
+            "import path from 'path'\n\n"
+            "export default defineConfig(() => {\n"
+            "  return {\n"
+            "    plugins: [vue()],\n"
+            "    resolve: { alias: { '@': path.resolve(__dirname, './src') } },\n"
+            "    define: { 'process.env': {} },\n"
+            "    server: { host: '0.0.0.0' },\n"
+            "  }\n"
+            "})\n",
+            encoding="utf-8",
+        )
+        (root / "index.html").write_text(
+            '<!doctype html><html><head><meta charset="UTF-8" />'
+            '<meta name="viewport" content="width=device-width, initial-scale=1.0" />'
+            f"<title>{pipeline_id} preview</title>"
+            "<style>html,body{margin:0;padding:0;}</style></head><body>"
+            '<div id="app"></div>'
+            '<script type="module" src="/src/main.ts"></script></body></html>',
+            encoding="utf-8",
+        )
+        (root / "src" / "main.ts").write_text(
+            "import { createApp } from 'vue'\n"
+            "import Antd from 'ant-design-vue'\n"
+            "import 'ant-design-vue/dist/reset.css'\n"
+            f"import App from './{rel}'\n\n"
+            "const app = createApp(App)\n"
+            "app.use(Antd)\n"
+            "app.mount('#app')\n",
+            encoding="utf-8",
+        )
+
+    def _scaffold_vue2_host(self, root: Path, pipeline_id: str, files: Dict[str, str]) -> None:
+        main_path = self._pick_main_vue_path(files) or "src/App.vue"
+        rel = main_path[len("src/"):] if main_path.startswith("src/") else main_path
+        deps = {
+            "vue": self.NPM_VERSIONS_VUE2["vue"],
+            "ant-design-vue": self.NPM_VERSIONS_VUE2["ant-design-vue"],
+        }
+        deps.update(self._scan_npm_deps(files, self.NPM_VERSIONS_VUE2))
+        package = {
+            "name": f"preview-{pipeline_id}",
+            "scripts": {"dev": "vite"},
+            "dependencies": deps,
+            "devDependencies": {"@vitejs/plugin-vue2": "^2.3.3", "vite": "^5.4.21"},
+        }
+        (root / "package.json").write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
+        (root / "vite.config.js").write_text(
+            "import { defineConfig } from 'vite'\n"
+            "import vue from '@vitejs/plugin-vue2'\n"
+            "import path from 'path'\n\n"
+            "export default defineConfig(() => {\n"
+            "  return { plugins: [vue()], resolve: { alias: { '@': path.resolve(__dirname, './src') } }, define: { 'process.env': {} }, server: { host: '0.0.0.0' } }\n"
+            "})\n",
+            encoding="utf-8",
+        )
+        (root / "index.html").write_text(
+            '<!doctype html><html><head><meta charset="UTF-8" />'
+            f"<title>{pipeline_id} preview</title></head><body>"
+            '<div id="app"></div>'
+            '<script type="module" src="/src/main.js"></script></body></html>',
+            encoding="utf-8",
+        )
+        (root / "src" / "main.js").write_text(
+            "import Vue from 'vue'\n"
+            "import Antd from 'ant-design-vue'\n"
+            "import 'ant-design-vue/dist/antd.css'\n"
+            f"import App from './{rel}'\n\n"
+            "Vue.use(Antd)\nnew Vue({ render: h => h(App) }).$mount('#app')\n",
+            encoding="utf-8",
+        )
+
+    def _scaffold_react_host(self, root: Path, pipeline_id: str, files: Dict[str, str]) -> None:
+        package = {
+            "name": f"preview-{pipeline_id}",
+            "scripts": {"dev": "vite"},
+            "dependencies": {
+                "@vitejs/plugin-react": "^4.3.4",
+                "antd": "^5.27.0",
+                "vite": "^5.4.21",
+                "react": "^18.3.1",
+                "react-dom": "^18.3.1",
+            },
+            "devDependencies": {"typescript": "^5.9.3"},
+        }
+        (root / "package.json").write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
+        (root / "index.html").write_text(
+            '<!doctype html><html><head><meta charset="UTF-8" />'
+            f"<title>{pipeline_id} preview</title></head><body>"
+            '<div id="root"></div>'
+            '<script type="module" src="/src/main.jsx"></script></body></html>',
+            encoding="utf-8",
+        )
+        (root / "src" / "main.jsx").write_text(
+            "import React from 'react'\n"
+            "import { createRoot } from 'react-dom/client'\n"
+            "import App from './App.jsx'\n\n"
+            "createRoot(document.getElementById('root')).render(<App />)\n",
+            encoding="utf-8",
+        )
+
+    # ---- import shim：为生成代码引用但未生成的 @/ 模块写最小 ESM 桩 ----
+
+    def _write_import_shims(self, root: Path, files: Dict[str, str]) -> None:
+        """扫描生成代码的 @/ 引用，对未生成的模块/资源在 src/ 对应路径写 ESM 桩。
+
+        - 模块：按代码里实际用到的命名导入生成对应 no-op 导出（解决 ``import { getToken }``
+          这类命名导入；ESM 无法代理任意命名导出，必须照单生成）。
+        - 资源（.png/.svg/.css 等）：写占位文件让 vite 按 asset 解析。
+        生成的 @/api/* 本就在 files 里，经 @→src alias 自然解析。
+        """
+        generated = {self._rel(p) for p in files}
+
+        def resolves(spec_rel: str) -> bool:
+            cands = []
+            for prefix in ("src/", ""):
+                base = prefix + spec_rel
+                cands.extend([base, base + ".js", base + ".ts", base + ".jsx", base + ".tsx",
+                              base + "/index.js", base + "/index.ts"])
+            return any(c in generated for c in cands)
+
+        module_clauses, asset_specs = self._collect_at_references(files)
+
+        for spec in sorted(module_clauses):
+            spec_rel = self._rel(spec[2:])
+            if resolves(spec_rel):
+                continue
+            target_rel = spec_rel if spec_rel.endswith((".js", ".ts", ".vue")) else spec_rel + ".js"
+            target = root / "src" / target_rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(self._module_shim_content(spec, module_clauses[spec]), encoding="utf-8")
+
+        for spec in sorted(asset_specs):
+            spec_rel = self._rel(spec[2:])
+            if resolves(spec_rel):
+                continue
+            self._write_asset_placeholder(root, spec_rel)
+
+    def _collect_at_references(self, files: Dict[str, str]) -> tuple:
+        """解析所有 @/ 引用，返回 (module_clauses, asset_specs)。
+
+        module_clauses: {spec: {'named': set, 'default': bool, 'namespace': bool}}
+        asset_specs: set of @/ 资源 spec（图片/svg/css）
+        """
+        asset_exts = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp", ".svg", ".css")
+        module_clauses: Dict[str, Dict[str, Any]] = {}
+        asset_specs: set = set()
+        for content in files.values():
+            if not isinstance(content, str):
+                continue
+            for m in re.finditer(r"""import\s+([^'";]+?)\s+from\s+['"](@/[^'"]+)['"]""", content):
+                clause, spec = m.group(1).strip(), m.group(2)
+                if spec.lower().endswith(asset_exts):
+                    asset_specs.add(spec)
+                    continue
+                entry = module_clauses.setdefault(spec, {"named": set(), "default": False, "namespace": False})
+                if clause.startswith("*") and " as " in clause:
+                    entry["namespace"] = True
+                if re.match(r"^[A-Za-z_$][\w$]*", clause):
+                    entry["default"] = True  # DefaultName 或 DefaultName, { ... }
+                for nb in re.finditer(r"\{([^}]*)\}", clause):
+                    for item in nb.group(1).split(","):
+                        name = item.strip()
+                        if not name or name == "*":
+                            continue
+                        name = name.split(" as ")[0].strip()
+                        if name:
+                            entry["named"].add(name)
+            for m in re.finditer(r"""(?:src|href)\s*=\s*['"](@/[^'"]+)['"]""", content):
+                asset_specs.add(m.group(1))
+            for m in re.finditer(r"""url\(['"]?(@/[^'")]+)['"]?\)""", content):
+                asset_specs.add(m.group(1))
+        return module_clauses, asset_specs
+
+    def _write_asset_placeholder(self, root: Path, spec_rel: str) -> None:
+        lower = spec_rel.lower()
+        target = root / "src" / spec_rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if lower.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp")):
+            import base64
+            target.write_bytes(base64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+            ))
+        else:  # svg / css
+            target.write_text("/* sandbox placeholder */\n", encoding="utf-8")
+
+    def _module_shim_content(self, spec: str, clause: Dict[str, Any]) -> str:
+        # 语义桩：@/utils/request（默认 request + get/post 等）
+        if spec.endswith("utils/request") or spec == "@/utils/request":
+            return (
+                "/* sandbox shim: @/utils/request — 预览用 mock */\n"
+                "export default async function request(config){ return { code: 200, data: {}, message: 'ok' } }\n"
+                "export const get = async () => ({ code: 200, data: {} })\n"
+                "export const post = async () => ({ code: 200, data: {} })\n"
+                "export const put = async () => ({ code: 200, data: {} })\n"
+                "export const del = async () => ({ code: 200, data: {} })\n"
+                "export const DELETE = async () => ({ code: 200, data: {} })\n"
             )
-            index = root / "index.html"
-            index.write_text(index.read_text(encoding="utf-8").replace("/src/main.jsx", "/src/main.js"), encoding="utf-8")
-        elif has_react and not any((src / name).exists() for name in ("main.jsx", "main.tsx")):
-            component = self._detect_first_component(root, (".tsx", ".jsx", ".js")) or "App.jsx"
-            if not (src / component).exists():
-                (src / "App.jsx").write_text("export default function App(){return <div id=\"preview-root\">Preview</div>}\n", encoding="utf-8")
-                component = "App.jsx"
-            (src / "main.jsx").write_text(
-                "import React from 'react'\n"
-                "import { createRoot } from 'react-dom/client'\n"
-                f"import App from './{component}'\n\n"
-                "createRoot(document.getElementById('root')).render(<App />)\n",
-                encoding="utf-8",
-            )
+        # 语义桩：@/components（常见占位组件 + 扫描到的命名导出）
+        if spec == "@/components" or spec.startswith("@/components"):
+            named = sorted(clause.get("named", set()))
+            names = sorted(set(["STable", "JDictSelectTag", "JUpload", "JEditor"]) | set(named))
+            lines = ["/* sandbox shim: @/components */", "import { defineComponent } from 'vue'",
+                     "const Stub = defineComponent({ name: 'Stub', render: () => null })"]
+            lines += [f"export const {n} = Stub" for n in names]
+            lines.append("export default { " + ", ".join(names) + " }")
+            return "\n".join(lines) + "\n"
+        # 通用桩：按代码实际用到的命名导入生成 no-op 导出 + 默认空对象
+        named = sorted(clause.get("named", set()))
+        lines = [f"/* sandbox shim: {spec} */"]
+        for n in named:
+            lines.append(f"export const {n} = () => {{}}")
+        if clause.get("default") or clause.get("namespace") or not named:
+            lines.append("const __default = {}")
+            lines.append("export default __default")
+        return "\n".join(lines) + "\n"
+
 
     async def _wait_ready(self, pipeline_id: str, port: int, timeout: int = 120, preview_path: str = "") -> None:
         deadline = time.time() + timeout
@@ -1266,25 +1523,41 @@ server.listen(port, host, () => {
                 try:
                     preview_fallback_reason = ""
                     html_preview_path = ""
+                    scaffolded = False
                     try:
                         await self._prepare_project_root(root, project_info)
                     except Exception as exc:
-                        fallback_path = self._prepare_miniapp_html_fallback_root(
-                            root,
-                            frontend_files,
-                            project_info,
-                            str(exc),
-                        )
-                        if not fallback_path:
-                            raise
-                        preview_fallback_reason = str(exc)
-                        html_preview_path = fallback_path
-                        logger.warning(
-                            "Falling back to miniapp HTML preview for %s after project clone/setup failed: %s",
-                            pipeline_id,
-                            exc,
-                        )
-                    self._safe_write_files(root, frontend_files)
+                        # 无项目快照：web Vue → 从生成代码脚手架 vite 宿主（走正常 install+dev 流程，
+                        # is_html_fallback=False）；脚手架不适用或失败 → 退回 miniapp HTML fallback。
+                        scaffolded = False
+                        if self._looks_like_web_vue(frontend_files):
+                            try:
+                                self._ensure_vite_scaffold(root, pipeline_id, frontend_files)
+                                self._write_import_shims(root, frontend_files)
+                                logger.info("Scaffolded vite host from generated code for %s", pipeline_id)
+                                scaffolded = True
+                            except Exception as scaffold_exc:  # noqa: BLE001
+                                logger.warning(
+                                    "vite scaffold from generated code failed for %s: %s",
+                                    pipeline_id, scaffold_exc,
+                                )
+                        if not scaffolded:
+                            fallback_path = self._prepare_miniapp_html_fallback_root(
+                                root,
+                                frontend_files,
+                                project_info,
+                                str(exc),
+                            )
+                            if not fallback_path:
+                                raise
+                            preview_fallback_reason = str(exc)
+                            html_preview_path = fallback_path
+                            logger.warning(
+                                "Falling back to miniapp HTML preview for %s after project clone/setup failed: %s",
+                                pipeline_id,
+                                exc,
+                            )
+                    self._safe_write_files(root, frontend_files, skip_patches=scaffolded)
                     html_preview_path = html_preview_path or self._install_miniapp_html_preview(root, frontend_files)
                     uniapp_preview_path = self._install_uniapp_monorepo_preview_files(root, frontend_files)
                     generated_preview_path = self._install_generated_vue_routes(root, frontend_files)
