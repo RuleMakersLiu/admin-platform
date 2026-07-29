@@ -246,6 +246,8 @@ src/main/java/com/{company}/{module}/
     └── MyBatisPlusConfig.java        (分页插件配置)
 ```
 
+> 注：`pom.xml`（Spring Boot parent + Web + MyBatis-Plus + MySQL）、`@SpringBootApplication` 主类、`src/main/resources/application.yml`（MySQL datasource）由平台在代码写盘后**自动脚手架兜底**，LLM 只需专注业务代码（Controller/Service/Mapper/Entity/DTO/VO + 建表 SQL）。若 LLM 已生成这些文件则跳过。
+
 **Controller 规范:**
 ```java
 @RestController

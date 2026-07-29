@@ -23,6 +23,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.agents import AgentService
+from app.ai import backend_scaffold  # noqa: F401  (注册 backend_scaffolder skill)
 from app.ai.pipeline_skills import ensure_workspace, get_workspace_path
 from app.ai.skills import SkillStatus, skill_registry
 from app.ai.model_router import pipeline_context
@@ -5334,6 +5335,29 @@ class DevPipelineManager:
                 pipe.stages_data = json.dumps(stages, ensure_ascii=False)
                 pipe.update_time = int(time.time() * 1000)
                 await session.flush()
+
+            # backend_dev：兜底补齐 Java 工程脚手架（pom.xml/主类/application.yml），
+            # 确保产物可独立构建（在 dockerfile_generator 之前，pom.xml 探测 Java 才生效）
+            if stage_key == "backend_dev":
+                try:
+                    scaffold = await skill_registry.execute(
+                        "backend_scaffolder",
+                        workspace_path=workspace,
+                        code_files=parsed["code_files"],
+                    )
+                    if scaffold.status.value == "completed" and scaffold.output:
+                        injected = scaffold.output.get("injected_files") or {}
+                        if injected:
+                            parsed["code_files"].update(injected)
+                            stages[stage_key].setdefault("skill_result", {})["backend_scaffold"] = {
+                                "injected": list(injected.keys()),
+                                "base_package": scaffold.output.get("base_package"),
+                            }
+                            pipe.stages_data = json.dumps(stages, ensure_ascii=False)
+                            pipe.update_time = int(time.time() * 1000)
+                            await session.flush()
+                except Exception as exc:  # noqa: BLE001 — 脚手架失败不阻塞流水线
+                    logger.warning("backend_scaffolder failed (non-fatal): %s", exc)
 
             # 也生成 Dockerfile
             await skill_registry.execute("dockerfile_generator", workspace_path=workspace)

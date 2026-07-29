@@ -591,12 +591,8 @@ async def deployer(
     base_url = settings.deploy_service_url
     project_code = f"pipeline-{pipeline_id[:12]}" if pipeline_id else "pipeline-unknown"
 
-    # 检测项目类型
-    project_type = "python"
-    if os.path.isfile(os.path.join(workspace_path, "go.mod")):
-        project_type = "go"
-    elif os.path.isfile(os.path.join(workspace_path, "package.json")):
-        project_type = "node"
+    # 检测项目类型（含 Java Spring Boot，避免误判为 python）
+    project_type = _detect_project_type(workspace_path)
 
     dockerfile = _generate_dockerfile(project_type)
     image_name = project_code
@@ -663,11 +659,46 @@ async def deployer(
             return {"deploy_status": "failed", "error": str(e)}
 
 
+def _detect_project_type(workspace_path: str) -> str:
+    """从工作区文件探测项目类型：java > go > node > python。
+
+    修复「Java 工程因无 go.mod/package.json 被误判为 python」的 bug——识别 pom.xml/build.gradle
+    及 src/main/java 下的 .java。
+    """
+    root = workspace_path or ""
+    if os.path.isfile(os.path.join(root, "pom.xml")) or os.path.isfile(os.path.join(root, "build.gradle")):
+        return "java"
+    try:
+        if any(Path(root).glob("src/main/java/**/*.java")):
+            return "java"
+    except (OSError, ValueError):
+        pass
+    if os.path.isfile(os.path.join(root, "go.mod")):
+        return "go"
+    if os.path.isfile(os.path.join(root, "package.json")):
+        return "node"
+    return "python"
+
+
 def _generate_dockerfile(project_type: str) -> str:
     templates = {
         "python": "FROM python:3.11-slim\nWORKDIR /app\nCOPY . .\nRUN pip install -e .\nCMD [\"python\", \"-m\", \"app.main\"]",
         "node": "FROM node:20-alpine\nWORKDIR /app\nCOPY . .\nRUN npm install && npm run build\nCMD [\"npm\", \"start\"]",
         "go": "FROM golang:1.21-alpine\nWORKDIR /app\nCOPY . .\nRUN go build -o main ./cmd\nCMD [\"./main\"]",
+        # Java Spring Boot：多阶段构建（maven 打包 → JRE 运行），端口 8080
+        "java": (
+            "FROM maven:3.9-eclipse-temurin-17 AS build\n"
+            "WORKDIR /app\n"
+            "COPY pom.xml .\n"
+            "RUN mvn -B dependency:go-offline\n"
+            "COPY src ./src\n"
+            "RUN mvn -B package -DskipTests\n"
+            "FROM eclipse-temurin:17-jre\n"
+            "WORKDIR /app\n"
+            "COPY --from=build /app/target/*.jar app.jar\n"
+            "EXPOSE 8080\n"
+            'ENTRYPOINT ["java", "-jar", "app.jar"]\n'
+        ),
     }
     return templates.get(project_type, templates["python"])
 
@@ -691,12 +722,7 @@ def _generate_dockerfile(project_type: str) -> str:
 )
 async def dockerfile_generator(workspace_path: str, project_type: str = None, **kwargs) -> Dict[str, Any]:
     if not project_type:
-        if os.path.isfile(os.path.join(workspace_path, "go.mod")):
-            project_type = "go"
-        elif os.path.isfile(os.path.join(workspace_path, "package.json")):
-            project_type = "node"
-        else:
-            project_type = "python"
+        project_type = _detect_project_type(workspace_path)
 
     dockerfile = _generate_dockerfile(project_type)
     # 写入工作区
