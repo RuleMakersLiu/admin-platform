@@ -579,6 +579,10 @@ export default function ProductPortal() {
             setCurrentStage(event.stage)
             appendLog(`等待人工确认：${stageLabel[event.stage] || event.stage}`)
           }
+          if (event.type === 'needs_human' && event.stage) {
+            setCurrentStage(event.stage)
+            appendLog(`待人工处理：${stageLabel[event.stage] || event.stage}`)
+          }
           if (event.type === 'failed') {
             appendLog(`失败：${event.error || '未知错误'}`)
           }
@@ -587,6 +591,10 @@ export default function ProductPortal() {
 
         const nextStatus = await refreshOutputs(id)
         setCurrentStage(nextStatus.current_stage || currentStage)
+        if (nextStatus.status === 'needs_human') {
+          setRunning(false)
+          return nextStatus
+        }
         if (nextStatus.status === 'waiting_confirm') {
           setAwaitingConfirmStage(nextStatus.current_stage)
           setRunning(false)
@@ -666,6 +674,46 @@ export default function ProductPortal() {
       }
     } catch (error: unknown) {
       message.error(error instanceof Error ? error.message : '继续执行失败')
+      setRunning(false)
+    }
+  }
+
+  const resumeFromHuman = async (action: 'approve' | 'retry') => {
+    if (!pipelineId) return
+    setRunning(true)
+    try {
+      const note = feedback.trim()
+      const result = await pipelineApi.resume(pipelineId, action, action === 'retry' ? note : '')
+      if (result?.error) {
+        throw new Error(result.error)
+      }
+      const targetStage = status?.current_stage || currentStage
+      appendLog(`${action === 'approve' ? '人工通过并继续' : '带反馈重新生成'}：${stageLabel[targetStage] || targetStage}`)
+      if (action === 'retry') {
+        appendLog(`修改意见：${note || '请按人工反馈调整后重新生成。'}`)
+        if (targetStage) {
+          setStreamOutputByStage((prev) => ({ ...prev, [targetStage]: '' }))
+        }
+        setArtifact((prev) => prev ? { ...prev, frontend_files: {}, preview_html: '', preview_url: '' } : prev)
+      }
+      setFeedback('')
+      if (result?.status === 'completed') {
+        setRunning(false)
+        await refreshOutputs(pipelineId)
+        loadPipelines()
+        message.success('流水线执行完成')
+        return
+      }
+      const finalStatus = await runUntilPause(pipelineId, action === 'retry' ? note : '')
+      if (finalStatus?.status === 'failed') {
+        message.error('流水线执行失败，请查看阶段输出')
+      } else if (finalStatus?.status === 'completed') {
+        message.success('流水线执行完成')
+      } else if (finalStatus?.status === 'needs_human') {
+        message.warning('该阶段再次重试耗尽，仍需人工处理')
+      }
+    } catch (error: unknown) {
+      message.error(error instanceof Error ? error.message : '恢复执行失败')
       setRunning(false)
     }
   }
@@ -1069,6 +1117,9 @@ export default function ProductPortal() {
   const isViewingPipeline = Boolean(pipelineId && status)
   const pendingPageSelection = getPendingPageSelection()
   const pendingPageCandidates = pendingPageSelection?.candidates || []
+  const humanReview = (status?.stages?.[activeStage] as {
+    human_review?: { reason?: string; issues?: string[]; file_hints?: string[]; retry_count?: number }
+  })?.human_review
   const stageItems = stageOrder.map((stage) => {
     const stageStatus = status?.stages?.[stage]?.status
     return {
@@ -1383,6 +1434,48 @@ export default function ProductPortal() {
                         </Button>
                       </Space>
                     )}
+                  </Space>
+                }
+              />
+            )}
+            {status?.status === 'needs_human' && (
+              <Alert
+                type="error"
+                showIcon
+                style={{ marginTop: 16 }}
+                message={`阶段「${stageLabel[activeStage] || activeStage}」自动重试耗尽，待人工处理${humanReview?.retry_count ? `（已重试 ${humanReview.retry_count} 次）` : ''}`}
+                description={
+                  <Space direction="vertical" style={{ width: '100%' }}>
+                    {humanReview?.reason && <Text type="secondary">{humanReview.reason}</Text>}
+                    {Array.isArray(humanReview?.issues) && humanReview.issues.length > 0 && (
+                      <div style={{ fontSize: 12, color: '#b91c1c' }}>
+                        {humanReview.issues.map((issue, idx) => (
+                          <div key={idx}>• {issue}</div>
+                        ))}
+                      </div>
+                    )}
+                    {Array.isArray(humanReview?.file_hints) && humanReview.file_hints.length > 0 && (
+                      <Space wrap>
+                        <Text type="secondary" style={{ fontSize: 12 }}>涉及文件：</Text>
+                        {humanReview.file_hints.map((fileHint, idx) => (
+                          <Tag key={idx} color="gold">{fileHint}</Tag>
+                        ))}
+                      </Space>
+                    )}
+                    <TextArea
+                      rows={2}
+                      value={feedback}
+                      onChange={(event) => setFeedback(event.target.value)}
+                      placeholder="人工通过可不填；带反馈重生成请填修改意见"
+                    />
+                    <Space wrap>
+                      <Button type="primary" loading={running} onClick={() => resumeFromHuman('approve')}>
+                        人工通过并继续
+                      </Button>
+                      <Button danger icon={<ReloadOutlined />} loading={running} onClick={() => resumeFromHuman('retry')}>
+                        带反馈重新生成
+                      </Button>
+                    </Space>
                   </Space>
                 }
               />
