@@ -125,6 +125,7 @@ STAGE_DEFINITIONS = [
     {"key": "testing",        "name": "自动化测试", "agent": "QA",  "need_confirm": False},
     {"key": "commit",         "name": "代码提交",   "agent": "PJM", "need_confirm": False},
     {"key": "deploy",         "name": "部署发布",   "agent": "PJM", "need_confirm": False},
+    {"key": "eval",           "name": "自动测评",   "agent": "QA",  "need_confirm": False},
     {"key": "report",         "name": "总结报告",   "agent": "RPT", "need_confirm": False},
 ]
 
@@ -1137,12 +1138,15 @@ JSON 格式如下:
 测试:
 {{testing_output_short}}
 
+自动测评:
+{{eval_result}}
+
 请输出:
 1. 项目概况：需求目标、范围边界、参考项目、执行模式。
 2. 完成功能列表：按阶段说明已完成内容和关键产物。
 3. 技术栈总结：前端、后端/API、权限、测试、部署相关信息。
 4. 契约与字段对齐结论：接口、字段、权限、mock 与真实数据的一致性。
-5. 验证结果：测试、构建、审查、预览或部署验证的结论。
+5. 验证结果：测试、构建、审查、预览、自动测评或部署验证的结论（含自动测评分数）。
 6. 已知问题和风险：按严重程度列出影响、原因、规避或修复建议。
 7. 后续计划：按优先级列出下一步动作、责任角色和验收标准。""",
 }
@@ -1269,12 +1273,68 @@ def _render_prompt_template(template: str, context: Dict[str, Any]) -> str:
         "{{requirement_output_short}}": (prev_outputs.get("requirement", {}).get("output", "未提供") or "")[:500],
         "{{code_review_output_short}}": (prev_outputs.get("code_review", {}).get("output", "未提供") or "")[:500],
         "{{testing_output_short}}": (prev_outputs.get("testing", {}).get("output", "未提供") or "")[:500],
+        # eval 阶段自动测评结果（功能/幻觉/视觉分数），折入最终报告
+        "{{eval_result}}": (prev_outputs.get("eval", {}).get("output", None) or "自动测评未运行")[:1500],
     }
 
     result = template
     for placeholder, value in replacements.items():
         result = result.replace(placeholder, value)
     return result
+
+
+# eval 阶段默认评审标准（无 golden case 时用）
+DEFAULT_EVAL_CRITERIA = [
+    "需求覆盖：产物实现了用户需求中的核心功能点，无重大遗漏",
+    "契约完整：API 路径/方法/请求与响应字段清晰，前后端字段命名与类型对齐",
+    "代码质量：结构清晰、无明显错误、具备可编译/可运行的意图",
+    "可测试性：包含必要校验、边界处理与可验收的测试要点",
+]
+
+
+def _format_eval_report(structured: Dict[str, Any]) -> str:
+    """把 eval 阶段的 judge/幻觉/视觉结构化结果格式化为 markdown 报告。
+
+    作为 eval 阶段产物展示，并经 ``{{eval_result}}`` 折入最终报告。
+    """
+    lines = ["# 自动测评报告", ""]
+    judge = structured.get("judge") or {}
+    score = judge.get("overall_score")
+    lines.append(f"## 功能评审　总分：{score if score is not None else 'N/A'}/100")
+    for c in judge.get("per_criterion") or []:
+        if not isinstance(c, dict):
+            continue
+        mark = "✅" if c.get("passed") else "❌"
+        reason = c.get("reason", "")
+        lines.append(f"- {mark} {c.get('criterion', '')}：{c.get('score', 'N/A')}" + (f" — {reason}" if reason else ""))
+    if judge.get("summary"):
+        lines.append(f"\n> {judge['summary']}")
+    if judge.get("error"):
+        lines.append(f"\n（功能评审异常：{judge['error']}）")
+
+    halluc = structured.get("hallucination") or {}
+    hscore = halluc.get("hallucination_score")
+    lines.append("")
+    lines.append(f"## 幻觉评审　幻觉分：{hscore if hscore is not None else 'N/A'}/100")
+    flagged = halluc.get("flagged") or []
+    lines.append("虚构嫌疑：" + ("无" if not flagged else ""))
+    for f in flagged:
+        lines.append(f"- {f}")
+    if halluc.get("summary"):
+        lines.append(f"\n> {halluc['summary']}")
+
+    if structured.get("vision_error"):
+        lines.append("")
+        lines.append(f"## 视觉评审　（跳过：{str(structured['vision_error'])[:60]}）")
+    elif isinstance(structured.get("vision"), dict):
+        vision = structured["vision"]
+        vscore = vision.get("overall_score")
+        lines.append("")
+        lines.append(f"## 视觉评审　渲染分：{vscore if vscore is not None else 'N/A'}/100")
+        if vision.get("summary"):
+            lines.append(f"\n> {vision['summary']}")
+
+    return "\n".join(lines)
 
 
 def _stage_code_files_for_prompt(
@@ -5842,6 +5902,39 @@ class DevPipelineManager:
             run.update_time = int(time.time() * 1000)
         await session.commit()
 
+    async def _run_eval_stage(
+        self, pipe: "DevPipeline", stages: Dict[str, Any], emit: Optional[Any] = None
+    ) -> Tuple[str, Dict[str, Any]]:
+        """eval 阶段：对流水线产物做自评（功能 judge + 幻觉 + 可选视觉），返回 (markdown, structured)。
+
+        无 golden case 时用 DEFAULT_EVAL_CRITERIA；视觉评审 best-effort（渲染桩对 Vue3/antd
+        页常不可用 → 静默跳过）。评测本身不重试、不阻塞报告——失败由调用方兜底为 error 文案。
+        """
+        from app.ai.eval_judge import extract_pipeline_output, judge_output, judge_hallucination
+
+        output = extract_pipeline_output(pipe.stages_data)
+        requirement = (pipe.user_request or "").strip() or stages.get("requirement", {}).get("output", "")
+        structured: Dict[str, Any] = {}
+
+        structured["judge"] = await judge_output({"request": requirement}, output, DEFAULT_EVAL_CRITERIA)
+        try:
+            structured["hallucination"] = await judge_hallucination(requirement, output)
+        except Exception as exc:  # noqa: BLE001
+            structured["hallucination"] = {"error": str(exc)[:200]}
+
+        # 视觉评审 best-effort：渲染桩对 Vue3/antd 页常不可用 → 静默跳过（写 vision_error）
+        try:
+            from app.services.vision_eval_service import render_pipeline_screenshot
+            from app.ai.eval_judge import judge_output_vision
+            shot = await render_pipeline_screenshot(pipe.pipeline_id)
+            structured["vision"] = await judge_output_vision(
+                {"request": requirement}, shot["data_uri"], DEFAULT_EVAL_CRITERIA
+            )
+        except Exception as exc:  # noqa: BLE001
+            structured["vision_error"] = str(exc)[:200]
+
+        return _format_eval_report(structured), structured
+
     async def _record_eval_safe(self, pipe: "DevPipeline", stages: Dict[str, Any]) -> None:
         """Record pipeline eval in fail-soft mode (completed + failed terminal paths)."""
         try:
@@ -6010,6 +6103,39 @@ class DevPipelineManager:
 
             while True:
                 current_stage = pipe.current_stage
+
+                # ====== eval 阶段：自动测评（LLM-as-judge），写成阶段产物后推进 report ======
+                if current_stage == "eval":
+                    if not isinstance(stages.get("eval"), dict):
+                        stages["eval"] = {"stage": "eval", "agent_type": "QA", "status": "pending"}
+                    stages["eval"]["status"] = "running"
+                    stages["eval"]["started_at"] = datetime.now().isoformat()
+                    pipe.status = PipelineStatus.RUNNING.value
+                    pipe.stages_data = json.dumps(stages, ensure_ascii=False)
+                    pipe.update_time = int(time.time() * 1000)
+                    await session.commit()
+                    await emit({"type": "stage_started", "stage": "eval"})
+
+                    try:
+                        eval_md, eval_struct = await self._run_eval_stage(pipe, stages, emit)
+                    except Exception as exc:  # noqa: BLE001 — 评测失败不阻塞报告
+                        logger.warning("Pipeline %s eval 阶段评测失败，跳过: %s", pipeline_id, exc)
+                        eval_md = f"自动测评未完成：{exc}"
+                        eval_struct = {"error": str(exc)[:200]}
+
+                    stages["eval"].update({
+                        "status": "completed",
+                        "output": eval_md,
+                        "structured_output": eval_struct,
+                        "completed_at": datetime.now().isoformat(),
+                    })
+                    pipe.current_stage = "report"
+                    pipe.stages_data = json.dumps(stages, ensure_ascii=False)
+                    pipe.update_time = int(time.time() * 1000)
+                    await session.commit()
+                    await emit({"type": "stage_completed", "stage": "eval", "output": eval_md})
+                    fix_feedback = ""
+                    continue
 
                 # ====== Fan-out: frontend_dev + backend_dev 并行执行 ======
                 if current_stage == "frontend_dev" and "backend_dev" in stages \

@@ -18,6 +18,7 @@ import {
   SendOutlined,
   HistoryOutlined,
   DeleteOutlined,
+  SafetyCertificateOutlined,
 } from '@ant-design/icons'
 import type { PipelineStatus } from '@/services/pipeline'
 
@@ -40,6 +41,7 @@ export const STAGE_ICONS: Record<string, React.ReactNode> = {
   testing: <BugOutlined />,
   commit: <BranchesOutlined />,
   deploy: <RocketOutlined />,
+  eval: <SafetyCertificateOutlined />,
   report: <FileTextOutlined />,
 }
 
@@ -56,10 +58,11 @@ export const STAGE_NAMES: Record<string, string> = {
   testing: '自动化测试',
   commit: '代码提交',
   deploy: '部署发布',
+  eval: '自动测评',
   report: '总结报告',
 }
 
-export const STAGE_KEYS = ['requirement', 'page_design', 'prototype', 'delivery', 'frontend_dev', 'backend_dev', 'code_review', 'testing', 'commit', 'deploy', 'report']
+export const STAGE_KEYS = ['requirement', 'page_design', 'prototype', 'delivery', 'frontend_dev', 'backend_dev', 'code_review', 'testing', 'commit', 'deploy', 'eval', 'report']
 export const PRODUCT_STAGE_KEYS = ['requirement', 'page_design', 'prototype', 'delivery', 'code_review', 'report']
 export const LIVE_STREAM_OUTPUT_LIMIT = 60000
 export const STAGE_RENDER_OUTPUT_LIMIT = 120000
