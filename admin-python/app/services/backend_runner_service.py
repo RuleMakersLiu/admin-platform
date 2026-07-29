@@ -65,7 +65,23 @@ class BackendRunnerService:
         entry = self._processes.get(pipeline_id)
         if not entry or entry["process"].returncode is not None or not entry.get("ready"):
             return None
+        entry["last_active"] = time.time()
         return f"http://{settings.pipeline_backend_host}:{entry['port']}"
+
+    async def reap_idle(self, ttl_seconds: int) -> int:
+        """回收超过 ttl 无活动的后端沙箱进程（释放 Java 进程 + 端口），返回回收数。
+
+        防长跑泄漏：pipeline 未显式 stop 时，start 后无 direct_backend_url 查询（4c 探针）
+        超过 ttl 即由后台 reaper 自动 stop。
+        """
+        now = time.time()
+        stale = [
+            pid for pid, e in self._processes.items()
+            if e.get("ready") and now - float(e.get("last_active", 0)) > ttl_seconds
+        ]
+        for pid in stale:
+            await self.stop(pid)
+        return len(stale)
 
     # ---------------- 构建 ----------------
 
@@ -164,6 +180,7 @@ class BackendRunnerService:
                 "port": port,
                 "ready": False,
                 "root": str(root),
+                "last_active": time.time(),
             }
             async with self._lock:
                 self._processes[pipeline_id] = entry

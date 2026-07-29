@@ -57,6 +57,7 @@ class SandboxPreviewService:
         entry.setdefault("tokens", {})[token] = time.time() + self._token_ttl_seconds
         entry["token"] = token
         entry["started_at"] = int(time.time() * 1000)
+        entry["last_active"] = time.time()
         return token
 
     def _preview_root(self, pipeline_id: str) -> Path:
@@ -1618,6 +1619,7 @@ server.listen(port, host, () => {
                         "project_info": project_info,
                         "proxy_targets": proxy_targets,
                         "fallback_reason": preview_fallback_reason,
+                        "last_active": time.time(),
                     }
                     self._issue_token(entry)
                     entry["output_task"] = asyncio.create_task(self._drain_process_output(pipeline_id, process))
@@ -1713,6 +1715,20 @@ server.listen(port, host, () => {
             await self._teardown_entry(pipeline_id, entry)
             return True
 
+    async def reap_idle(self, ttl_seconds: int) -> int:
+        """回收超过 ttl 无访问的前端预览进程（释放 vite 进程 + 端口），返回回收数。
+
+        防长跑泄漏：用户停止访问（无 token 签发 / 无 proxy 请求）超过 ttl 即自动 stop。
+        """
+        now = time.time()
+        stale = [
+            pid for pid, e in self._processes.items()
+            if e.get("ready") and now - float(e.get("last_active", 0)) > ttl_seconds
+        ]
+        for pid in stale:
+            await self.stop(pid)
+        return len(stale)
+
     def generated_preview_path(self, pipeline_id: str) -> str:
         entry = self._processes.get(pipeline_id) or {}
         return str(entry.get("generated_preview_path") or "").lstrip("/")
@@ -1729,6 +1745,7 @@ server.listen(port, host, () => {
         entry = self._processes.get(pipeline_id)
         if not entry or entry["process"].returncode is not None:
             raise RuntimeError("真实预览服务未启动")
+        entry["last_active"] = time.time()
         if path.startswith("sockjs-node/"):
             target = f"http://{settings.pipeline_preview_host}:{entry['port']}{self._preview_base(pipeline_id)}{path}"
         elif path.startswith("__webpack_dev_server__/"):

@@ -107,6 +107,8 @@ class Settings(BaseSettings):
     pipeline_backend_mysql_user: str = "sandbox"
     pipeline_backend_mysql_password: str = "sandbox"
     pipeline_backend_mysql_root_password: str = "sandbox_root"
+    # 沙箱进程（前端预览 vite / 后端 java 服务）空闲多久无访问后自动 stop 释放资源（秒）
+    pipeline_sandbox_idle_ttl: int = 1800
     pipeline_execution_concurrency: int = 8
     pipeline_execution_queue_limit: int = 50
     deploy_service_url: str = "http://admin-deploy:8083"

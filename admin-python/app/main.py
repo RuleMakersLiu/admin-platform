@@ -80,6 +80,26 @@ async def _usage_flush_task():
             await asyncio.sleep(60)
 
 
+async def _sandbox_reaper_task():
+    """后台任务：周期回收空闲超时的沙箱进程（前端 vite 预览 / 后端 java 服务），
+    释放进程与端口，防止长跑泄漏（pipeline 未显式 stop 时兜底）。"""
+    from app.services.sandbox_preview_service import sandbox_preview_service
+    from app.services.backend_runner_service import backend_runner_service
+    ttl = settings.pipeline_sandbox_idle_ttl
+    while True:
+        try:
+            await asyncio.sleep(60)
+            reaped_fe = await sandbox_preview_service.reap_idle(ttl)
+            reaped_be = await backend_runner_service.reap_idle(ttl)
+            if reaped_fe or reaped_be:
+                logger.info(f"Sandbox reaper: stopped {reaped_fe} frontend + {reaped_be} backend idle process(es)")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Sandbox reaper failed: {e}")
+            await asyncio.sleep(120)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
@@ -115,12 +135,17 @@ async def lifespan(app: FastAPI):
     usage_task = asyncio.create_task(_usage_flush_task())
     logger.info("✅ LLM 用量持久化任务已启动 (每 30s)")
 
+    # 启动沙箱回收任务（每 60s，空闲超 ttl 自动 stop 释放进程/端口）
+    reaper_task = asyncio.create_task(_sandbox_reaper_task())
+    logger.info(f"✅ 沙箱回收任务已启动 (每 60s，空闲 {settings.pipeline_sandbox_idle_ttl}s 自动 stop)")
+
     yield
 
     # 关闭时
     upgrade_task.cancel()
     embedding_task.cancel()
     usage_task.cancel()
+    reaper_task.cancel()
     try:
         from app.messaging.setup import shutdown_messaging
         await shutdown_messaging()
