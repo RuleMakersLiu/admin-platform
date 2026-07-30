@@ -83,14 +83,20 @@ async def contract_prober(
     results: List[Dict[str, Any]] = []
     async with httpx.AsyncClient(timeout=10.0) as client:
         for spec in endpoints[:10]:  # 最多探 10 个接口
-            path = str(spec.get("path", "")).lstrip("/")
-            url = f"{base}/{path}"
             method = str(spec.get("method", "GET")).upper()
+            raw_path = str(spec.get("path", ""))
+            path = raw_path.lstrip("/")
+            # 防 SSRF / path 注入：path 必须相对（无 scheme/host/.. 遍历/空格/@）
+            if "://" in path or path.startswith("..") or any(c in path for c in ("@", " ")):
+                results.append({"path": raw_path, "method": method, "status": 0,
+                                "ok": False, "issue": "非法 path（SSRF 防护拒绝）"})
+                continue
+            url = f"{base}/{path}"
             try:
                 resp = await client.request(method, url)
                 results.append(_assert_response(spec, resp))
             except Exception as exc:  # noqa: BLE001
-                results.append({"path": spec.get("path", ""), "method": method,
+                results.append({"path": raw_path, "method": method,
                                 "status": 0, "ok": False, "issue": f"请求失败: {exc}"})
 
     failures = [r for r in results if not r.get("ok")]

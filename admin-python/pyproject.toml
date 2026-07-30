@@ -13,6 +13,7 @@ dependencies = [
     # Database
     "sqlalchemy[asyncio]>=2.0.25",
     "asyncpg>=0.29.0",
+    "PyMySQL>=1.1.0",  # MySQL（4b-3 沙箱后端 DB/schema 灌入，连 mysql-sandbox）
     "alembic>=1.13.0",
     "greenlet>=3.0.0",
     "pgvector>=0.3.0",

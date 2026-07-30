@@ -94,9 +94,12 @@ class BackendRunnerService:
         return jars[0] if jars else None
 
     async def _run(self, args: list[str], cwd: Path, timeout: int = 900) -> Tuple[int, str]:
+        # 安全：mvn 执行生成工程的 pom.xml（可能含恶意构建插件/依赖），剔除 admin 凭据防越权
+        from app.services.sandbox_security import sanitized_env
         proc = await asyncio.create_subprocess_exec(
             *args,
             cwd=str(cwd),
+            env=sanitized_env(),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
@@ -142,6 +145,9 @@ class BackendRunnerService:
             if existing and existing["process"].returncode is None and existing.get("ready"):
                 return self._response(pipeline_id, existing)
 
+            # 0) 建 per-pipeline DB + 灌 schema.sql（4b-3，fail-open，不阻塞构建）
+            await self._prepare_database(pipeline_id, root)
+
             # 1) mvn 打包（依赖缓存在工作区内，跨次复用）
             repo_local = str(root / ".m2-backend")
             code, out = await self._run(
@@ -158,16 +164,19 @@ class BackendRunnerService:
 
             # 2) 起服务：env 指向 mysql-sandbox；每流水线独立 DB 名
             port = self._allocate_port()
-            env = os.environ.copy()
-            env.update(
-                {
-                    "MYSQL_HOST": settings.pipeline_backend_mysql_host,
-                    "MYSQL_PORT": str(settings.pipeline_backend_mysql_port),
-                    "MYSQL_DB": f"sandbox_{pipeline_id[:12].replace('-', '')}"[:63],
-                    "MYSQL_USER": settings.pipeline_backend_mysql_user,
-                    "MYSQL_PASSWORD": settings.pipeline_backend_mysql_password,
-                }
-            )
+            # 安全（防越权）：生成的 Java 进程只给最小必要 env，绝不继承 admin 凭据
+            # （DATABASE_URL/JWT_SECRET/*_API_KEY 等）——否则生成代码 getenv 即可越权拿 admin 库凭据
+            env = {
+                "PATH": os.environ.get("PATH", ""),
+                "JAVA_HOME": os.environ.get("JAVA_HOME", ""),
+                "LANG": os.environ.get("LANG", "C.UTF-8"),
+                "HOME": "/tmp",
+                "MYSQL_HOST": settings.pipeline_backend_mysql_host,
+                "MYSQL_PORT": str(settings.pipeline_backend_mysql_port),
+                "MYSQL_DB": f"sandbox_{pipeline_id[:12].replace('-', '')}"[:63],
+                "MYSQL_USER": settings.pipeline_backend_mysql_user,
+                "MYSQL_PASSWORD": settings.pipeline_backend_mysql_password,
+            }
             process = await asyncio.create_subprocess_exec(
                 "java", "-jar", str(jar), f"--server.port={port}",
                 cwd=str(root),
@@ -223,6 +232,77 @@ class BackendRunnerService:
                 return False
         await self._teardown(pipeline_id, entry)
         return True
+
+    async def _prepare_database(self, pipeline_id: str, root: Path) -> None:
+        """4b-3：在 mysql-sandbox 建 per-pipeline DB + 灌 schema.sql。fail-open（失败不阻塞）。"""
+        import pymysql
+
+        db_name = f"sandbox_{pipeline_id[:12].replace('-', '')}"[:63]
+        # 防库名注入：只允许字母数字下划线
+        if not db_name.replace("_", "").isalnum():
+            logger.warning("invalid sandbox db_name %s, skip seeding", db_name)
+            return
+        host = settings.pipeline_backend_mysql_host
+        port = settings.pipeline_backend_mysql_port
+        root_pwd = settings.pipeline_backend_mysql_root_password
+
+        # 1) root 建库（sandbox user 可能无 CREATE DATABASE 权限）
+        try:
+            conn = await asyncio.to_thread(
+                pymysql.connect, host=host, port=port, user="root",
+                password=root_pwd, autocommit=True,
+            )
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"CREATE DATABASE IF NOT EXISTS `{db_name}` "
+                        "DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci"
+                    )
+                    # 授权 sandbox user（生成的 Java 用它连；仅此 per-pipeline 库，
+                    # 隔离 + 无 FILE/SHUTDOWN 等全局权限，危险 SQL 由 MySQL 权限兜底拒绝）
+                    cur.execute(
+                        f"GRANT ALL PRIVILEGES ON `{db_name}`.* TO "
+                        f"`{settings.pipeline_backend_mysql_user}`@`%`"
+                    )
+            finally:
+                conn.close()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("create sandbox DB %s failed (non-fatal): %s", db_name, exc)
+            return
+
+        # 2) 灌 schema.sql（扫工作区所有 *.sql）
+        sql_files = sorted(root.rglob("*.sql"))
+        if not sql_files:
+            logger.info("backend_runner: 无 schema.sql，跳过灌入 %s", db_name)
+            return
+        try:
+            conn = await asyncio.to_thread(
+                pymysql.connect, host=host, port=port,
+                user=settings.pipeline_backend_mysql_user,
+                password=settings.pipeline_backend_mysql_password,
+                database=db_name, autocommit=True,
+            )
+            try:
+                with conn.cursor() as cur:
+                    for sql_file in sql_files:
+                        for stmt in _split_sql(sql_file.read_text(encoding="utf-8", errors="ignore")):
+                            cur.execute(stmt)
+                logger.info("backend_runner: 灌入 %s（%d 个 sql 文件）", db_name, len(sql_files))
+            finally:
+                conn.close()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("seed sandbox DB %s failed (non-fatal): %s", db_name, exc)
+
+
+def _split_sql(sql: str) -> list[str]:
+    """简单按 ; 分割 SQL 语句、去 -- 注释行（够用 for CREATE TABLE/INSERT 等 DDL）。"""
+    statements: list[str] = []
+    for raw in sql.split(";"):
+        lines = [ln for ln in raw.splitlines() if not ln.strip().startswith("--")]
+        stmt = "\n".join(lines).strip()
+        if stmt:
+            statements.append(stmt)
+    return statements
 
 
 backend_runner_service = BackendRunnerService()

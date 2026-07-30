@@ -988,9 +988,12 @@ server.listen(port, host, () => {
             logger.debug("Failed to drain preview output for %s: %s", pipeline_id, exc)
 
     async def _run(self, args: list[str], cwd: Path, timeout: int = 180) -> tuple[int, str]:
+        # 安全：git clone / npm install（postinstall 脚本）/ vite 都执行不可信代码，剔除 admin 凭据
+        from app.services.sandbox_security import sanitized_env
         proc = await asyncio.create_subprocess_exec(
             *args,
             cwd=str(cwd),
+            env=sanitized_env(),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
@@ -1579,7 +1582,9 @@ server.listen(port, host, () => {
                         self._patch_uniapp_runtime_api_config(root, pipeline_id)
                         self._clear_preview_vite_cache(root, frontend_files)
                     dev_cmd = self._dev_command(root, port, frontend_files)
-                    env = os.environ.copy()
+                    # 安全（防越权）：剔除 admin-python 敏感 env，只留前端构建/运行所需 + 业务变量
+                    from app.services.sandbox_security import sanitized_env
+                    env = sanitized_env()
                     project_env = self._load_env_file(root, ".env.development")
                     proxy_targets = (
                         {"api": "", "java": "", "log": ""}
