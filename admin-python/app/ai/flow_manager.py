@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.agents import AgentService
 from app.ai import backend_scaffold  # noqa: F401  (注册 backend_scaffolder skill)
+from app.ai import contract_prober  # noqa: F401  (注册 contract_prober skill — 4c 活契约探针)
 from app.ai.pipeline_skills import ensure_workspace, get_workspace_path
 from app.ai.skills import SkillStatus, skill_registry
 from app.ai.model_router import pipeline_context
@@ -838,7 +839,18 @@ JSON 格式如下:
 7. Mock 数据示例（至少包含列表、详情、异常、无权限数据）
 8. 权限规则表（角色 × 操作权限矩阵 + 数据范围条件）
 9. 测试验收标准（功能测试用例清单、边界条件、兼容性要求）
-10. 开发风险与待确认问题（按前端/后端/API/权限/数据分组）""",
+10. 开发风险与待确认问题（按前端/后端/API/权限/数据分组）
+
+## 结构化接口清单（供 4c 活契约探针校验）
+在交付文档最末尾附一个 JSON 代码块，列出本交付包涉及的全部 API 接口（起后端后会逐个探针校验是否真起、真响应）：
+```json
+{
+  "endpoints": [
+    {"path": "/api/xxx/yyy", "method": "GET", "summary": "接口用途", "expects_list": true}
+  ]
+}
+```
+要求：path 必须以 / 开头并与上方「API 接口草案」逐条对应；method 用 GET/POST/PUT/DELETE；expects_list 列表/分页查询接口填 true，详情/新增/编辑填 false。""",
 
     "ui_preview": """根据需求文档，生成一个静态管理后台页面预览。
 
@@ -4176,6 +4188,17 @@ def _parse_agent_output(stage_key: str, raw_output: str) -> Dict[str, Any]:
                 result["fix_suggestions"] = "\n".join(suggestions[:10])
         result = _normalize_code_review_result(result)
 
+    if stage_key == "delivery":
+        # 4c：提取结构化 endpoints[]（供 code_review 活契约探针消费）
+        _ep_json = _try_parse_json_block(raw_output, ["endpoints"])
+        if _ep_json and isinstance(_ep_json.get("endpoints"), list):
+            result["endpoints"] = _ep_json["endpoints"]
+        else:
+            result["endpoints"] = [
+                {"path": p, "method": "GET", "expects_list": False}
+                for p in _collect_api_endpoints(raw_output)
+            ]
+
     if stage_key == "testing":
         json_result = _try_parse_json_block(raw_output, ["tests_passed", "bug_details"])
         if json_result:
@@ -5461,6 +5484,43 @@ class DevPipelineManager:
                 pipe.stages_data = json.dumps(stages, ensure_ascii=False)
                 pipe.update_time = int(time.time() * 1000)
                 await session.flush()
+
+        # Skill: contract_prober — code_review 阶段起后端 + 活契约探针（4c，仅 full 模式有 pom.xml）
+        if stage_key == "code_review" and workspace:
+            try:
+                _endpoints = (stages.get("delivery", {}).get("structured_output") or {}).get("endpoints") \
+                    or parsed.get("endpoints") or []
+                if not _endpoints:
+                    logger.info("code_review contract probe skipped: 无 endpoints")
+                else:
+                    from app.services.backend_runner_service import backend_runner_service
+                    try:
+                        await backend_runner_service.start(pipeline_id, workspace)
+                    except Exception as start_exc:  # noqa: BLE001 — 无 pom.xml/起失败 → 探针 fail-open
+                        logger.info("code_review contract probe skipped（后端未起）: %s", start_exc)
+                    probe = await skill_registry.execute(
+                        "contract_prober", pipeline_id=pipeline_id, endpoints=_endpoints,
+                    )
+                    probe_out = probe.output or {}
+                    if not probe_out.get("skipped"):
+                        stages[stage_key]["output"] += f"\n\n--- 活契约探针结果 ---\n{probe_out.get('summary', '')}\n"
+                        if not probe_out.get("passed"):
+                            # 探针未过 → 追加 field_mismatches 并置 review_passed=False，自然触发 fix-loop（6673）
+                            parsed["review_passed"] = False
+                            for _r in probe_out.get("results", []):
+                                if not _r.get("ok"):
+                                    parsed.setdefault("field_mismatches", []).append({
+                                        "severity": "major",
+                                        "location": f"接口 {_r.get('method', '')} {_r.get('path', '')}",
+                                        "frontend_field": "（活探针）",
+                                        "contract_field": _r.get("issue", "接口未按契约响应"),
+                                        "fix": "检查后端接口是否实现且响应结构符合契约",
+                                    })
+                        pipe.stages_data = json.dumps(stages, ensure_ascii=False)
+                        pipe.update_time = int(time.time() * 1000)
+                        await session.flush()
+            except Exception as exc:  # noqa: BLE001 — 探针整体失败不阻塞 review
+                logger.warning("contract_prober failed (non-fatal): %s", exc)
 
     # ==================== 核心执行引擎 ====================
 
