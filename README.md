@@ -131,6 +131,11 @@ Admin Platform 面向“把业务需求落到真实项目代码”的场景。�
 - 每阶段可人工确认或自动执行
 - 前端项目匹配会区分前端与后端技术栈，避免把 `javascript/vue/uni-app` 项目误归入 Java 后端候选
 - 真实预览支持 npm、yarn、pnpm 和 workspace 项目，uni-app 项目以 H5 目标在浏览器中验证
+- **后端沙箱真实起服务**（4b-2）：生成的 Java 工程在容器内本地 `mvn` 构建 + `java -jar` 起服务（动态端口、TCP 就绪探测），连独立的 `mysql-sandbox`；镜像走清华 apt + JDK18（华为云 tarball）绕开 docker hub 不可达
+- **活契约审查**（4c）：`code_review` 阶段对真实起的后端发 HTTP 探针（`contract_prober` skill，三层断言：HTTP 状态 / JSON / `result.list` 或详情结构），契约不一致自动追加 mismatch 触发既有 fix-loop；`delivery` 交付结构化 `endpoints[]` 供探针消费
+- **沙箱 DB/schema 灌入**（4b-3）：起服务前在 mysql-sandbox 建 per-pipeline 隔离库 + 灌 `schema.sql`
+- **沙箱自动回收**：后台 reaper 每 60s 扫，空闲超时（默认 1800s）的前端 vite / 后端 java 沙箱进程自动 stop，防长跑泄漏
+- **沙箱安全**：生成代码（LLM 产出、不可信）的子进程走 `sanitized_env`（剔除 admin 凭据 `DATABASE_URL`/`JWT_SECRET`/`*_API_KEY` 等）+ backend_runner env 白名单；DB 库名注入防护 + sandbox user 仅 per-pipeline 库权限；探针 path SSRF 防护（长期「独立容器网络隔离」方案规划中）
 
 ### 智能重试与人工介入
 - 每个阶段维护独立重试计数，与 code_review/testing 的修复循环解耦，互不干扰
