@@ -772,6 +772,7 @@ func GetUser(ctx context.Context, id int) (*User, error) {
 | `test-generation` | 当审查发现问题时，触发测试用例生成以覆盖相关场景 |
 | `requirement-analysis` | 根据需求文档验证代码实现的完整性 |
 | `task-breakdown` | 审查结果中 major/critical 问题可拆分为新任务 |
+| `contract-prober` | 流水线 `code_review` **阶段钩子**在静态审查后对真实起的后端发活契约 HTTP 探针（4c）；由 flow_manager 阶段逻辑触发，非本 skill 直接调用 |
 
 ---
 
@@ -781,3 +782,4 @@ func GetUser(ctx context.Context, id int) (*User, error) {
 |------|------|----------|
 | 1.0.0 | 2025-04-25 | 初始版本，基础代码审查能力 |
 | 1.1.0 | 2025-05-20 | 新增多语言特定检查、OWASP 安全审计 Checklist、反模式清单、评分体系、项目特定规则 |
+| 1.2.0 | 2026-07-30 | 协作表补 contract-prober（4c 活契约探针，流水线阶段钩子触发）；澄清本 skill 为静态审查，活探针属阶段逻辑非 skill |

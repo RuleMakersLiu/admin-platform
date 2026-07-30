@@ -2,7 +2,7 @@
 id: backend_development
 name: backend-development
 description: "Generate backend code including APIs, database models, and business logic. 根据需求生成后端代码，包括 API 接口、数据库模型、业务逻辑层，支持 Java/Spring Boot、Go/Gin、Python/FastAPI、PHP/Laravel。"
-version: 1.1.0
+version: 1.2.0
 category: development
 agent_type: BE
 metadata:
@@ -247,6 +247,8 @@ src/main/java/com/{company}/{module}/
 ```
 
 > 注：`pom.xml`（Spring Boot parent + Web + MyBatis-Plus + MySQL）、`@SpringBootApplication` 主类、`src/main/resources/application.yml`（MySQL datasource）由平台在代码写盘后**自动脚手架兜底**，LLM 只需专注业务代码（Controller/Service/Mapper/Entity/DTO/VO + 建表 SQL）。若 LLM 已生成这些文件则跳过。
+
+> **生成产物会被真实构建运行（4b-2 / 4b-3）**：写盘后平台会在沙箱内 `mvn` 构建 + `java -jar` 起服务（连独立 mysql-sandbox），并把生成的 `sql/*.sql` 灌入 per-pipeline 沙箱库执行。因此：①业务代码必须可独立编译（依赖走 pom 标准坐标，不要引用未声明的内部包）；②建表 SQL 用标准 DDL（`CREATE TABLE`/`INSERT`），平台按 `;` 分割逐条执行——避免存储过程/触发器等含 `;` 的复杂语句，也不要写 `DROP DATABASE`/`GRANT`/`LOAD DATA INFILE` 等越权语句（sandbox user 权限会拒绝）。
 
 **Controller 规范:**
 ```java
