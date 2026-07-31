@@ -5902,6 +5902,12 @@ class DevPipelineManager:
 
         review_passed = breakdown["review_passed"]
         tests_passed = breakdown["tests_passed"]
+        # LLM-as-judge 分（eval 阶段 structured_output：judge/hallucination/vision/e2e）。缺失/出错→None。
+        eval_so = (stages.get("eval") or {}).get("structured_output") or {}
+        _judge = eval_so.get("judge") or {}
+        _hallu = eval_so.get("hallucination") or {}
+        _vision = eval_so.get("vision") or {}
+        _e2e = eval_so.get("e2e") or {}
         now = int(time.time() * 1000)
         values = {
             "eval_id": f"EVAL-{pipe.pipeline_id}",
@@ -5913,6 +5919,10 @@ class DevPipelineManager:
             "pm_quality_score": breakdown["pm_quality_score"],
             "design_quality_score": breakdown["design_quality_score"],
             "preview_quality_score": breakdown["preview_quality_score"],
+            "judge_score": _judge.get("overall_score"),
+            "hallucination_score": _hallu.get("hallucination_score"),
+            "vision_score": _vision.get("overall_score"),
+            "e2e_passed": int(_e2e["passed"]) if isinstance(_e2e.get("passed"), bool) else None,
             "review_passed": int(review_passed) if isinstance(review_passed, bool) else None,
             "tests_passed": int(tests_passed) if isinstance(tests_passed, bool) else None,
             "tests_total": tests_total,
@@ -7534,6 +7544,10 @@ class DevPipelineManager:
                     "pm_quality_score": e.pm_quality_score if e else None,
                     "design_quality_score": e.design_quality_score if e else None,
                     "preview_quality_score": e.preview_quality_score if e else None,
+                    "judge_score": e.judge_score if e else None,
+                    "hallucination_score": e.hallucination_score if e else None,
+                    "vision_score": e.vision_score if e else None,
+                    "e2e_passed": e.e2e_passed if e else None,
                     "review_passed": e.review_passed if e else None,
                     "tests_passed": e.tests_passed if e else None,
                 }

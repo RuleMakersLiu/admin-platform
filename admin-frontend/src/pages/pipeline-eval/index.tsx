@@ -17,6 +17,10 @@ interface EvalRow {
   pm_quality_score: number | null
   design_quality_score: number | null
   preview_quality_score: number | null
+  judge_score: number | null
+  hallucination_score: number | null
+  vision_score: number | null
+  e2e_passed: number | null
   review_passed: number | null
   tests_passed: number | null
 }
@@ -208,6 +212,23 @@ export default function PipelineEvalPage() {
               { title: 'PM', dataIndex: 'pm_quality_score', width: 64, render: (s: number | null) => s ?? '-' },
               { title: '设计', dataIndex: 'design_quality_score', width: 64, render: (s: number | null) => s ?? '-' },
               { title: '预览', dataIndex: 'preview_quality_score', width: 64, render: (s: number | null) => s ?? '-' },
+              {
+                title: 'Judge',
+                dataIndex: 'judge_score',
+                width: 76,
+                sorter: (a, b) => (a.judge_score ?? -1) - (b.judge_score ?? -1),
+                render: (s: number | null) =>
+                  s === null ? '-' : <Text strong style={{ color: scoreColor(s) }}>{s}</Text>,
+              },
+              { title: '幻觉', dataIndex: 'hallucination_score', width: 64, render: (s: number | null) => s ?? '-' },
+              { title: '视觉', dataIndex: 'vision_score', width: 64, render: (s: number | null) => s ?? '-' },
+              {
+                title: 'E2E',
+                dataIndex: 'e2e_passed',
+                width: 70,
+                render: (v: number | null) =>
+                  v === null ? '-' : <Tag color={v ? 'success' : 'error'}>{v ? '通过' : '未过'}</Tag>,
+              },
               {
                 title: 'Review',
                 dataIndex: 'review_passed',

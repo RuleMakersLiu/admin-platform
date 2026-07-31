@@ -26,6 +26,13 @@ class PipelineEvalResult(Base):
     design_quality_score: Mapped[Optional[int]] = mapped_column(Integer)
     preview_quality_score: Mapped[Optional[int]] = mapped_column(Integer)
 
+    # LLM-as-judge 评测分（eval 阶段产物；0-100，未评测/出错时 None）。与上面规则维度分并列——
+    # 不并入 overall_score（保看板 bucket/pass-rate 阈值 60 不变），单独成列供看板展示 + 质量门控。
+    judge_score: Mapped[Optional[int]] = mapped_column(Integer)
+    hallucination_score: Mapped[Optional[int]] = mapped_column(Integer)
+    vision_score: Mapped[Optional[int]] = mapped_column(Integer)
+    e2e_passed: Mapped[Optional[int]] = mapped_column(Integer)  # 0/1
+
     # 布尔门控结果（0/1）
     review_passed: Mapped[Optional[int]] = mapped_column(Integer)
     tests_passed: Mapped[Optional[int]] = mapped_column(Integer)

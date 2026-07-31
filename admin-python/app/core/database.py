@@ -81,6 +81,20 @@ async def ensure_runtime_schema():
             )
         )
 
+        # Eval 增强：pipeline_eval_result 加 LLM-as-judge 评测列（eval 阶段产物）。现有库补列。
+        await conn.execute(text(
+            "ALTER TABLE pipeline_eval_result ADD COLUMN IF NOT EXISTS judge_score INTEGER"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE pipeline_eval_result ADD COLUMN IF NOT EXISTS hallucination_score INTEGER"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE pipeline_eval_result ADD COLUMN IF NOT EXISTS vision_score INTEGER"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE pipeline_eval_result ADD COLUMN IF NOT EXISTS e2e_passed SMALLINT"
+        ))
+
         # Eval 评测闭环：pipeline_eval_result（终端态聚合各 stage 评测信号）
         await conn.execute(text(
             """
@@ -95,6 +109,10 @@ async def ensure_runtime_schema():
                 pm_quality_score INTEGER,
                 design_quality_score INTEGER,
                 preview_quality_score INTEGER,
+                judge_score INTEGER,
+                hallucination_score INTEGER,
+                vision_score INTEGER,
+                e2e_passed SMALLINT,
                 review_passed SMALLINT,
                 tests_passed SMALLINT,
                 tests_total INTEGER,
