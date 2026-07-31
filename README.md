@@ -149,6 +149,7 @@ Admin Platform 面向“把业务需求落到真实项目代码”的场景。�
 - **评测看板**（`/pipeline/ai-metrics`）：响应速度、调用成本、按模型/按阶段分布来自 `llm_usage_log`（按调用时间窗口过滤）；准确率、生成效果、幻觉率来自 `eval_run`（按评审时间窗口过滤）
 - **Golden 用例**（`/pipeline/eval-golden`）：维护标准用例，可一键触发无人值守流水线并自动打分；watcher 在流水线进入 `needs_human` 时停止，绝不自动放行
 - **LLM-as-judge**：低温 json 模式，复用为流水线内的子智能体评审官，并支持幻觉检测与视觉评判
+- **评测可执行化**：eval 阶段的 judge/幻觉/视觉/E2E 分落 `pipeline_eval_result`（看板 `/pipeline/eval` 列表新增 Judge/幻觉/视觉/E2E 列，`extract_eval_scores` 统一抽取）；**质量门控**——LLM judge 分低于阈值（`eval_quality_gate_score`，默认 40）升级 `needs_human` 人工复核，而非静默完成（judge 缺失 fail-open，沿用全栈容错哲学）
 - 调用级观测：每次 LLM 调用记录延迟、token 与成本，看板与流水线评审共享同一套数据源
 
 ### 项目知识库
