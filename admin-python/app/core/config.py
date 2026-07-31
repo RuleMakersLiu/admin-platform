@@ -1,6 +1,6 @@
 """应用配置"""
 from functools import lru_cache
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -112,6 +112,18 @@ class Settings(BaseSettings):
     pipeline_execution_concurrency: int = 8
     pipeline_execution_queue_limit: int = 50
     deploy_service_url: str = "http://admin-deploy:8083"
+
+    # ==================== 沙箱执行隔离（Phase A 独立容器） ====================
+    # 不可信（LLM 生成）代码的执行后端：
+    #   process   = 现状：admin-python 内 asyncio 子进程（uid 1500 降权 + env 剔凭据；本地/pytest 默认）
+    #   container = 独立 docker 容器，仅挂 sandbox-net（只可达 mysql-sandbox + 互联网，不可达 admin 内网）
+    # 仅 sandbox_security 原语读此 flag 分支；process 模式行为与历史完全一致。
+    sandbox_execution_mode: Literal["process", "container"] = "process"
+    # 复用本镜像作沙箱基（含 JDK18/maven/node/pnpm/git/uid1500 + 全局 maven settings.xml）
+    sandbox_image_name: str = "admin-platform/admin-python:latest"
+    sandbox_network_name: str = "sandbox-net"
+    sandbox_container_prefix_be: str = "sandbox-be"  # 后端 java 长驻容器名前缀：sandbox-be-<pid12>
+    sandbox_container_prefix_fe: str = "sandbox-fe"  # 前端 vite 长驻容器名前缀：sandbox-fe-<pid12>
 
     @model_validator(mode="after")
     def _enforce_production_secret(self) -> "Settings":

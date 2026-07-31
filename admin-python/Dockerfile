@@ -21,7 +21,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# 系统依赖全部走清华 apt 源（绕开 docker hub）
+# 系统依赖全部走清华 apt 源（绕开 docker hub）。
+# docker-cli（仅客户端，非 docker.io 守护进程）：Phase A 沙箱独立容器化——admin-python 经挂载的
+# docker.sock 编排隔离沙箱容器。Debian 的 docker.io 只含 dockerd，CLI 在独立的 docker-cli 包。
 RUN sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources 2>/dev/null || true \
     && apt-get update && apt-get install -y --no-install-recommends \
     git \
@@ -30,6 +32,7 @@ RUN sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.li
     nodejs \
     npm \
     curl \
+    docker-cli \
     && rm -rf /var/lib/apt/lists/*
 # JDK 18（业务项目锁定）：18 非 LTS 已 EOL，trixie apt 源无（仅 21/25），故从华为云镜像下载 OpenJDK 18 tarball。
 # JAVA_HOME/bin 放 PATH 最前，确保 `java` 指向 18（apt maven 可能顺带把 openjdk-21 装进 /usr/bin）。

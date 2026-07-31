@@ -52,14 +52,19 @@ services:
     command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     volumes:
       - mysql_sandbox_data:/var/lib/mysql
+    # 双挂：沙箱容器（仅 sandbox-net）需经此名解析到 mysql-sandbox；admin 内网仍走 admin-network。
     networks:
       - admin-network
+      - sandbox-net
 
   # Python后端服务 (AI Agents)
   admin-python:
     build:
       context: ../admin-python
       dockerfile: Dockerfile
+    # 显式 image 名：沙箱容器复用本镜像作基（docker run admin-platform/admin-python:latest ...），
+    # 否则 compose 自动命名为 docker_admin-python 不便引用。与 build: 共存时给构建产物打此 tag。
+    image: admin-platform/admin-python:latest
     container_name: admin-python
     restart: always
     env_file:
@@ -74,14 +79,23 @@ services:
       - PIPELINE_PREVIEW_API_PROXY=https://malladmin-jdagent.hctest.tech
       - PIPELINE_EXECUTION_CONCURRENCY=8
       - PIPELINE_EXECUTION_QUEUE_LIMIT=50
+      # 沙箱独立容器化（Phase A）：container=把不可信生成代码移入仅挂 sandbox-net 的隔离容器；
+      # process=现状（admin-python 内子进程，本地/pytest 默认）。沙箱容器镜像复用本服务 image。
+      - SANDBOX_EXECUTION_MODE=container
+      - SANDBOX_IMAGE_NAME=admin-platform/admin-python:latest
+      - SANDBOX_NETWORK_NAME=sandbox-net
     depends_on:
       - postgres
       - redis
     volumes:
       - pipeline_data:/data/pipelines
       - ../admin-python/app:/app/app   # 源码挂载：宿主改 app/ 后 restart 即生效，免重建镜像；recreate 不丢改动
+      # docker socket：admin-python 经此编排隔离沙箱容器（信任级等同 admin-deploy，需 Phase B socket-proxy 收口）
+      - /var/run/docker.sock:/var/run/docker.sock
+    # 双挂：admin-network 访问 admin 内网（postgres/redis/gateway）；sandbox-net 访问/编排沙箱容器
     networks:
       - admin-network
+      - sandbox-net
 
   # Go网关
   admin-gateway:
@@ -166,4 +180,8 @@ volumes:
 
 networks:
   admin-network:
+    driver: bridge
+  # 沙箱隔离网络（Phase A）：生成的不可信代码容器只挂此网——可达 mysql-sandbox + 互联网出站，
+  # 不可达 admin-network 内网（postgres/redis/gateway）。admin-python 与 mysql-sandbox 双挂。
+  sandbox-net:
     driver: bridge
