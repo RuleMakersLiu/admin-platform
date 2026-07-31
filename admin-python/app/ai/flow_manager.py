@@ -26,6 +26,7 @@ from app.ai.agents import AgentService
 from app.ai import backend_scaffold  # noqa: F401  (注册 backend_scaffolder skill)
 from app.ai import contract_prober  # noqa: F401  (注册 contract_prober skill — 4c 活契约探针)
 from app.ai.pipeline_skills import ensure_workspace, get_workspace_path
+from app.ai.evaluators import DEFAULT_EVAL_CRITERIA, extract_eval_scores
 from app.ai.skills import SkillStatus, skill_registry
 from app.ai.model_router import pipeline_context
 from app.models.agent_models import DevPipeline, ProjectKnowledge
@@ -1297,15 +1298,7 @@ def _render_prompt_template(template: str, context: Dict[str, Any]) -> str:
     return result
 
 
-# eval 阶段默认评审标准（无 golden case 时用）
-DEFAULT_EVAL_CRITERIA = [
-    "需求覆盖：产物实现了用户需求中的核心功能点，无重大遗漏",
-    "契约完整：API 路径/方法/请求与响应字段清晰，前后端字段命名与类型对齐",
-    "代码质量：结构清晰、无明显错误、具备可编译/可运行的意图",
-    "可测试性：包含必要校验、边界处理与可验收的测试要点",
-]
-
-
+# eval 阶段默认评审标准已收口到 app.ai.evaluators（顶部 import 为 DEFAULT_EVAL_CRITERIA）。
 def _format_eval_report(structured: Dict[str, Any]) -> str:
     """把 eval 阶段的 judge/幻觉/视觉结构化结果格式化为 markdown 报告。
 
@@ -5902,12 +5895,9 @@ class DevPipelineManager:
 
         review_passed = breakdown["review_passed"]
         tests_passed = breakdown["tests_passed"]
-        # LLM-as-judge 分（eval 阶段 structured_output：judge/hallucination/vision/e2e）。缺失/出错→None。
+        # LLM-as-judge 分（eval 阶段 structured_output）——统一经 extract_eval_scores 抽取（持久化与门控同源）
         eval_so = (stages.get("eval") or {}).get("structured_output") or {}
-        _judge = eval_so.get("judge") or {}
-        _hallu = eval_so.get("hallucination") or {}
-        _vision = eval_so.get("vision") or {}
-        _e2e = eval_so.get("e2e") or {}
+        _llm = extract_eval_scores(eval_so)
         now = int(time.time() * 1000)
         values = {
             "eval_id": f"EVAL-{pipe.pipeline_id}",
@@ -5919,10 +5909,10 @@ class DevPipelineManager:
             "pm_quality_score": breakdown["pm_quality_score"],
             "design_quality_score": breakdown["design_quality_score"],
             "preview_quality_score": breakdown["preview_quality_score"],
-            "judge_score": _judge.get("overall_score"),
-            "hallucination_score": _hallu.get("hallucination_score"),
-            "vision_score": _vision.get("overall_score"),
-            "e2e_passed": int(_e2e["passed"]) if isinstance(_e2e.get("passed"), bool) else None,
+            "judge_score": _llm["judge_score"],
+            "hallucination_score": _llm["hallucination_score"],
+            "vision_score": _llm["vision_score"],
+            "e2e_passed": _llm["e2e_passed"],
             "review_passed": int(review_passed) if isinstance(review_passed, bool) else None,
             "tests_passed": int(tests_passed) if isinstance(tests_passed, bool) else None,
             "tests_total": tests_total,
@@ -6026,7 +6016,7 @@ class DevPipelineManager:
         """
         if not settings.eval_quality_gate_enabled:
             return None
-        judge_score = (eval_struct.get("judge") or {}).get("overall_score")
+        judge_score = extract_eval_scores(eval_struct)["judge_score"]
         if isinstance(judge_score, (int, float)) and judge_score < settings.eval_quality_gate_score:
             return (
                 f"自动评测低分（judge {int(judge_score)} < "
