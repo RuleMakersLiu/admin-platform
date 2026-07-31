@@ -229,3 +229,157 @@ def _decode_exit(wait_out: tuple[int, bytes, bytes]) -> int:
         return int((wait_out[1] or b"").decode("utf-8", "ignore").strip())
     except (ValueError, AttributeError):
         return 1
+
+
+# ==================== Phase A：长驻服务句柄（java / vite） ====================
+#
+# 长驻沙箱服务（后端 java -jar、前端 vite dev）需被持有、就绪探测、空闲回收。统一句柄屏蔽
+# process vs container 后端，调用方（backend_runner / sandbox_preview）的 is_running/_teardown/
+# direct_*_url 经句柄操作，两种模式同构。容器名 = sandbox-net 上的 DNS 名（admin-python 经此连服务）。
+
+
+class SandboxHandle:
+    """长驻沙箱服务句柄。
+
+    - returncode：None=运行中，int=已退出（进程码/负数信号）。process 模式实时读 proc.returncode；
+      container 模式经 drain-EOF 或 acleanup 置位（故 container 模式须 start_log_drain 才能检测崩溃）。
+    - acleanup(timeout)：优雅停（SIGTERM→timeout→SIGKILL；container: docker stop -t + rm -f），幂等。
+    - start_log_drain(on_line)：启后台任务逐行读日志（process: stdout.readline；container: docker logs -f），
+      返回该任务（teardown 时由 acleanup 取消）。on_line(text) 每行回调；container 退出(EOF)时置 returncode。
+    """
+
+    returncode: int | None = None
+
+    async def acleanup(self, timeout: int = 5) -> None:  # pragma: no cover - 接口
+        raise NotImplementedError
+
+    async def start_log_drain(self, on_line) -> asyncio.Task:  # pragma: no cover - 接口
+        raise NotImplementedError
+
+
+class ProcessHandle(SandboxHandle):
+    """process 模式句柄：包 asyncio.subprocess.Process。语义等同历史（terminate→5s→kill）。"""
+
+    def __init__(self, proc: asyncio.subprocess.Process):
+        self._proc = proc
+        self._drain_task: asyncio.Task | None = None
+
+    @property
+    def returncode(self):
+        return self._proc.returncode
+
+    async def acleanup(self, timeout: int = 5) -> None:
+        if self._drain_task and not self._drain_task.done():
+            self._drain_task.cancel()
+        if self._proc.returncode is None:
+            self._proc.terminate()
+            try:
+                await asyncio.wait_for(self._proc.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                self._proc.kill()
+                await self._proc.wait()
+
+    async def start_log_drain(self, on_line) -> asyncio.Task:
+        async def _drain():
+            if not self._proc.stdout:
+                return
+            try:
+                while True:
+                    line = await self._proc.stdout.readline()
+                    if not line:
+                        break
+                    if on_line:
+                        on_line(line.decode("utf-8", "ignore").strip())
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                pass
+
+        self._drain_task = asyncio.create_task(_drain())
+        return self._drain_task
+
+
+class ContainerHandle(SandboxHandle):
+    """container 模式句柄：包 detached docker 容器（cid + name）。name 同时是 sandbox-net DNS 名。"""
+
+    def __init__(self, cid: str, name: str):
+        self.cid = cid
+        self.name = name
+        self._rc: int | None = None
+        self._drain_task: asyncio.Task | None = None
+
+    @property
+    def returncode(self):
+        return self._rc
+
+    async def start_log_drain(self, on_line) -> asyncio.Task:
+        async def _drain():
+            log_proc = await asyncio.create_subprocess_exec(
+                "docker", "logs", "-f", self.cid,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            )
+            try:
+                while True:
+                    line = await log_proc.stdout.readline()
+                    if not line:
+                        break
+                    if on_line:
+                        on_line(line.decode("utf-8", "ignore").strip())
+            except asyncio.CancelledError:
+                try:
+                    log_proc.kill()
+                    await log_proc.wait()
+                except Exception:  # noqa: BLE001
+                    pass
+                raise
+            except Exception:  # noqa: BLE001
+                pass
+            # 容器退出（logs -f EOF）：取退出码，returncode 由 None→码（is_running 即转 False）
+            try:
+                self._rc = _decode_exit(await _docker_exec(["docker", "wait", self.cid], timeout=30))
+            except Exception:  # noqa: BLE001
+                self._rc = 1
+
+        self._drain_task = asyncio.create_task(_drain())
+        return self._drain_task
+
+    async def acleanup(self, timeout: int = 5) -> None:
+        # 先取消 logs-follow 任务（免它挂在即将删除的容器上）
+        if self._drain_task and not self._drain_task.done():
+            self._drain_task.cancel()
+            try:
+                await asyncio.wait_for(self._drain_task, timeout=3)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+        if self._rc is None:  # 仍在跑 → stop（SIGTERM timeout→SIGKILL）
+            await _docker_exec(["docker", "stop", "-t", str(timeout), self.cid], timeout=timeout + 15)
+            try:
+                self._rc = _decode_exit(await _docker_exec(["docker", "wait", self.cid], timeout=30))
+            except Exception:  # noqa: BLE001
+                self._rc = 1
+        await _docker_exec(["docker", "rm", "-f", self.cid], timeout=30)
+
+
+async def spawn_sandboxed_service(args, *, cwd=None, env=None, name: str, drop_privs: bool = True) -> SandboxHandle:
+    """长驻沙箱服务（java/vite）统一启动：返回 SandboxHandle。
+
+    - container 模式：先 docker rm -f <name>（幂等防名称碰撞）→ docker run -d --name <name> ...
+      返回 ContainerHandle。name 即 sandbox-net DNS 名（admin-python 经此连服务）。
+    - process 模式：走 spawn_sandboxed 原子进程，返回 ProcessHandle；name 被忽略（用 loopback）。
+    env 语义同 spawn_sandboxed（None→sanitize；dict→原样）。仅 root 时降权（process 模式）/
+      固定 --user 1500（container 模式）。
+    """
+    if settings.sandbox_execution_mode == "container":
+        await _docker_exec(["docker", "rm", "-f", name], timeout=30)  # 幂等：清同名残留容器
+        run_argv = _docker_run_argv(args, cwd=cwd, env=env) + ["--name", name, "-d"]
+        rc, cid_b, err = await _docker_exec(run_argv, timeout=60)
+        if rc != 0:
+            raise RuntimeError(
+                f"docker run 失败（exit {rc}）: {(err or b'').decode('utf-8', 'ignore')[:500]}"
+            )
+        cid = cid_b.decode("utf-8", "ignore").strip()
+        if not cid:
+            raise RuntimeError("docker run 未返回容器 ID")
+        return ContainerHandle(cid, name)
+    proc = await spawn_sandboxed(args, cwd=cwd, env=env, drop_privs=drop_privs)
+    return ProcessHandle(proc)

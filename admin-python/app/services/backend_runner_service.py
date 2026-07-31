@@ -58,15 +58,15 @@ class BackendRunnerService:
 
     def is_running(self, pipeline_id: str) -> bool:
         entry = self._processes.get(pipeline_id)
-        return bool(entry and entry["process"].returncode is None)
+        return bool(entry and entry["handle"].returncode is None)
 
     def direct_backend_url(self, pipeline_id: str) -> Optional[str]:
         """已就绪后端的容器内直连 URL，未就绪返回 None（供 4c 契约探针直接命中）。"""
         entry = self._processes.get(pipeline_id)
-        if not entry or entry["process"].returncode is not None or not entry.get("ready"):
+        if not entry or entry["handle"].returncode is not None or not entry.get("ready"):
             return None
         entry["last_active"] = time.time()
-        return f"http://{settings.pipeline_backend_host}:{entry['port']}"
+        return f"http://{entry['connect_host']}:{entry['port']}"
 
     async def reap_idle(self, ttl_seconds: int) -> int:
         """回收超过 ttl 无活动的后端沙箱进程（释放 Java 进程 + 端口），返回回收数。
@@ -133,7 +133,7 @@ class BackendRunnerService:
         async with self._start_semaphore:
             # 复用已就绪的同 pipeline 后端
             existing = self._processes.get(pipeline_id)
-            if existing and existing["process"].returncode is None and existing.get("ready"):
+            if existing and existing["handle"].returncode is None and existing.get("ready"):
                 return self._response(pipeline_id, existing)
 
             # 0) 建 per-pipeline DB + 灌 schema.sql（4b-3，fail-open，不阻塞构建）
@@ -168,18 +168,31 @@ class BackendRunnerService:
                 "MYSQL_USER": settings.pipeline_backend_mysql_user,
                 "MYSQL_PASSWORD": settings.pipeline_backend_mysql_password,
             }
-            from app.services.sandbox_security import spawn_sandboxed
-            # env=自建白名单（含沙箱 MySQL 凭据，原样保留不被二次剔除）；非 root 降权由原语负责
-            process = await spawn_sandboxed(
+            from app.services.sandbox_security import spawn_sandboxed_service
+            # env=自建白名单（含沙箱 MySQL 凭据，原样保留不被二次剔除）；降权/容器隔离由句柄负责。
+            # container 模式：java 跑在 sandbox-be-<pid12> 容器（仅 sandbox-net），admin-python 经此 DNS 名连它。
+            container_mode = settings.sandbox_execution_mode == "container"
+            be_name = f"{settings.sandbox_container_prefix_be}-{pipeline_id[:12].replace('-', '')}"
+
+            def _on_be_log(line: str) -> None:
+                if any(k in line for k in ("ERROR", "Started", "Failed", "Exception", "Application")):
+                    logger.info("[SandboxBE:%s] %s", pipeline_id, line[:1000])
+
+            handle = await spawn_sandboxed_service(
                 ["java", "-jar", str(jar), f"--server.port={port}"],
                 cwd=str(root),
                 env=env,
+                name=be_name,
             )
+            # container 模式启日志 drain：java 崩溃 → docker logs EOF → returncode 置位（is_running 转 False）
+            if container_mode:
+                await handle.start_log_drain(_on_be_log)
             entry: Dict[str, Any] = {
-                "process": process,
+                "handle": handle,
                 "port": port,
                 "ready": False,
                 "root": str(root),
+                "connect_host": be_name if container_mode else settings.pipeline_backend_host,
                 "last_active": time.time(),
             }
             async with self._lock:
@@ -187,7 +200,7 @@ class BackendRunnerService:
                 self._reserved_ports.discard(port)
 
         try:
-            await self._wait_tcp_ready(settings.pipeline_backend_host, port, timeout=90)
+            await self._wait_tcp_ready(entry["connect_host"], port, timeout=90)
         except Exception:
             await self._teardown(pipeline_id, entry)
             raise
@@ -204,14 +217,9 @@ class BackendRunnerService:
         }
 
     async def _teardown(self, pipeline_id: str, entry: Dict[str, Any]) -> None:
-        process = entry.get("process")
-        if process and process.returncode is None:
-            process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
+        handle = entry.get("handle")
+        if handle:
+            await handle.acleanup(timeout=5)
         async with self._lock:
             if self._processes.get(pipeline_id) is entry:
                 self._processes.pop(pipeline_id, None)
@@ -219,7 +227,7 @@ class BackendRunnerService:
     async def stop(self, pipeline_id: str) -> bool:
         async with self._lock:
             entry = self._processes.get(pipeline_id)
-            if not entry or entry["process"].returncode is not None:
+            if not entry or entry["handle"].returncode is not None:
                 return False
         await self._teardown(pipeline_id, entry)
         return True

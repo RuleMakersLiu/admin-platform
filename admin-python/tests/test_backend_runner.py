@@ -1,4 +1,4 @@
-"""Phase 4b-2：后端沙箱 runner 的逻辑单测（mock 子进程，不打真实 mvn/java）。"""
+"""Phase 4b-2：后端沙箱 runner 的逻辑单测（mock 句柄，不打真实 mvn/java/container）。"""
 from pathlib import Path
 
 import pytest
@@ -6,26 +6,34 @@ import pytest
 from app.services.backend_runner_service import BackendRunnerService
 
 
-class _FakeProc:
+class _FakeHandle:
+    """模拟 SandboxHandle（process 模式 ProcessHandle 的形状）：returncode 属性 + acleanup 协程。"""
+
     def __init__(self, returncode=None):
-        self.returncode = returncode
+        self._rc = returncode
         self.terminated = False
-        self.killed = False
 
-    def terminate(self):
-        self.terminated = True
-        self.returncode = -15
+    @property
+    def returncode(self):
+        return self._rc
 
-    def kill(self):
-        self.killed = True
-        self.returncode = -9
+    async def acleanup(self, timeout: int = 5) -> None:
+        if self._rc is None:  # 仍在跑 → 终止
+            self.terminated = True
+            self._rc = -15
 
-    async def wait(self):
-        return self.returncode
+    async def start_log_drain(self, on_line):
+        return None
 
 
-def _entry(proc=None, ready=True, port=44001):
-    return {"process": proc or _FakeProc(), "port": port, "ready": ready, "root": "/tmp/x"}
+def _entry(handle=None, ready=True, port=44001, connect_host="127.0.0.1"):
+    return {
+        "handle": handle or _FakeHandle(),
+        "port": port,
+        "ready": ready,
+        "root": "/tmp/x",
+        "connect_host": connect_host,
+    }
 
 
 # ---------- _find_jar ----------
@@ -68,9 +76,9 @@ def test_direct_backend_url_none_when_not_ready():
 
 def test_direct_backend_url_when_ready():
     svc = BackendRunnerService()
-    svc._processes["p1"] = _entry(ready=True, port=44010)
+    svc._processes["p1"] = _entry(ready=True, port=44010, connect_host="sandbox-be-p1")
     url = svc.direct_backend_url("p1")
-    assert url is not None and ":44010" in url
+    assert url is not None and url == "http://sandbox-be-p1:44010"
 
 
 def test_is_running():
@@ -78,7 +86,7 @@ def test_is_running():
     assert svc.is_running("p1") is False
     svc._processes["p1"] = _entry(ready=True)
     assert svc.is_running("p1") is True
-    svc._processes["p1"] = _entry(proc=_FakeProc(returncode=0), ready=True)
+    svc._processes["p1"] = _entry(handle=_FakeHandle(returncode=0), ready=True)
     assert svc.is_running("p1") is False
 
 
@@ -87,11 +95,11 @@ def test_is_running():
 @pytest.mark.asyncio
 async def test_teardown_terminates_and_pops():
     svc = BackendRunnerService()
-    proc = _FakeProc()
-    entry = _entry(proc=proc, ready=True)
+    handle = _FakeHandle()
+    entry = _entry(handle=handle, ready=True)
     svc._processes["p1"] = entry
     await svc._teardown("p1", entry)
-    assert proc.terminated is True
+    assert handle.terminated is True
     assert "p1" not in svc._processes
 
 
@@ -103,10 +111,10 @@ async def test_stop_returns_false_when_not_running():
 @pytest.mark.asyncio
 async def test_stop_stops_running():
     svc = BackendRunnerService()
-    proc = _FakeProc()
-    svc._processes["p1"] = _entry(proc=proc, ready=True)
+    handle = _FakeHandle()
+    svc._processes["p1"] = _entry(handle=handle, ready=True)
     assert (await svc.stop("p1")) is True
-    assert proc.terminated is True
+    assert handle.terminated is True
     assert "p1" not in svc._processes
 
 
