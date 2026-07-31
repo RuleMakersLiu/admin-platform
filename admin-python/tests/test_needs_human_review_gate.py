@@ -128,3 +128,43 @@ def test_review_gate_only_for_configured_stages():
 
 def test_needs_human_status_enum_exists():
     assert flow_manager.PipelineStatus.NEEDS_HUMAN.value == "needs_human"
+
+
+# ---------- eval 阶段质量门控（低分 → NEEDS_HUMAN；judge 缺失 fail-open）----------
+
+def test_eval_quality_gate_low_score_returns_reason(monkeypatch):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "eval_quality_gate_enabled", True)
+    monkeypatch.setattr(settings, "eval_quality_gate_score", 40)
+    reason = flow_manager.DevPipelineManager._eval_quality_gate_reason(
+        {"judge": {"overall_score": 30}}
+    )
+    assert reason is not None and "judge 30" in reason and "40" in reason
+
+
+def test_eval_quality_gate_high_score_no_reason(monkeypatch):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "eval_quality_gate_enabled", True)
+    monkeypatch.setattr(settings, "eval_quality_gate_score", 40)
+    assert flow_manager.DevPipelineManager._eval_quality_gate_reason(
+        {"judge": {"overall_score": 80}}
+    ) is None
+
+
+def test_eval_quality_gate_failopen_when_judge_missing(monkeypatch):
+    """judge 缺失/出错/None → 不 gate（评测故障不卡死流水线）。"""
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "eval_quality_gate_enabled", True)
+    monkeypatch.setattr(settings, "eval_quality_gate_score", 40)
+    gate = flow_manager.DevPipelineManager._eval_quality_gate_reason
+    assert gate({"error": "评测未完成"}) is None               # 整个 eval 出错
+    assert gate({"judge": {"error": "API 超时"}}) is None       # judge 子项出错
+    assert gate({"judge": {"overall_score": None}}) is None     # judge 分为 None
+
+
+def test_eval_quality_gate_disabled_no_reason(monkeypatch):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "eval_quality_gate_enabled", False)
+    assert flow_manager.DevPipelineManager._eval_quality_gate_reason(
+        {"judge": {"overall_score": 10}}
+    ) is None

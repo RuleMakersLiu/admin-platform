@@ -6017,6 +6017,23 @@ class DevPipelineManager:
             run.update_time = int(time.time() * 1000)
         await session.commit()
 
+    @staticmethod
+    def _eval_quality_gate_reason(eval_struct: Dict[str, Any]) -> Optional[str]:
+        """eval 阶段质量门控：LLM judge 低分 → 返回升级人工的理由；否则 None。
+
+        judge 缺失/出错（overall_score=None）→ 不 gate（fail-open，沿用全栈 fail-open 哲学，
+        避免评测故障卡死流水线）。门控开关/阈值见 settings.eval_quality_gate_*。
+        """
+        if not settings.eval_quality_gate_enabled:
+            return None
+        judge_score = (eval_struct.get("judge") or {}).get("overall_score")
+        if isinstance(judge_score, (int, float)) and judge_score < settings.eval_quality_gate_score:
+            return (
+                f"自动评测低分（judge {int(judge_score)} < "
+                f"{settings.eval_quality_gate_score}），需人工复核交付质量"
+            )
+        return None
+
     async def _run_eval_stage(
         self, pipe: "DevPipeline", stages: Dict[str, Any], emit: Optional[Any] = None
     ) -> Tuple[str, Dict[str, Any]]:
@@ -6274,6 +6291,15 @@ class DevPipelineManager:
                         "structured_output": eval_struct,
                         "completed_at": datetime.now().isoformat(),
                     })
+                    # 质量门控：LLM judge 低分 → 升级人工复核（NEEDS_HUMAN），不静默推进 report
+                    gate_reason = self._eval_quality_gate_reason(eval_struct)
+                    if gate_reason:
+                        await emit({"type": "stage_completed", "stage": "eval", "output": eval_md})
+                        await self._escalate_to_human(
+                            session, pipe, stages, "eval", reason=gate_reason, emit=emit,
+                        )
+                        fix_feedback = ""
+                        continue
                     pipe.current_stage = "report"
                     pipe.stages_data = json.dumps(stages, ensure_ascii=False)
                     pipe.update_time = int(time.time() * 1000)

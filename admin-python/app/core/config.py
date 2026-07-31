@@ -125,6 +125,11 @@ class Settings(BaseSettings):
     sandbox_container_prefix_be: str = "sandbox-be"  # 后端 java 长驻容器名前缀：sandbox-be-<pid12>
     sandbox_container_prefix_fe: str = "sandbox-fe"  # 前端 vite 长驻容器名前缀：sandbox-fe-<pid12>
 
+    # 评测质量门控（eval 阶段 LLM judge 低分 → NEEDS_HUMAN 人工复核，而非静默完成）。
+    # 默认 ON、阈值 40（保守，只拦「明显差」的交付，免 LLM 抖动误伤）；judge 缺失/出错 → 不 gate（fail-open）。
+    eval_quality_gate_enabled: bool = True
+    eval_quality_gate_score: int = 40
+
     @model_validator(mode="after")
     def _enforce_production_secret(self) -> "Settings":
         """Fail fast if the JWT secret is missing or is the insecure dev default, outside debug mode."""
