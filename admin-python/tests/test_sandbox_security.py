@@ -16,6 +16,7 @@ import sys
 
 import pytest
 
+from app.core.config import settings
 from app.services.sandbox_security import (
     SANDBOX_GID,
     SANDBOX_UID,
@@ -121,3 +122,66 @@ def test_run_sandboxed_timeout_kills_and_raises():
     """超时 → kill 子进程并回收 → 抛 TimeoutError（调用方按需转换语义）。"""
     with pytest.raises(asyncio.TimeoutError):
         asyncio.run(run_sandboxed([PY, "-c", "import time; time.sleep(60)"], cwd="/tmp", timeout=1))
+
+
+# ---------- Phase A：容器后端纯逻辑（不依赖 docker 守护进程；端到端走部署期 E2E） ----------
+
+def test_docker_run_argv_shape():
+    """_docker_run_argv 组装正确的 docker run 标志：network/user/volumes-from/cwd/env/HOME 覆盖/image/args。"""
+    import socket as _socket
+    from app.services.sandbox_security import _docker_run_argv
+    argv = _docker_run_argv(
+        ["mvn", "-B", "package"],
+        cwd="/data/pipelines/p1",
+        env={"MYSQL_HOST": "mysql-sandbox", "HOME": "/root"},
+    )
+    assert argv[0:2] == ["docker", "run"]
+    assert argv[argv.index("--network") + 1] == settings.sandbox_network_name
+    assert argv[argv.index("--user") + 1] == "1500:1500"
+    assert argv[argv.index("--volumes-from") + 1] == _socket.gethostname()
+    assert argv[argv.index("-w") + 1] == "/data/pipelines/p1"
+    # 调用方 env 注入
+    assert "MYSQL_HOST=mysql-sandbox" in argv
+    # HOME=/tmp 强制覆盖：env 里的 HOME=/root 必须被末尾的 HOME=/tmp 压过（docker -e 后者赢）
+    home_vals = [argv[i + 1] for i, a in enumerate(argv) if a == "-e" and argv[i + 1].startswith("HOME=")]
+    assert home_vals[-1] == "HOME=/tmp"
+    # 镜像 + 命令在末尾
+    img = settings.sandbox_image_name
+    assert argv[argv.index(img):] == [img, "mvn", "-B", "package"]
+
+
+def test_docker_run_argv_env_none_injects_no_env_but_home():
+    """env=None：不注入调用方 env，但仍强制 HOME=/tmp（uid 1500 不可访问 /root）。"""
+    from app.services.sandbox_security import _docker_run_argv
+    argv = _docker_run_argv(["node", "-v"], cwd="/tmp", env=None)
+    e_args = [argv[i + 1] for i, a in enumerate(argv) if a == "-e"]
+    assert e_args == ["HOME=/tmp"]  # 仅 HOME，无其它 -e
+
+
+def test_decode_exit():
+    """_decode_exit 解析 docker wait 退出码（含负数信号、垃圾兜底返 1）。"""
+    from app.services.sandbox_security import _decode_exit
+    assert _decode_exit((0, b"0\n", b"")) == 0
+    assert _decode_exit((0, b"3\n", b"")) == 3
+    assert _decode_exit((0, b"-15\n", b"")) == -15  # SIGTERM
+    assert _decode_exit((0, b"137\n", b"")) == 137   # SIGKILL
+    assert _decode_exit((0, b"garbage", b"")) == 1
+    assert _decode_exit((0, b"", b"")) == 1
+
+
+def test_spawn_sandboxed_service_process_mode_returns_process_handle():
+    """process 模式（默认）：spawn_sandboxed_service 包 spawn_sandboxed 返回 ProcessHandle，
+    returncode 随进程退出翻转；acleanup 对已退出进程幂等。"""
+    from app.services.sandbox_security import spawn_sandboxed_service, ProcessHandle
+
+    async def _run():
+        h = await spawn_sandboxed_service([PY, "-c", "pass"], cwd="/tmp", name="ignored-in-process-mode")
+        assert isinstance(h, ProcessHandle)
+        assert h.returncode is None  # 刚起，仍在跑
+        await asyncio.sleep(0.5)
+        assert h.returncode == 0  # 进程已退出
+        await h.acleanup()  # 已退出 → 幂等 no-op，不抛
+        return h
+
+    asyncio.run(_run())
+

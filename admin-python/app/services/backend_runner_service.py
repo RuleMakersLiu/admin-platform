@@ -6,7 +6,7 @@
 3. 轮询 TCP 端口就绪；
 4. 用完即 ``stop``（terminate + 摘除）。
 
-前置：admin-python 镜像含 JDK17+maven（Dockerfile），mysql-sandbox 服务可达（compose）。
+前置：admin-python 镜像含 JDK18+maven（Dockerfile），mysql-sandbox 服务可达（compose）。
 未满足时 ``start`` 抛清晰错误，调用方 fail-open。当前版本只保证「能构建+能起」；DB/schema
 灌入与端点契约探针留给 4b-3/4c。
 """
@@ -124,7 +124,7 @@ class BackendRunnerService:
     async def start(self, pipeline_id: str, workspace_path: str) -> Dict[str, Any]:
         if not shutil.which("java") or not shutil.which("mvn"):
             raise RuntimeError(
-                "admin-python 容器未安装 JDK/maven（需 rebuild 含 openjdk-17 + maven 的镜像后生效）"
+                "admin-python 容器未安装 JDK/maven（需 rebuild 含 openjdk-18 + maven 的镜像后生效）"
             )
         root = Path(workspace_path)
         if not (root / "pom.xml").exists():

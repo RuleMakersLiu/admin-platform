@@ -106,6 +106,28 @@ async def _sandbox_reaper_task():
             await asyncio.sleep(120)
 
 
+async def _sweep_orphan_sandbox_containers():
+    """container 模式启动时回收残留沙箱容器：admin-python 崩溃/重启后，sandbox-be-/sandbox-fe-
+    容器可能仍在跑而 _processes 注册表已丢失（reaper 不再管它们）。按容器名前缀 docker rm -f 清理。
+    best-effort；process 模式 / 无 docker 时 no-op。"""
+    if settings.sandbox_execution_mode != "container":
+        return
+    import shutil
+    if not shutil.which("docker"):
+        return
+    from app.services.sandbox_security import _docker_exec
+    prefixes = (settings.sandbox_container_prefix_be, settings.sandbox_container_prefix_fe)
+    removed = 0
+    for prefix in prefixes:
+        _, out, _ = await _docker_exec(
+            ["docker", "ps", "-aq", "--filter", f"name={prefix}-"], timeout=30)
+        for cid in out.decode("utf-8", "ignore").split():
+            await _docker_exec(["docker", "rm", "-f", cid], timeout=30)
+            removed += 1
+    if removed:
+        logger.warning(f"Sandbox orphan sweep: removed {removed} leftover sandbox container(s)")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
@@ -144,6 +166,12 @@ async def lifespan(app: FastAPI):
     # 启动沙箱回收任务（每 60s，空闲超 ttl 自动 stop 释放进程/端口）
     reaper_task = asyncio.create_task(_sandbox_reaper_task())
     logger.info(f"✅ 沙箱回收任务已启动 (每 60s，空闲 {settings.pipeline_sandbox_idle_ttl}s 自动 stop)")
+
+    # container 模式：清残留沙箱容器（崩溃/重启后 reaper 注册表丢失的兜底）
+    try:
+        await _sweep_orphan_sandbox_containers()
+    except Exception as e:
+        logger.warning(f"Sandbox orphan sweep failed: {e}")
 
     yield
 

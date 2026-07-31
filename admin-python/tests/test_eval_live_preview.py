@@ -11,33 +11,33 @@ import app.services.vision_eval_service as ves
 from app.services.sandbox_preview_service import SandboxPreviewService
 
 
-class _FakeProc:
-    """最小进程替身：returncode=None 表示存活；terminate/wait/kill 可调用。"""
+class _FakeHandle:
+    """最小 SandboxHandle 替身：returncode=None 表示存活；acleanup 终止。"""
 
     def __init__(self, returncode=None):
-        self.returncode = returncode
+        self._rc = returncode
         self.terminated = False
-        self.killed = False
 
-    def terminate(self):
-        self.terminated = True
-        self.returncode = -15
+    @property
+    def returncode(self):
+        return self._rc
 
-    def kill(self):
-        self.killed = True
-        self.returncode = -9
+    async def acleanup(self, timeout: int = 5) -> None:
+        if self._rc is None:  # 仍在跑 → 终止
+            self.terminated = True
+            self._rc = -15
 
-    async def wait(self):
-        return self.returncode
+    async def start_log_drain(self, on_line):
+        return None
 
 
-def _entry(proc=None, ready=True, port=43001):
+def _entry(handle=None, ready=True, port=43001, connect_host="127.0.0.1"):
     return {
-        "process": proc or _FakeProc(),
+        "handle": handle or _FakeHandle(),
         "port": port,
         "ready": ready,
-        "output_task": None,
         "root": "/tmp/x",
+        "connect_host": connect_host,
     }
 
 
@@ -72,28 +72,23 @@ async def test_stop_returns_false_when_not_running():
 @pytest.mark.asyncio
 async def test_stop_terminates_and_deregisters():
     svc = SandboxPreviewService()
-    proc = _FakeProc()
-    svc._processes["p1"] = _entry(proc=proc, ready=True)
+    handle = _FakeHandle()
+    svc._processes["p1"] = _entry(handle=handle, ready=True)
     assert (await svc.stop("p1")) is True
-    assert proc.terminated is True
+    assert handle.terminated is True
     assert "p1" not in svc._processes
 
 
 # ---------------- _teardown_entry ----------------
 
 @pytest.mark.asyncio
-async def test_teardown_cancels_output_task_and_pops():
-    from unittest.mock import MagicMock
-
+async def test_teardown_acleanup_and_pops():
     svc = SandboxPreviewService()
-    proc = _FakeProc()
-    task = MagicMock()
-    entry = _entry(proc=proc, ready=True)
-    entry["output_task"] = task
+    handle = _FakeHandle()
+    entry = _entry(handle=handle, ready=True)
     svc._processes["p1"] = entry
     await svc._teardown_entry("p1", entry)
-    assert proc.terminated is True
-    task.cancel.assert_called_once()
+    assert handle.terminated is True  # acleanup 终止了句柄（含取消日志 drain）
     assert "p1" not in svc._processes
 
 
