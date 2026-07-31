@@ -1,0 +1,58 @@
+# Phase A 收口（可选 overlay）：docker socket-proxy —— 把 admin-python 对 docker daemon 的访问
+# 限制成「仅容器/镜像管理」，收回 host-root 面（admin-python 不再直挂 /var/run/docker.sock，
+# 改走 DOCKER_HOST=tcp://socket-proxy:2375 经白名单代理）。
+#
+# 为什么是 overlay：主 compose 默认 admin-python 直挂 sock（dev 栈当前状态，已 E2E 验证）。
+# 收口需拉 tecnativa/docker-socket-proxy 镜像 + 重启 admin-python，故独立成 overlay，opt-in。
+#
+# 启用（需本机能拉 tecnativa/docker-socket-proxy，docker hub 不可达时无法启用）：
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.sandbox-proxy.yml up -d
+# 验证（不拉镜像，仅渲染配置）：
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.sandbox-proxy.yml config
+#
+# 白名单策略：沙箱编排只用 run(-d)/logs -f/wait/stop/rm/ps + run 前查镜像 → 放行 CONTAINERS + POST
+# （create 容器是 POST）+ IMAGES（inspect）。其余显式禁：EXEC（防 exec 进任意容器）、BUILD/COMMIT、
+# VOLUMES（防 -v /:/host 挂根卷）、NETWORKS、SYSTEM（防 daemon info 探测）、SWARM、SECRETS/CONFIGS 等。
+
+services:
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: admin-socket-proxy
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      # ===== 放行（沙箱编排必需）=====
+      - CONTAINERS=1   # create/inspect/list/start/stop/kill/rm/logs/wait —— run -d / logs -f / wait / stop / rm / ps
+      - POST=1         # 创建容器走 POST /containers/create
+      - IMAGES=1       # docker run 前 inspect 镜像存在（镜像已在本地，不触发 pull）
+      # ===== 显式禁（纵深防御；Tecnativa 默认即 0，此处明示意图）=====
+      - EXEC=0         # 禁 docker exec 进任意容器（含 admin-python 自身）
+      - BUILD=0        # 禁 docker build（防注入构建）
+      - COMMIT=0
+      - VOLUMES=0      # 禁 volume 管理（配合下述 admin-python 不挂根卷，收 -v /:/host 面）
+      - NETWORKS=0
+      - PLUGINS=0
+      - SERVICES=0
+      - TASKS=0
+      - SECRETS=0
+      - CONFIGS=0
+      - SYSTEM=0       # 禁 /info /version（防 daemon 探测）
+      - SWARM=0
+      - DISTRIBUTION=0
+      - SESSION=0
+    networks:
+      - admin-network  # 仅 admin-network 可达（admin-python 经此访问）；不 publish 到 host
+
+  admin-python:
+    # !override 完全替换主 compose 的 volumes——移除 /var/run/docker.sock 直挂（收口核心）
+    volumes: !override
+      - pipeline_data:/data/pipelines
+      - ../admin-python/app:/app/app
+    environment:
+      - DOCKER_HOST=tcp://socket-proxy:2375   # docker-cli 走代理而非 sock
+      - SANDBOX_EXECUTION_MODE=container
+      - SANDBOX_IMAGE_NAME=admin-platform/admin-python:latest
+      - SANDBOX_NETWORK_NAME=sandbox-net
+    depends_on:
+      - socket-proxy
