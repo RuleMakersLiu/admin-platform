@@ -158,6 +158,21 @@ def test_docker_run_argv_env_none_injects_no_env_but_home():
     assert e_args == ["HOME=/tmp"]  # 仅 HOME，无其它 -e
 
 
+def test_docker_run_argv_detached_and_name_before_image():
+    """-d / --name 必须在 <image> 之前（docker run [OPTS] IMAGE [CMD]）；放后面会被当命令参数，
+    导致 docker run 跑成前台、cid 误取容器输出（E2E 实测曾因此 logs 404）。回归守护。"""
+    from app.services.sandbox_security import _docker_run_argv
+    argv = _docker_run_argv(
+        ["python", "x.py"], cwd="/tmp", env=None, name="sandbox-be-p1", detached=True
+    )
+    img = settings.sandbox_image_name
+    img_idx = argv.index(img)
+    assert argv.index("--name") < img_idx
+    assert argv.index("-d") < img_idx
+    # 命令参数在 image 之后
+    assert argv[img_idx + 1:] == ["python", "x.py"]
+
+
 def test_decode_exit():
     """_decode_exit 解析 docker wait 退出码（含负数信号、垃圾兜底返 1）。"""
     from app.services.sandbox_security import _decode_exit

@@ -183,5 +183,7 @@ networks:
     driver: bridge
   # 沙箱隔离网络（Phase A）：生成的不可信代码容器只挂此网——可达 mysql-sandbox + 互联网出站，
   # 不可达 admin-network 内网（postgres/redis/gateway）。admin-python 与 mysql-sandbox 双挂。
+  # name: 固定网络名（免 compose project 前缀），沙箱容器经裸 docker CLI 引用（--network sandbox-net）。
   sandbox-net:
+    name: sandbox-net
     driver: bridge

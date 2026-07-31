@@ -147,15 +147,22 @@ async def _docker_exec(args: list[str], *, timeout: float | None = None) -> tupl
     return proc.returncode or 0, out or b"", err or b""
 
 
-def _docker_run_argv(args, *, cwd, env) -> list[str]:
-    """组装 `docker run` 参数（共用前台/-d）：--network sandbox-net --user 1500 --volumes-from 自身
-    -w cwd -e KEY=VAL... <image> <args>。镜像 CMD(uvicorn) 被 args 整体覆盖；镜像无 ENTRYPOINT。"""
+def _docker_run_argv(args, *, cwd, env, name: str | None = None, detached: bool = False) -> list[str]:
+    """组装 `docker run [OPTIONS] IMAGE [COMMAND]` 参数。选项必须在镜像名之前——docker 把镜像名之后
+    的 token 一律当容器的命令参数，故 --name/-d 等选项必须放在 <image> 前（曾因 +["-d"] 尾部拼接
+    把 -d 当成脚本参数、docker run 跑成前台、cid 误取容器输出导致 logs 404）。
+    --network sandbox-net --user 1500 --volumes-from 自身 [--name N] [-d] -w cwd -e KEY=VAL... <image> <args>。
+    镜像 CMD(uvicorn) 被 args 整体覆盖；镜像无 ENTRYPOINT。"""
     argv = [
         "docker", "run",
         "--network", settings.sandbox_network_name,
         "--user", f"{SANDBOX_UID}:{SANDBOX_GID}",
         "--volumes-from", _sandbox_self_container_id(),
     ]
+    if name:
+        argv += ["--name", name]
+    if detached:
+        argv += ["-d"]
     if cwd:
         argv += ["-w", str(cwd)]
     for k, v in (env or {}).items():
@@ -179,7 +186,7 @@ async def _run_sandboxed_container(
     - separate_stderr=False：docker logs 的 stderr 合并进 stdout（stderr=STDOUT，保到达顺序），stderr_bytes=b""。
     - separate_stderr=True：docker logs 天然分离容器 stdout/stderr（各自 PIPE），保留分离（如 git clone 错误流）。
     """
-    run_argv = _docker_run_argv(args, cwd=cwd, env=env) + ["-d"]
+    run_argv = _docker_run_argv(args, cwd=cwd, env=env, detached=True)
     rc, cid_b, err = await _docker_exec(run_argv, timeout=60)
     if rc != 0:
         raise RuntimeError(
@@ -374,7 +381,7 @@ async def spawn_sandboxed_service(args, *, cwd=None, env=None, name: str, drop_p
     """
     if settings.sandbox_execution_mode == "container":
         await _docker_exec(["docker", "rm", "-f", name], timeout=30)  # 幂等：清同名残留容器
-        run_argv = _docker_run_argv(args, cwd=cwd, env=env) + ["--name", name, "-d"]
+        run_argv = _docker_run_argv(args, cwd=cwd, env=env, name=name, detached=True)
         rc, cid_b, err = await _docker_exec(run_argv, timeout=60)
         if rc != 0:
             raise RuntimeError(
