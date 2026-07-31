@@ -32,6 +32,7 @@ from app.models.agent_models import DevPipeline, ProjectKnowledge
 from app.services.memory_service import MemoryService, MemoryType
 from app.services.user_evolution_service import UserEvolutionService
 from app.core.database import async_session_maker
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -4870,8 +4871,9 @@ async def _fetch_project_files_from_git(project_id: str) -> Dict[str, str]:
         if not repo_url:
             return {}
 
-        # 2. 浅克隆到临时目录
-        tmp_dir = tempfile.mkdtemp(prefix="pipe-ctx-")
+        # 2. 浅克隆到临时目录（放共享工作区根，沙箱容器模式下 git clone 跑在隔离容器里，
+        #    需与 admin-python 共享同一卷——/tmp 是每容器独立的，不可见）
+        tmp_dir = tempfile.mkdtemp(prefix="pipe-ctx-", dir=settings.pipeline_workspace_root)
         token = await _get_git_token_for_project(project_id) or await _get_git_token_for_repo(repo_url)
         clone_url = _inject_git_credentials(repo_url, token)
 
@@ -4935,16 +4937,15 @@ async def _clone_project_repo(clone_url: str, branch: str, tmp_dir: str):
     if not ok:
         logger.warning("Blocked git clone to unsafe host: %s", reason)
         return b"", reason.encode(errors="ignore")[:200], 128
-    from app.services.sandbox_security import spawn_sandboxed
-    # 安全（防越权）：git clone 跑不可信代码——走统一安全原语（剔除 admin 凭据 + 非 root 降权）。
-    # 此前裸继承 os.environ（含 GIT_TOKEN）。
-    proc = await spawn_sandboxed(
+    from app.services.sandbox_security import run_sandboxed_with_stderr
+    # 安全（防越权）：git clone 跑不可信代码——走统一安全原语（剔除 admin 凭据 + 非 root 降权 / 容器隔离）。
+    # 此前裸继承 os.environ（含 GIT_TOKEN）。容器模式下 docker logs 天然分离 stdout/stderr（保真错误流）。
+    rc, stdout, stderr = await run_sandboxed_with_stderr(
         ["git", "clone", "--depth", "1", "--branch", branch, clone_url, tmp_dir],
-        stderr=asyncio.subprocess.PIPE,
+        timeout=60,
     )
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-    if proc.returncode == 0 or not branch:
-        return stdout, stderr, proc.returncode
+    if rc == 0 or not branch:
+        return stdout, stderr, rc
 
     logger.warning(
         "Git clone branch %s failed, retrying default branch: %s",
@@ -4954,12 +4955,11 @@ async def _clone_project_repo(clone_url: str, branch: str, tmp_dir: str):
     await _cleanup_temp_path(tmp_dir)
     os.makedirs(tmp_dir, exist_ok=True)
 
-    proc = await spawn_sandboxed(
+    rc, stdout, stderr = await run_sandboxed_with_stderr(
         ["git", "clone", "--depth", "1", clone_url, tmp_dir],
-        stderr=asyncio.subprocess.PIPE,
+        timeout=60,
     )
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-    return stdout, stderr, proc.returncode
+    return stdout, stderr, rc
 
 
 def _inject_git_credentials(repo_url: str, token: str = "") -> str:

@@ -328,19 +328,17 @@ async def test_runner(
         cmd = _FRAMEWORK_COMMANDS[fw]
         start = time.time()
         try:
-            from app.services.sandbox_security import spawn_sandboxed
-            # 安全（防越权）：跑生成的测试代码——走统一安全原语（剔除 admin 凭据 + 非 root 降权）。
+            from app.services.sandbox_security import run_sandboxed
+            # 安全（防越权）：跑生成的测试代码——走统一安全原语（剔除 admin 凭据 + 非 root 降权 / 容器隔离）。
             # 此前裸继承 os.environ，会把 DATABASE_URL/JWT_SECRET/*_API_KEY 直接喂给生成代码。
-            proc = await spawn_sandboxed(cmd, cwd=workspace_path)
-            stdout_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            code, stdout = await run_sandboxed(cmd, cwd=workspace_path, timeout=timeout)
             duration_ms = int((time.time() - start) * 1000)
-            stdout = stdout_bytes.decode("utf-8", errors="replace")
 
             # 截断超长输出
             if len(stdout) > 10000:
                 stdout = stdout[:5000] + "\n... (truncated) ...\n" + stdout[-5000:]
 
-            if proc.returncode == 0:
+            if code == 0:
                 return {
                     "success": True,
                     "framework": fw,
@@ -368,7 +366,7 @@ async def test_runner(
                 }
 
         except asyncio.TimeoutError:
-            proc.kill()
+            # run_sandboxed 超时已 kill 进程/容器（process：kill+wait；container：stop+rm），无需再 kill
             return {
                 "success": False,
                 "framework": fw,

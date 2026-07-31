@@ -102,7 +102,8 @@ async def run_sandboxed(args, *, cwd=None, env=None, timeout: int = 180, drop_pr
     走 _run_sandboxed_container；process 模式（默认/本地 pytest）走原子进程。
     """
     if settings.sandbox_execution_mode == "container":
-        return await _run_sandboxed_container(args, cwd=cwd, env=env, timeout=timeout)
+        code, out, _ = await _run_sandboxed_container(args, cwd=cwd, env=env, timeout=timeout)
+        return code, out.decode("utf-8", "ignore")
     proc = await spawn_sandboxed(args, cwd=cwd, env=env, drop_privs=drop_privs)
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -164,13 +165,16 @@ def _docker_run_argv(args, *, cwd, env) -> list[str]:
     return argv
 
 
-async def _run_sandboxed_container(args, *, cwd=None, env=None, timeout: int = 180) -> tuple[int, str]:
+async def _run_sandboxed_container(
+    args, *, cwd=None, env=None, timeout: int = 180, separate_stderr: bool = False,
+) -> tuple[int, bytes, bytes]:
     """run_sandboxed 的容器后端：docker run -d 拿容器 ID → docker logs -f 取输出（容器退出即 EOF）
     → docker wait 取退出码 → docker rm -f 清理；超时 docker stop -t 2 后回收再抛 TimeoutError。
 
     用 -d + logs + wait 而非 `docker run` 前台：前台超时 kill CLI 客户端会孤儿容器（SIGKILL 不转发），
-    detached 能可靠按 ID stop/rm。输出经 docker logs 的 stderr 合并（stderr=STDOUT）等同 process 模式的
-    合并流默认。
+    detached 能可靠按 ID stop/rm。返回 (returncode, stdout_bytes, stderr_bytes)：
+    - separate_stderr=False：docker logs 的 stderr 合并进 stdout（stderr=STDOUT，保到达顺序），stderr_bytes=b""。
+    - separate_stderr=True：docker logs 天然分离容器 stdout/stderr（各自 PIPE），保留分离（如 git clone 错误流）。
     """
     run_argv = _docker_run_argv(args, cwd=cwd, env=env) + ["-d"]
     rc, cid_b, err = await _docker_exec(run_argv, timeout=60)
@@ -182,13 +186,13 @@ async def _run_sandboxed_container(args, *, cwd=None, env=None, timeout: int = 1
     if not cid:
         raise RuntimeError("docker run 未返回容器 ID")
 
-    # docker logs -f 跟随直到容器退出；stderr=STDOUT 合并容器 stdout/stderr（同 process 默认）
+    logs_stderr = asyncio.subprocess.PIPE if separate_stderr else asyncio.subprocess.STDOUT
     log_proc = await asyncio.create_subprocess_exec(
         "docker", "logs", "-f", cid,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+        stdout=asyncio.subprocess.PIPE, stderr=logs_stderr,
     )
     try:
-        out, _ = await asyncio.wait_for(log_proc.communicate(), timeout=timeout)
+        out, err = await asyncio.wait_for(log_proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
         # 超时：容器仍在跑 → 强停（SIGTERM 2s→SIGKILL）→ wait 收尸 → rm 清理，再抛
         await _docker_exec(["docker", "stop", "-t", "2", cid], timeout=20)
@@ -198,7 +202,25 @@ async def _run_sandboxed_container(args, *, cwd=None, env=None, timeout: int = 1
     # 容器已退出（logs -f EOF）：docker wait 取退出码（须容器仍存在），再 rm -f 清理
     rc = _decode_exit(await _docker_exec(["docker", "wait", cid], timeout=30))
     await _docker_exec(["docker", "rm", "-f", cid], timeout=30)
-    return rc, (out or b"").decode("utf-8", "ignore")
+    return rc, out or b"", err or b""
+
+
+async def run_sandboxed_with_stderr(args, *, cwd=None, env=None, timeout: int = 180, drop_privs=True):
+    """run_sandboxed 的「stdout/stderr 分离」变体：返回 (returncode, stdout_bytes, stderr_bytes)。
+
+    供需单独取 stderr 的调用点（flow_manager git clone 的错误提示）。container 模式走
+    _run_sandboxed_container(separate_stderr=True)——docker logs 天然分离容器 stdout/stderr，比合并流保真。
+    """
+    if settings.sandbox_execution_mode == "container":
+        return await _run_sandboxed_container(args, cwd=cwd, env=env, timeout=timeout, separate_stderr=True)
+    proc = await spawn_sandboxed(args, cwd=cwd, env=env, drop_privs=drop_privs, stderr=asyncio.subprocess.PIPE)
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise
+    return proc.returncode or 0, out or b"", err or b""
 
 
 def _decode_exit(wait_out: tuple[int, bytes, bytes]) -> int:
