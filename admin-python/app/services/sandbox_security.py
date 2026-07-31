@@ -9,7 +9,11 @@ vite dev）触发的所有子进程。这是「进程级 env 隔离」——更�
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import socket
+
+from app.core.config import settings
 
 # 敏感关键词（大小写不敏感，key 含任一即剔除）——生成的子进程绝不应继承 admin 凭据。
 # 用「包含」而非「前缀」，避免 CLAUDE_API_KEY / X_API_KEY 这类前缀不在列表里的漏网。
@@ -93,7 +97,12 @@ async def run_sandboxed(args, *, cwd=None, env=None, timeout: int = 180, drop_pr
 
     返回 (returncode, stdout 文本)；超时则 kill 进程并 await 回收后抛 asyncio.TimeoutError
     （调用方按需捕获转换为各自的超时语义）。覆盖所有「跑完即取输出」形状的不可信命令执行。
+
+    container 模式（Phase A）：命令跑在仅挂 sandbox-net 的隔离 docker 容器里（不可达 admin 内网），
+    走 _run_sandboxed_container；process 模式（默认/本地 pytest）走原子进程。
     """
+    if settings.sandbox_execution_mode == "container":
+        return await _run_sandboxed_container(args, cwd=cwd, env=env, timeout=timeout)
     proc = await spawn_sandboxed(args, cwd=cwd, env=env, drop_privs=drop_privs)
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -102,3 +111,99 @@ async def run_sandboxed(args, *, cwd=None, env=None, timeout: int = 180, drop_pr
         await proc.wait()
         raise
     return proc.returncode or 0, (out or b"").decode("utf-8", "ignore")
+
+
+# ==================== Phase A：容器后端（隔离网络执行） ====================
+#
+# container 模式下不可信命令在独立 docker 容器内执行（仅挂 sandbox-net）。admin-python 经挂载的
+# docker.sock + docker-cli 编排（同 admin-deploy）。镜像复用 admin-python 自身镜像（含全部 toolchain +
+# uid1500 + 全局 maven settings）；工作区经 --volumes-from 共享 admin-python 的 pipeline_data 挂载
+# （自动继承正确卷名，免依赖 compose project 前缀）。容器以 uid 1500 跑，镜像 env 本身无 admin 密钥
+# （DB/JWT 是 admin-python 运行期 compose env，不烤进镜像），故 env=None 不注入任何 -e 即天然脱敏。
+
+_self_container_id: str | None = None
+
+
+def _sandbox_self_container_id() -> str:
+    """admin-python 自身容器 ID（短）——用于 --volumes-from 共享工作区卷。懒缓存（socket.gethostname）。"""
+    global _self_container_id
+    if not _self_container_id:
+        _self_container_id = socket.gethostname() or ""
+    return _self_container_id
+
+
+async def _docker_exec(args: list[str], *, timeout: float | None = None) -> tuple[int, bytes, bytes]:
+    """跑一条 docker CLI 命令，返回 (returncode, stdout, stderr)。"""
+    proc = await asyncio.create_subprocess_exec(
+        *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise
+    return proc.returncode or 0, out or b"", err or b""
+
+
+def _docker_run_argv(args, *, cwd, env) -> list[str]:
+    """组装 `docker run` 参数（共用前台/-d）：--network sandbox-net --user 1500 --volumes-from 自身
+    -w cwd -e KEY=VAL... <image> <args>。镜像 CMD(uvicorn) 被 args 整体覆盖；镜像无 ENTRYPOINT。"""
+    argv = [
+        "docker", "run",
+        "--network", settings.sandbox_network_name,
+        "--user", f"{SANDBOX_UID}:{SANDBOX_GID}",
+        "--volumes-from", _sandbox_self_container_id(),
+    ]
+    if cwd:
+        argv += ["-w", str(cwd)]
+    for k, v in (env or {}).items():
+        argv += ["-e", f"{k}={v}"]
+    argv.append(settings.sandbox_image_name)
+    argv += list(args)
+    return argv
+
+
+async def _run_sandboxed_container(args, *, cwd=None, env=None, timeout: int = 180) -> tuple[int, str]:
+    """run_sandboxed 的容器后端：docker run -d 拿容器 ID → docker logs -f 取输出（容器退出即 EOF）
+    → docker wait 取退出码 → docker rm -f 清理；超时 docker stop -t 2 后回收再抛 TimeoutError。
+
+    用 -d + logs + wait 而非 `docker run` 前台：前台超时 kill CLI 客户端会孤儿容器（SIGKILL 不转发），
+    detached 能可靠按 ID stop/rm。输出经 docker logs 的 stderr 合并（stderr=STDOUT）等同 process 模式的
+    合并流默认。
+    """
+    run_argv = _docker_run_argv(args, cwd=cwd, env=env) + ["-d"]
+    rc, cid_b, err = await _docker_exec(run_argv, timeout=60)
+    if rc != 0:
+        raise RuntimeError(
+            f"docker run 失败（exit {rc}）: {(err or b'').decode('utf-8', 'ignore')[:500]}"
+        )
+    cid = cid_b.decode("utf-8", "ignore").strip()
+    if not cid:
+        raise RuntimeError("docker run 未返回容器 ID")
+
+    # docker logs -f 跟随直到容器退出；stderr=STDOUT 合并容器 stdout/stderr（同 process 默认）
+    log_proc = await asyncio.create_subprocess_exec(
+        "docker", "logs", "-f", cid,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+    )
+    try:
+        out, _ = await asyncio.wait_for(log_proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        # 超时：容器仍在跑 → 强停（SIGTERM 2s→SIGKILL）→ wait 收尸 → rm 清理，再抛
+        await _docker_exec(["docker", "stop", "-t", "2", cid], timeout=20)
+        await _docker_exec(["docker", "wait", cid], timeout=30)
+        await _docker_exec(["docker", "rm", "-f", cid], timeout=30)
+        raise
+    # 容器已退出（logs -f EOF）：docker wait 取退出码（须容器仍存在），再 rm -f 清理
+    rc = _decode_exit(await _docker_exec(["docker", "wait", cid], timeout=30))
+    await _docker_exec(["docker", "rm", "-f", cid], timeout=30)
+    return rc, (out or b"").decode("utf-8", "ignore")
+
+
+def _decode_exit(wait_out: tuple[int, bytes, bytes]) -> int:
+    """解析 `docker wait` 输出（容器退出码，可能负数=信号）。非数字/异常返回 1。"""
+    try:
+        return int((wait_out[1] or b"").decode("utf-8", "ignore").strip())
+    except (ValueError, AttributeError):
+        return 1
