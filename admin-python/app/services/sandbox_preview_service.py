@@ -988,21 +988,14 @@ server.listen(port, host, () => {
             logger.debug("Failed to drain preview output for %s: %s", pipeline_id, exc)
 
     async def _run(self, args: list[str], cwd: Path, timeout: int = 180) -> tuple[int, str]:
-        # 安全：git clone / npm install（postinstall 脚本）/ vite 都执行不可信代码，剔除 admin 凭据
-        from app.services.sandbox_security import sanitized_env
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            cwd=str(cwd),
-            env=sanitized_env(),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
+        # 安全：git clone / npm install（postinstall 脚本）/ vite 都执行不可信代码——走统一安全原语
+        # （剔除 admin 凭据 + 非 root 降权）；超时转为带脱敏命令的 RuntimeError。
+        from app.services.sandbox_security import run_sandboxed
         try:
-            output, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            code, output = await run_sandboxed(args, cwd=str(cwd), timeout=timeout)
         except asyncio.TimeoutError:
-            proc.kill()
             raise RuntimeError(f"{self._redact_sensitive_output(' '.join(args))} 超时")
-        return proc.returncode or 0, self._redact_sensitive_output(output.decode("utf-8", errors="ignore"))
+        return code, self._redact_sensitive_output(output)
 
     async def _node_version(self) -> str:
         code, output = await self._run(["node", "-v"], Path("/tmp"), timeout=10)
@@ -1583,7 +1576,7 @@ server.listen(port, host, () => {
                         self._clear_preview_vite_cache(root, frontend_files)
                     dev_cmd = self._dev_command(root, port, frontend_files)
                     # 安全（防越权）：剔除 admin-python 敏感 env，只留前端构建/运行所需 + 业务变量
-                    from app.services.sandbox_security import sanitized_env
+                    from app.services.sandbox_security import sanitized_env, spawn_sandboxed
                     env = sanitized_env()
                     project_env = self._load_env_file(root, ".env.development")
                     proxy_targets = (
@@ -1605,13 +1598,8 @@ server.listen(port, host, () => {
                         "VITE_SANDBOX_PREVIEW_HOST": settings.pipeline_preview_host,
                         "VITE_SANDBOX_PREVIEW_PORT": str(port),
                     })
-                    process = await asyncio.create_subprocess_exec(
-                        *dev_cmd,
-                        cwd=str(root),
-                        env=env,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.STDOUT,
-                    )
+                    # env=已脱敏并注入业务变量（原样保留不被二次剔除）；非 root 降权由原语负责
+                    process = await spawn_sandboxed(dev_cmd, cwd=str(root), env=env)
                     entry = {
                         "process": process,
                         "port": port,

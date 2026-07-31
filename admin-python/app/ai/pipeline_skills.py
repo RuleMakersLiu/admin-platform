@@ -328,12 +328,10 @@ async def test_runner(
         cmd = _FRAMEWORK_COMMANDS[fw]
         start = time.time()
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                cwd=workspace_path,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
+            from app.services.sandbox_security import spawn_sandboxed
+            # 安全（防越权）：跑生成的测试代码——走统一安全原语（剔除 admin 凭据 + 非 root 降权）。
+            # 此前裸继承 os.environ，会把 DATABASE_URL/JWT_SECRET/*_API_KEY 直接喂给生成代码。
+            proc = await spawn_sandboxed(cmd, cwd=workspace_path)
             stdout_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
             duration_ms = int((time.time() - start) * 1000)
             stdout = stdout_bytes.decode("utf-8", errors="replace")

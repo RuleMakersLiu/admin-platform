@@ -1,5 +1,6 @@
 """FastAPI 应用入口"""
 import asyncio
+import os
 from contextlib import asynccontextmanager
 import logging
 
@@ -9,6 +10,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.database import ensure_runtime_schema, init_db
+
+# 不可信子进程降权到 uid 1500（见 app.services.sandbox_security），需写 root 创建的工作区目录
+# （/data/pipelines、/tmp）。umask=0 → root 创建的目录 0777 / 文件 0666（世界可写），
+# 降权后的子进程方可在其中建 target/、node_modules/、.m2-backend/ 等。
+os.umask(0)
 
 # 配置日志
 logging.basicConfig(

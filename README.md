@@ -135,7 +135,7 @@ Admin Platform 面向“把业务需求落到真实项目代码”的场景。�
 - **活契约审查**（4c）：`code_review` 阶段对真实起的后端发 HTTP 探针（`contract_prober` skill，三层断言：HTTP 状态 / JSON / `result.list` 或详情结构），契约不一致自动追加 mismatch 触发既有 fix-loop；`delivery` 交付结构化 `endpoints[]` 供探针消费
 - **沙箱 DB/schema 灌入**（4b-3）：起服务前在 mysql-sandbox 建 per-pipeline 隔离库 + 灌 `schema.sql`
 - **沙箱自动回收**：后台 reaper 每 60s 扫，空闲超时（默认 1800s）的前端 vite / 后端 java 沙箱进程自动 stop，防长跑泄漏
-- **沙箱安全**：生成代码（LLM 产出、不可信）的子进程走 `sanitized_env`（剔除 admin 凭据 `DATABASE_URL`/`JWT_SECRET`/`*_API_KEY` 等）+ backend_runner env 白名单；DB 库名注入防护 + sandbox user 仅 per-pipeline 库权限；探针 path SSRF 防护（长期「独立容器网络隔离」方案规划中）
+- **沙箱安全**：生成代码（LLM 产出、不可信）的子进程统一走 `spawn_sandboxed`/`run_sandboxed` 原语——`sanitized_env` 剔除 admin 凭据（`DATABASE_URL`/`JWT_SECRET`/`*_API_KEY` 等）+ **非 root 降权（uid 1500）**，7 个 spawn 点（mvn/java/git/npm/vite/pytest/clone）全覆盖、堵匿名 env 泄露；DB 库名注入防护 + sandbox user 仅 per-pipeline 库权限；探针 path SSRF 防护（下一阶段「独立容器网络隔离」待办——当前生成代码仍共享 admin-network）
 
 ### 智能重试与人工介入
 - 每个阶段维护独立重试计数，与 code_review/testing 的修复循环解耦，互不干扰

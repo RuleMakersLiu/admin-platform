@@ -94,21 +94,12 @@ class BackendRunnerService:
         return jars[0] if jars else None
 
     async def _run(self, args: list[str], cwd: Path, timeout: int = 900) -> Tuple[int, str]:
-        # 安全：mvn 执行生成工程的 pom.xml（可能含恶意构建插件/依赖），剔除 admin 凭据防越权
-        from app.services.sandbox_security import sanitized_env
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            cwd=str(cwd),
-            env=sanitized_env(),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
+        # 安全：mvn 执行生成工程的 pom.xml（可能含恶意构建插件/依赖）——走统一安全原语
+        # （剔除 admin 凭据 + 非 root 降权），超时返回 124。
+        from app.services.sandbox_security import run_sandboxed
         try:
-            out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-            return proc.returncode or 0, (out or b"").decode("utf-8", "ignore")
+            return await run_sandboxed(args, cwd=str(cwd), timeout=timeout)
         except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
             return 124, "构建超时"
 
     async def _wait_tcp_ready(self, host: str, port: int, timeout: int = 90) -> None:
@@ -177,12 +168,12 @@ class BackendRunnerService:
                 "MYSQL_USER": settings.pipeline_backend_mysql_user,
                 "MYSQL_PASSWORD": settings.pipeline_backend_mysql_password,
             }
-            process = await asyncio.create_subprocess_exec(
-                "java", "-jar", str(jar), f"--server.port={port}",
+            from app.services.sandbox_security import spawn_sandboxed
+            # env=自建白名单（含沙箱 MySQL 凭据，原样保留不被二次剔除）；非 root 降权由原语负责
+            process = await spawn_sandboxed(
+                ["java", "-jar", str(jar), f"--server.port={port}"],
                 cwd=str(root),
                 env=env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
             )
             entry: Dict[str, Any] = {
                 "process": process,

@@ -4935,9 +4935,11 @@ async def _clone_project_repo(clone_url: str, branch: str, tmp_dir: str):
     if not ok:
         logger.warning("Blocked git clone to unsafe host: %s", reason)
         return b"", reason.encode(errors="ignore")[:200], 128
-    proc = await asyncio.create_subprocess_exec(
-        "git", "clone", "--depth", "1", "--branch", branch, clone_url, tmp_dir,
-        stdout=asyncio.subprocess.PIPE,
+    from app.services.sandbox_security import spawn_sandboxed
+    # 安全（防越权）：git clone 跑不可信代码——走统一安全原语（剔除 admin 凭据 + 非 root 降权）。
+    # 此前裸继承 os.environ（含 GIT_TOKEN）。
+    proc = await spawn_sandboxed(
+        ["git", "clone", "--depth", "1", "--branch", branch, clone_url, tmp_dir],
         stderr=asyncio.subprocess.PIPE,
     )
     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
@@ -4952,9 +4954,8 @@ async def _clone_project_repo(clone_url: str, branch: str, tmp_dir: str):
     await _cleanup_temp_path(tmp_dir)
     os.makedirs(tmp_dir, exist_ok=True)
 
-    proc = await asyncio.create_subprocess_exec(
-        "git", "clone", "--depth", "1", clone_url, tmp_dir,
-        stdout=asyncio.subprocess.PIPE,
+    proc = await spawn_sandboxed(
+        ["git", "clone", "--depth", "1", clone_url, tmp_dir],
         stderr=asyncio.subprocess.PIPE,
     )
     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)

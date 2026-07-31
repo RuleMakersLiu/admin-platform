@@ -54,6 +54,15 @@ COPY --from=builder /app /app
 # E2E: 安装 chromium 浏览器二进制 + 系统依赖（prototype 阶段 Playwright 断言用）
 RUN python -m playwright install --with-deps chromium
 
+# 沙箱降权（阶段 B）：建非根用户（uid/gid 1500）+ maven 镜像配置全局化，放最后保 playwright 缓存不失效。
+# 1) 不可信子进程降权到此身份（见 sandbox_security.drop_privilege_kwargs）；容器仍以 root 运行（保源码
+#    bind-mount 热更新 / chromium / build 期 pip），仅子进程降权，故不加 USER。
+# 2) 降权后 mvn（uid 1500）无法进入 700 的 /root 读 /root/.m2/settings.xml → 把镜像配置写入全局
+#    /usr/share/maven/conf/settings.xml（世界可读），否则回退 Maven Central 挂起。
+RUN groupadd -r sandbox -g 1500 && useradd -r -u 1500 -g sandbox -M -d /tmp -s /usr/sbin/nologin sandbox \
+    && mkdir -p /usr/share/maven/conf \
+    && cp /root/.m2/settings.xml /usr/share/maven/conf/settings.xml
+
 EXPOSE 8081
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
