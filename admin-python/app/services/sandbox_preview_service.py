@@ -945,9 +945,10 @@ server.listen(port, host, () => {
         return "\n".join(lines) + "\n"
 
 
-    async def _wait_ready(self, pipeline_id: str, port: int, timeout: int = 120, preview_path: str = "") -> None:
+    async def _wait_ready(self, pipeline_id: str, port: int, timeout: int = 120, preview_path: str = "", connect_host: str = "") -> None:
         deadline = time.time() + timeout
-        url = f"http://{settings.pipeline_preview_host}:{port}{self._preview_base(pipeline_id)}{preview_path}"
+        host = connect_host or settings.pipeline_preview_host
+        url = f"http://{host}:{port}{self._preview_base(pipeline_id)}{preview_path}"
         async with httpx.AsyncClient(timeout=2.0) as client:
             while time.time() < deadline:
                 try:
@@ -965,27 +966,19 @@ server.listen(port, host, () => {
                 await asyncio.sleep(0.5)
         raise RuntimeError("前端预览服务启动超时")
 
-    async def _drain_process_output(self, pipeline_id: str, process: asyncio.subprocess.Process) -> None:
-        if not process.stdout:
-            return
-        try:
-            while True:
-                line = await process.stdout.readline()
-                if not line:
-                    break
-                text_line = line.decode("utf-8", errors="ignore").strip()
-                if (
-                    "ERROR" in text_line
-                    or "Error:" in text_line
-                    or "Failed" in text_line
-                    or "Compiled" in text_line
-                    or "App running at" in text_line
-                ):
-                    logger.info("[SandboxPreview:%s] %s", pipeline_id, text_line[:1000])
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.debug("Failed to drain preview output for %s: %s", pipeline_id, exc)
+    def _make_preview_log_cb(self, pipeline_id: str):
+        """构造日志行回调（供 SandboxHandle.start_log_drain）：只记录关键行。
+        process 模式读 stdout.readline；container 模式 docker logs -f——两者共用此回调。"""
+        def _on_line(text_line: str) -> None:
+            if (
+                "ERROR" in text_line
+                or "Error:" in text_line
+                or "Failed" in text_line
+                or "Compiled" in text_line
+                or "App running at" in text_line
+            ):
+                logger.info("[SandboxPreview:%s] %s", pipeline_id, text_line[:1000])
+        return _on_line
 
     async def _run(self, args: list[str], cwd: Path, timeout: int = 180) -> tuple[int, str]:
         # 安全：git clone / npm install（postinstall 脚本）/ vite 都执行不可信代码——走统一安全原语
@@ -1268,7 +1261,7 @@ server.listen(port, host, () => {
                 return script
         raise RuntimeError("前端项目没有 dev/serve/start/preview 启动脚本")
 
-    def _dev_command(self, root: Path, port: int, frontend_files: Optional[Dict[str, str]] = None) -> list[str]:
+    def _dev_command(self, root: Path, port: int, frontend_files: Optional[Dict[str, str]] = None, bind_host: str = "") -> list[str]:
         package_json = root / "package.json"
         if not package_json.exists():
             raise RuntimeError("匹配到的前端项目没有 package.json，无法启动真实项目预览")
@@ -1278,7 +1271,8 @@ server.listen(port, host, () => {
 
         package_manager = self._package_manager(root)
         script_command = str(scripts.get(script, ""))
-        args = [package_manager, "run", script, "--", "--host", settings.pipeline_preview_host, "--port", str(port)]
+        host = bind_host or settings.pipeline_preview_host
+        args = [package_manager, "run", script, "--", "--host", host, "--port", str(port)]
         if (root / "vite.config.js").exists() or "vite" in script_command:
             args.extend(["--strictPort", "--base", f"/api/flow/pipeline/{root.parent.name}/sandbox-preview/"])
         return args
@@ -1574,9 +1568,15 @@ server.listen(port, host, () => {
                         self._patch_uniapp_manifest_preview_base(root, pipeline_id)
                         self._patch_uniapp_runtime_api_config(root, pipeline_id)
                         self._clear_preview_vite_cache(root, frontend_files)
-                    dev_cmd = self._dev_command(root, port, frontend_files)
+                    # container 模式：vite 跑在 sandbox-fe-<pid12> 容器（仅 sandbox-net），须绑 0.0.0.0
+                    # （admin-python 跨网桥连它），admin-python 经容器 DNS 名连；process 模式用 loopback。
+                    container_mode = settings.sandbox_execution_mode == "container"
+                    fe_name = f"{settings.sandbox_container_prefix_fe}-{pipeline_id[:12].replace('-', '')}"
+                    bind_host = "0.0.0.0" if container_mode else settings.pipeline_preview_host
+                    connect_host = fe_name if container_mode else settings.pipeline_preview_host
+                    dev_cmd = self._dev_command(root, port, frontend_files, bind_host=bind_host)
                     # 安全（防越权）：剔除 admin-python 敏感 env，只留前端构建/运行所需 + 业务变量
-                    from app.services.sandbox_security import sanitized_env, spawn_sandboxed
+                    from app.services.sandbox_security import sanitized_env, spawn_sandboxed_service
                     env = sanitized_env()
                     project_env = self._load_env_file(root, ".env.development")
                     proxy_targets = (
@@ -1595,15 +1595,16 @@ server.listen(port, host, () => {
                         "VUE_APP_SANDBOX_PREVIEW_PUBLIC": env.get("VUE_APP_SANDBOX_PREVIEW_PUBLIC") or "localhost",
                         "VUE_APP_SANDBOX_PREVIEW_DISABLE_WDS_CLIENT": "1",
                         "VITE_SANDBOX_PREVIEW_BASE": self._preview_base(pipeline_id),
-                        "VITE_SANDBOX_PREVIEW_HOST": settings.pipeline_preview_host,
+                        "VITE_SANDBOX_PREVIEW_HOST": bind_host,
                         "VITE_SANDBOX_PREVIEW_PORT": str(port),
                     })
-                    # env=已脱敏并注入业务变量（原样保留不被二次剔除）；非 root 降权由原语负责
-                    process = await spawn_sandboxed(dev_cmd, cwd=str(root), env=env)
+                    # env=已脱敏并注入业务变量（原样保留不被二次剔除）；降权/容器隔离由句柄负责
+                    handle = await spawn_sandboxed_service(dev_cmd, cwd=str(root), env=env, name=fe_name)
                     entry = {
-                        "process": process,
+                        "handle": handle,
                         "port": port,
                         "root": str(root),
+                        "connect_host": connect_host,
                         "ready": False,
                         "files_hash": files_hash,
                         "tokens": {},
@@ -1615,7 +1616,7 @@ server.listen(port, host, () => {
                         "last_active": time.time(),
                     }
                     self._issue_token(entry)
-                    entry["output_task"] = asyncio.create_task(self._drain_process_output(pipeline_id, process))
+                    await handle.start_log_drain(self._make_preview_log_cb(pipeline_id))
                     async with self._process_lock:
                         self._processes[pipeline_id] = entry
                         self._reserved_ports.discard(port)
@@ -1626,7 +1627,7 @@ server.listen(port, host, () => {
                     raise
 
             try:
-                await self._wait_ready(pipeline_id, port, preview_path=entry.get("html_preview_path") or "")
+                await self._wait_ready(pipeline_id, port, preview_path=entry.get("html_preview_path") or "", connect_host=entry["connect_host"])
             except Exception:
                 await self._teardown_entry(pipeline_id, entry)
                 raise
@@ -1669,7 +1670,7 @@ server.listen(port, host, () => {
 
     def is_running(self, pipeline_id: str) -> bool:
         entry = self._processes.get(pipeline_id)
-        return bool(entry and entry["process"].returncode is None)
+        return bool(entry and entry["handle"].returncode is None)
 
     def direct_preview_url(self, pipeline_id: str) -> Optional[str]:
         """已就绪预览的容器内直连 vite URL（http://host:port/preview_base），未就绪返回 None。
@@ -1677,23 +1678,15 @@ server.listen(port, host, () => {
         供 eval 视觉截图 / E2E 直接命中真实渲染页（绕过 Vue2 渲染桩）。
         """
         entry = self._processes.get(pipeline_id)
-        if not entry or entry["process"].returncode is not None or not entry.get("ready"):
+        if not entry or entry["handle"].returncode is not None or not entry.get("ready"):
             return None
-        return f"http://{settings.pipeline_preview_host}:{entry['port']}{self._preview_base(pipeline_id)}"
+        return f"http://{entry['connect_host']}:{entry['port']}{self._preview_base(pipeline_id)}"
 
     async def _teardown_entry(self, pipeline_id: str, entry: Dict[str, Any]) -> None:
-        """终止预览进程、等待退出、取消输出 drain、从注册表摘除（start/stop 共用）。"""
-        process = entry.get("process")
-        if process and process.returncode is None:
-            process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
-        output_task = entry.get("output_task")
-        if output_task:
-            output_task.cancel()
+        """终止预览句柄（含取消日志 drain）、从注册表摘除（start/stop 共用）。"""
+        handle = entry.get("handle")
+        if handle:
+            await handle.acleanup(timeout=5)
         async with self._process_lock:
             if self._processes.get(pipeline_id) is entry:
                 self._processes.pop(pipeline_id, None)
@@ -1703,7 +1696,7 @@ server.listen(port, host, () => {
         pipeline_lock = await self._pipeline_lock(pipeline_id)
         async with pipeline_lock:
             entry = self._processes.get(pipeline_id)
-            if not entry or entry["process"].returncode is not None:
+            if not entry or entry["handle"].returncode is not None:
                 return False
             await self._teardown_entry(pipeline_id, entry)
             return True
@@ -1736,22 +1729,23 @@ server.listen(port, host, () => {
         body: bytes = b"",
     ) -> httpx.Response:
         entry = self._processes.get(pipeline_id)
-        if not entry or entry["process"].returncode is not None:
+        if not entry or entry["handle"].returncode is not None:
             raise RuntimeError("真实预览服务未启动")
+        host = entry["connect_host"]
         entry["last_active"] = time.time()
         if path.startswith("sockjs-node/"):
-            target = f"http://{settings.pipeline_preview_host}:{entry['port']}{self._preview_base(pipeline_id)}{path}"
+            target = f"http://{host}:{entry['port']}{self._preview_base(pipeline_id)}{path}"
         elif path.startswith("__webpack_dev_server__/"):
-            target = f"http://{settings.pipeline_preview_host}:{entry['port']}/{path}"
+            target = f"http://{host}:{entry['port']}/{path}"
         elif path.startswith(("api/", "javaApi/", "logApi/", "socket.io/")):
-            target = f"http://{settings.pipeline_preview_host}:{entry['port']}/{path}"
+            target = f"http://{host}:{entry['port']}/{path}"
         else:
             generated_path = entry.get("generated_preview_path") if not path else ""
             is_uniapp_page = str(generated_path or "").lstrip("/").startswith("pages/")
             preview_path = entry.get("html_preview_path") if not path and not is_uniapp_page else ""
             generated_path = "" if is_uniapp_page else generated_path
             fallback_path = path or str(preview_path or generated_path or "").lstrip("/")
-            target = f"http://{settings.pipeline_preview_host}:{entry['port']}{self._preview_base(pipeline_id)}{fallback_path}"
+            target = f"http://{host}:{entry['port']}{self._preview_base(pipeline_id)}{fallback_path}"
         if query_string:
             target = f"{target}?{query_string}"
         headers = {k: v for k, v in request_headers.items() if k.lower() not in {"host", "connection", "content-length"}}
@@ -1768,7 +1762,7 @@ server.listen(port, host, () => {
                     flags=re.I,
                 )
             ):
-                fallback_target = f"http://{settings.pipeline_preview_host}:{entry['port']}{self._preview_base(pipeline_id)}"
+                fallback_target = f"http://{host}:{entry['port']}{self._preview_base(pipeline_id)}"
                 response = await client.request("GET", fallback_target, headers=headers)
         content_type = response.headers.get("content-type", "")
         if "text/html" in content_type:

@@ -160,6 +160,9 @@ def _docker_run_argv(args, *, cwd, env) -> list[str]:
         argv += ["-w", str(cwd)]
     for k, v in (env or {}).items():
         argv += ["-e", f"{k}={v}"]
+    # 强制 HOME=/tmp（末尾 -e 覆盖前面）：uid 1500 无法访问 /root。env 透传的 HOME=/root（admin-python
+    # 自身 HOME）会使容器内 npm/pnpm/maven 读 $HOME 报 EACCES；指向可写的 /tmp 消除该类越权尝试。
+    argv += ["-e", "HOME=/tmp"]
     argv.append(settings.sandbox_image_name)
     argv += list(args)
     return argv
