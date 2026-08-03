@@ -225,8 +225,9 @@ export default function PipelineEvalPage() {
             dataSource={rows}
             size="small"
             pagination={{ pageSize: 20 }}
+            scroll={{ x: 1600 }}
             columns={[
-              { title: '需求', dataIndex: 'user_request', ellipsis: true, width: 260 },
+              { title: '需求', dataIndex: 'user_request', ellipsis: true, width: 260, fixed: 'left' },
               {
                 title: '状态',
                 dataIndex: 'status',
@@ -291,6 +292,7 @@ export default function PipelineEvalPage() {
               {
                 title: '操作',
                 width: 170,
+                fixed: 'right',
                 render: (_: unknown, row: EvalRow) => (
                   <Space size={0}>
                     <Button size="small" type="link" onClick={() => openScoreModal(row)}>人工评分</Button>
