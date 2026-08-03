@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Card, Col, Row, Statistic, Table, Tag, Spin, Typography, Empty, Button, Modal, InputNumber, Input, message, Space } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { http } from '@/services/api'
+import ReactECharts from 'echarts-for-react'
 
 const { Text } = Typography
 
@@ -103,7 +104,6 @@ export default function PipelineEvalPage() {
     refresh()
   }, [refresh])
 
-  const maxTrend = Math.max(1, ...(stats?.daily_trend?.map((t) => t.avg_score) || [1]))
 
   return (
     <div style={{ padding: 20 }}>
@@ -154,64 +154,50 @@ export default function PipelineEvalPage() {
         </Row>
 
         <Row gutter={16} style={{ marginBottom: 16 }}>
-          <Col span={12}>
+          <Col span={10}>
             <Card title="质量分桶分布" size="small" style={{ height: '100%' }}>
               {stats && stats.total > 0 ? (
-                <Row gutter={8}>
-                  {(
-                    [
-                      ['<60', stats.score_buckets.lt60, '#ef4444'],
-                      ['60-80', stats.score_buckets['60_80'], '#f59e0b'],
-                      ['≥80', stats.score_buckets.gte80, '#22c55e'],
-                    ] as const
-                  ).map(([label, n, color]) => (
-                    <Col span={8} key={label}>
-                      <div style={{ textAlign: 'center' }}>
-                        <div style={{ fontSize: 24, fontWeight: 600, color }}>{n}</div>
-                        <Text style={{ fontSize: 12 }}>{label}</Text>
-                      </div>
-                    </Col>
-                  ))}
-                </Row>
+                <ReactECharts
+                  style={{ height: 220 }}
+                  option={{
+                    tooltip: { trigger: 'item', formatter: '{b}: {c} 条 ({d}%)' },
+                    legend: { bottom: 0, textStyle: { fontSize: 12 } },
+                    series: [{
+                      type: 'pie', radius: ['42%', '68%'], center: ['50%', '42%'],
+                      avoidLabelOverlap: false,
+                      label: { show: true, position: 'center', fontSize: 22, fontWeight: 'bold', formatter: () => `${stats.total} 条` },
+                      data: [
+                        { value: stats.score_buckets.lt60, name: '<60', itemStyle: { color: '#ef4444' } },
+                        { value: stats.score_buckets['60_80'], name: '60-80', itemStyle: { color: '#f59e0b' } },
+                        { value: stats.score_buckets.gte80, name: '≥80', itemStyle: { color: '#22c55e' } },
+                      ],
+                    }],
+                  }}
+                />
               ) : (
                 <Empty description="暂无数据" />
               )}
             </Card>
           </Col>
-          <Col span={12}>
+          <Col span={14}>
             <Card title="综合分趋势（按天）" size="small" style={{ height: '100%' }}>
               {stats && stats.daily_trend.length > 0 ? (
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'flex-end',
-                    gap: 4,
-                    height: 120,
-                    padding: '0 8px',
+                <ReactECharts
+                  style={{ height: 220 }}
+                  option={{
+                    tooltip: { trigger: 'axis', formatter: (p: { name: string; value: number; dataIndex: number }[]) => `${p[0].name}<br/>均分: ${p[0].value}（${stats?.daily_trend[p[0].dataIndex]?.count ?? 0} 条）` },
+                    xAxis: { type: 'category', data: stats.daily_trend.map((t) => t.date.slice(5)), axisLabel: { fontSize: 10 } },
+                    yAxis: { type: 'value', min: 0, max: 100, splitLine: { lineStyle: { type: 'dashed', color: '#e5eaf3' } } },
+                    series: [{
+                      type: 'line', smooth: true, symbol: 'circle', symbolSize: 6,
+                      data: stats.daily_trend.map((t) => t.avg_score),
+                      areaStyle: { opacity: 0.12 },
+                      lineStyle: { width: 2, color: '#315cf6' },
+                      itemStyle: { color: '#315cf6' },
+                    }],
+                    grid: { left: 35, right: 12, top: 12, bottom: 28 },
                   }}
-                >
-                  {stats.daily_trend.map((t) => (
-                    <div
-                      key={t.date}
-                      style={{ flex: 1, textAlign: 'center', height: '100%' }}
-                      title={`${t.date}: 均分 ${t.avg_score}（${t.count} 条）`}
-                    >
-                      <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: '100%' }}>
-                        <div
-                          style={{
-                            height: `${(t.avg_score / maxTrend) * 100}%`,
-                            minHeight: 4,
-                            background: scoreColor(t.avg_score),
-                            borderRadius: 4,
-                          }}
-                        />
-                        <Text style={{ fontSize: 9, color: '#94a3b8', display: 'block', marginTop: 4 }}>
-                          {t.date.slice(5)}
-                        </Text>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                />
               ) : (
                 <Empty description="暂无数据" />
               )}
