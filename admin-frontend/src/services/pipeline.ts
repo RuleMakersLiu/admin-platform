@@ -196,6 +196,7 @@ export const pipelineApi = {
     frontend_tech?: string
     pipeline_mode?: string
     skill_config?: Record<string, unknown>
+    attachments?: { type?: string; mime: string; filename: string; data_uri: string }[]
   }) =>
     http.post<{ pipeline_id: string; status: string }>(`${BASE}/create`, data),
 

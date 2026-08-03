@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
-import { Alert, Button, Collapse, Empty, Input, List, Modal, Radio, Select, Space, Steps, Table, Tag, Tooltip, Typography, message } from 'antd'
+import { Alert, Button, Collapse, Empty, Input, List, Modal, Radio, Select, Space, Steps, Table, Tag, Tooltip, Typography, Upload, message } from 'antd'
 import {
   CheckCircleOutlined,
   CodeOutlined,
@@ -7,6 +7,7 @@ import {
   FileSearchOutlined,
   FileTextOutlined,
   FullscreenOutlined,
+  PictureOutlined,
   PlusOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
@@ -357,6 +358,7 @@ const ReviewSummary = ({
 export default function ProductPortal() {
   const { user } = useAuthStore()
   const [requirement, setRequirement] = useState('')
+  const [attachments, setAttachments] = useState<{ mime: string; filename: string; data_uri: string }[]>([])
   const [running, setRunning] = useState(false)
   const [pipelineId, setPipelineId] = useState('')
   const [status, setStatus] = useState<PipelineStatus | null>(null)
@@ -940,6 +942,7 @@ export default function ProductPortal() {
               .join(' + ')
           : undefined,
         pipeline_mode: 'frontend_contract_review',
+        attachments: attachments.length > 0 ? attachments : undefined,
         skill_config: {
           entry: 'product_portal',
           auto_matched: true,
@@ -1198,6 +1201,34 @@ export default function ProductPortal() {
             }}
             placeholder="描述产品需求、页面目标、核心字段、权限点和验收标准"
           />
+
+          {/* A4: 需求图片上传（设计稿/截图当需求，走 GLM-4V 多模态） */}
+          <Space style={{ marginTop: 8 }}>
+            <Upload
+              accept="image/*"
+              maxCount={5}
+              showUploadList={false}
+              disabled={isViewingPipeline}
+              beforeUpload={(file) => {
+                if (file.size > 10 * 1024 * 1024) { message.warning('图片不能超过 10MB'); return false }
+                const reader = new FileReader()
+                reader.onload = () => setAttachments(prev => [...prev, { mime: file.type, filename: file.name, data_uri: reader.result as string }])
+                reader.readAsDataURL(file)
+                return false
+              }}
+            >
+              <Button size="small" icon={<PictureOutlined />} disabled={isViewingPipeline}>上传设计稿/截图</Button>
+            </Upload>
+            {attachments.length > 0 && (
+              <Space wrap size={4}>
+                {attachments.map((att, i) => (
+                  <Tag key={i} closable onClose={() => setAttachments(prev => prev.filter((_, j) => j !== i))}>
+                    {att.filename}
+                  </Tag>
+                ))}
+              </Space>
+            )}
+          </Space>
 
           {matchedSkill && (
             <Alert
