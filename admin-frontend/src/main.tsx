@@ -17,7 +17,7 @@ const brightTheme = {
     colorBgContainer: '#ffffff',
     colorBgElevated: '#ffffff',
     colorBgLayout: '#f6f8fc',
-    colorBgSpotlight: 'rgba(49, 92, 246, 0.08)',
+    colorBgSpotlight: 'rgba(17, 24, 39, 0.9)',
 
     colorBorder: '#e5eaf3',
     colorBorderSecondary: '#eef2f8',
