@@ -81,6 +81,11 @@ async def ensure_runtime_schema():
             )
         )
 
+        # 需求附件（图片/文档，JSON Text）——需求阶段多模态（设计稿当需求）
+        await conn.execute(text(
+            "ALTER TABLE dev_pipeline ADD COLUMN IF NOT EXISTS attachments TEXT"
+        ))
+
         # Eval 增强：pipeline_eval_result 加 LLM-as-judge 评测列（eval 阶段产物）。现有库补列。
         await conn.execute(text(
             "ALTER TABLE pipeline_eval_result ADD COLUMN IF NOT EXISTS judge_score INTEGER"

@@ -4293,7 +4293,8 @@ async def _call_agent_with_retry(agent_service: AgentService, session_id: str,
                                   message: str, agent_type: str,
                                   max_tokens_override: int = None,
                                   thinking_override: Optional[Dict[str, Any]] = None,
-                                  response_format_override: Optional[dict] = None) -> str:
+                                  response_format_override: Optional[dict] = None,
+                                  attachments: list = None) -> str:
     """调用 Agent，自动重试可恢复的错误"""
     last_error = None
     original_max_tokens = None
@@ -4322,6 +4323,7 @@ async def _call_agent_with_retry(agent_service: AgentService, session_id: str,
                     session_id=session_id,
                     message=message,
                     agent_type=agent_type,
+                    attachments=attachments,
                 )
                 return result["reply"]
 
@@ -4424,6 +4426,7 @@ async def _call_agent_with_retry_stream(
     max_tokens_override: int = None,
     thinking_override: Optional[Dict[str, Any]] = None,
     response_format_override: Optional[dict] = None,
+    attachments: list = None,
 ) -> str:
     """Call an agent with streaming chunks while preserving the final reply."""
     last_error = None
@@ -4458,7 +4461,7 @@ async def _call_agent_with_retry_stream(
                 agent = AgentFactory.get_agent(agent_type)
                 history = agent_service.sessions.get(session_id, [])
 
-                stream = agent.astream(message, history).__aiter__()
+                stream = agent.astream(message, history, attachments).__aiter__()
                 while True:
                     try:
                         raw_chunk = await asyncio.wait_for(
@@ -4492,6 +4495,7 @@ async def _call_agent_with_retry_stream(
                             session_id=session_id,
                             message=message,
                             agent_type=agent_type,
+                            attachments=attachments,
                         ),
                         timeout=LLM_FINAL_REPLY_TIMEOUT,
                     )
@@ -5127,7 +5131,8 @@ class DevPipelineManager:
                               backend_tech: str = "", frontend_tech: str = "",
                               backend_project_id: str = "", frontend_project_id: str = "",
                               backend_project_ids: List[str] = None,
-                              pipeline_mode: str = "full") -> str:
+                              pipeline_mode: str = "full",
+                              attachments: list = None) -> str:
         pipeline_id = f"pipe_{uuid.uuid4().hex[:12]}"
         now = int(time.time() * 1000)
         pipeline_mode = pipeline_mode or "full"
@@ -5207,6 +5212,7 @@ class DevPipelineManager:
                 git_repo_url=git_repo_url,
                 git_branch=git_branch,
                 skill_config=json.dumps(config, ensure_ascii=False),
+                attachments=json.dumps(attachments, ensure_ascii=False) if attachments else None,
                 create_time=now,
                 update_time=now,
             )
@@ -5800,6 +5806,14 @@ class DevPipelineManager:
         # prototype 已强制 JSON-only 输出，启用 GLM json mode 从源头保证合法 JSON
         response_format_override = {"type": "json_object"} if stage_key == "prototype" else None
 
+        # A4: 需求阶段传附件（图片走 GLM-4V 多模态，文档走文本抽取）——仅 requirement 阶段从 pipe.attachments 取
+        stage_attachments = None
+        if stage_key == "requirement" and getattr(pipe, "attachments", None):
+            try:
+                stage_attachments = json.loads(pipe.attachments)
+            except Exception:
+                stage_attachments = None
+
         if on_chunk:
             raw_output = await asyncio.wait_for(
                 _call_agent_with_retry_stream(
@@ -5808,6 +5822,7 @@ class DevPipelineManager:
                     max_tokens_override=max_tok,
                     thinking_override=thinking_override,
                     response_format_override=response_format_override,
+                    attachments=stage_attachments,
                 ),
                 timeout=LLM_STAGE_TIMEOUT,
             )
@@ -5818,6 +5833,7 @@ class DevPipelineManager:
                     max_tokens_override=max_tok,
                     thinking_override=thinking_override,
                     response_format_override=response_format_override,
+                    attachments=stage_attachments,
                 ),
                 timeout=LLM_STAGE_TIMEOUT,
             )

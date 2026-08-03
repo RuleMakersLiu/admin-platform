@@ -34,6 +34,7 @@ class CreatePipelineRequest(BaseModel):
     frontend_project_id: Optional[str] = Field(default="", description="前端项目ID")
     backend_tech: Optional[str] = Field(default="", description="后端技术栈 如 java/spring-boot")
     frontend_tech: Optional[str] = Field(default="", description="前端技术栈 如 javascript/vue")
+    attachments: Optional[List[Dict[str, Any]]] = Field(default=None, description="需求附件：图片走多模态(GLM-4V)，文档走文本抽取")
 
 
 class MatchProjectSkillRequest(BaseModel):
@@ -263,6 +264,7 @@ async def create_pipeline(request: CreatePipelineRequest, http_request: Request)
             backend_project_ids=backend_project_ids,
             frontend_project_id=frontend_project_id,
             pipeline_mode=pipeline_mode,
+            attachments=request.attachments,
         )
         return {
             "code": 200,

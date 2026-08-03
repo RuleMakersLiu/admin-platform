@@ -273,6 +273,8 @@ class DevPipeline(Base):
     pipeline_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     project_id: Mapped[Optional[str]] = mapped_column(String(64))
     user_request: Mapped[Optional[str]] = mapped_column(Text)
+    # 需求附件（JSON：[{type,mime,filename,data_uri}]，图片走多模态 GLM-4V，文档走抽取）。参照 AgentBug.attachments
+    attachments: Mapped[Optional[str]] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
     current_stage: Mapped[str] = mapped_column(String(32), default="requirement")
     stages_data: Mapped[Optional[str]] = mapped_column(Text)
