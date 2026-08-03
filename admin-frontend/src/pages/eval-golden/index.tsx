@@ -33,6 +33,13 @@ interface JudgeResult {
   error?: string
   model?: string
 }
+interface GoldenHistoryCase {
+  golden_case_id: number
+  name: string
+  avg_score: number | null
+  pass_rate: number | null
+  runs: { eval_run_id: number; pipeline_id: string; score: number | null; time: number }[]
+}
 
 // TextArea 值 → 文本或 JSON（与后端 to_storage 对齐）
 function parseField(v: string): unknown {
@@ -63,6 +70,10 @@ export default function EvalGoldenPage() {
   const [judgeResult, setJudgeResult] = useState<JudgeResult | null>(null)
   const [judgeLoading, setJudgeLoading] = useState(false)
 
+  const [history, setHistory] = useState<GoldenHistoryCase[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [runAllLoading, setRunAllLoading] = useState(false)
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
@@ -78,6 +89,34 @@ export default function EvalGoldenPage() {
   useEffect(() => {
     load()
   }, [load])
+
+  const loadHistory = useCallback(async () => {
+    setHistoryLoading(true)
+    try {
+      const data = await http.get<{ cases: GoldenHistoryCase[] }>('/eval/golden-cases/runs/history?days=30')
+      setHistory(data?.cases || [])
+    } catch {
+      /* ignore — history stays stale */
+    } finally {
+      setHistoryLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadHistory()
+  }, [loadHistory])
+
+  const runAll = async () => {
+    setRunAllLoading(true)
+    try {
+      const res = await http.post<{ count: number }>('/eval/golden-cases/run-all', {})
+      message.success(`已启动 ${res?.count ?? 0} 条 golden 回归流水线（后台无人值守，完成自动评审）`)
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '启动失败')
+    } finally {
+      setRunAllLoading(false)
+    }
+  }
 
   const openCreate = () => {
     setEditing(null)
@@ -191,6 +230,9 @@ export default function EvalGoldenPage() {
       extra={
         <Space>
           <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+          <Popconfirm title="对全部启用的 Golden case 各起一条回归流水线？" description="后台无人值守执行，完成自动评审（并发受系统信号量约束）" onConfirm={runAll}>
+            <Button type="primary" icon={<ThunderboltOutlined />} loading={runAllLoading}>一键跑全部回归</Button>
+          </Popconfirm>
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建</Button>
         </Space>
       }
@@ -202,6 +244,39 @@ export default function EvalGoldenPage() {
         columns={columns}
         pagination={{ pageSize: 10 }}
       />
+
+      <Card
+        type="inner"
+        size="small"
+        style={{ marginTop: 16 }}
+        title="回归历史（近 30 天，按 Golden case 聚合）"
+        extra={<Button size="small" icon={<ReloadOutlined />} onClick={loadHistory} loading={historyLoading}>刷新</Button>}
+      >
+        <Table
+          rowKey="golden_case_id"
+          size="small"
+          pagination={false}
+          loading={historyLoading}
+          dataSource={history}
+          locale={{ emptyText: '暂无已评审的回归记录' }}
+          columns={[
+            { title: '名称', dataIndex: 'name' },
+            {
+              title: '近期均分', dataIndex: 'avg_score', width: 100,
+              render: (s: number | null) => s == null ? '-' : <Text strong style={{ color: s >= 60 ? '#52c41a' : '#ff4d4f' }}>{s}</Text>,
+            },
+            {
+              title: '通过率', dataIndex: 'pass_rate', width: 90,
+              render: (v: number | null) => v == null ? '-' : `${Math.round(v * 100)}%`,
+            },
+            { title: 'run 数', width: 70, render: (_: unknown, r: GoldenHistoryCase) => r.runs?.length ?? 0 },
+            {
+              title: '历次分数', render: (_: unknown, r: GoldenHistoryCase) =>
+                (r.runs?.map((x) => x.score ?? '-').join(' / ')) || '-',
+            },
+          ]}
+        />
+      </Card>
 
       <Modal
         title={editing ? '编辑 Golden case' : '新建 Golden case'}

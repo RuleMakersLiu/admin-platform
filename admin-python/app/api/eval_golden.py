@@ -153,6 +153,91 @@ async def create_from_pipeline(
     return {"code": 200, "message": "已存为 Golden case", "data": _to_out(case)}
 
 
+@router.post("/run-all")
+async def run_all_golden_cases(
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """一键回归：对当前租户全部 enabled golden case 各起一条 full 流水线 + EvalRun，后台无人值守驱动。
+    并发受 pipeline_manager 执行信号量（PIPELINE_EXECUTION_CONCURRENCY）约束。用于改 prompt / 换模型后防退化。
+    返回启动列表（每个 {golden_case_id, name, pipeline_id}）。"""
+    import asyncio
+
+    from app.ai.eval_judge import input_spec_to_request_text
+    from app.ai.flow_manager import pipeline_manager
+    from app.models.eval_run import EvalRun
+
+    cases = (await db.execute(
+        select(EvalGoldenCase).where(
+            EvalGoldenCase.tenant_id == user["tenantId"],
+            EvalGoldenCase.enabled == 1,
+            EvalGoldenCase.is_deleted == 0,
+        ).order_by(EvalGoldenCase.id)
+    )).scalars().all()
+    started = []
+    for case in cases:
+        user_request = input_spec_to_request_text(from_storage(case.input_spec))
+        if not user_request:
+            continue
+        pipeline_id = await pipeline_manager.create_pipeline(
+            user_request=user_request,
+            tenant_id=user["tenantId"],
+            creator_id=user["adminId"],
+            pipeline_mode="full",
+        )
+        db.add(EvalRun(
+            tenant_id=user["tenantId"], golden_case_id=case.id,
+            pipeline_id=pipeline_id, status="running",
+        ))
+        asyncio.create_task(_eval_auto_run_pipeline(pipeline_id, user_request))
+        started.append({"golden_case_id": case.id, "name": case.name, "pipeline_id": pipeline_id})
+    await db.commit()
+    return {
+        "code": 200,
+        "message": f"已启动 {len(started)} 条 golden 回归流水线（后台无人值守，完成自动评审）",
+        "data": {"started": started, "count": len(started)},
+    }
+
+
+@router.get("/runs/history")
+async def golden_runs_history(
+    days: int = Query(30, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """聚合近 days 天已评审(judged)的 eval_run，按 golden_case 分组：每个 case 的近期均分 / 通过率(>=60) /
+    每次 run 的分数+时间。供对比「改 prompt / 换模型」前后的质量退化。"""
+    from app.models.eval_run import EvalRun
+
+    cutoff = int((time.time() - days * 86400) * 1000)
+    rows = (await db.execute(
+        select(EvalRun, EvalGoldenCase.name).join(
+            EvalGoldenCase, EvalGoldenCase.id == EvalRun.golden_case_id
+        ).where(
+            EvalRun.tenant_id == user["tenantId"],
+            EvalRun.is_deleted == 0,
+            EvalRun.status == "judged",
+            EvalRun.create_time >= cutoff,
+        ).order_by(EvalRun.golden_case_id, EvalRun.create_time)
+    )).all()
+    by_case: dict = {}
+    for run, name in rows:
+        c = by_case.setdefault(run.golden_case_id, {
+            "golden_case_id": run.golden_case_id, "name": name,
+            "runs": [], "avg_score": None, "pass_rate": None,
+        })
+        c["runs"].append({
+            "eval_run_id": run.id, "pipeline_id": run.pipeline_id,
+            "score": run.overall_score, "time": run.create_time,
+        })
+    for c in by_case.values():
+        scores = [r["score"] for r in c["runs"] if r["score"] is not None]
+        if scores:
+            c["avg_score"] = round(sum(scores) / len(scores), 1)
+            c["pass_rate"] = round(sum(1 for s in scores if s >= 60) / len(scores), 4)
+    return {"code": 200, "message": "查询成功", "data": {"days": days, "cases": list(by_case.values())}}
+
+
 @router.get("/{case_id}")
 async def get_case(
     case_id: int,
