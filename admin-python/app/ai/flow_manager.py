@@ -39,6 +39,8 @@ logger = logging.getLogger(__name__)
 
 MAX_FIX_ITERATIONS = 3
 MAX_PREVIEW_GENERATION_ATTEMPTS = 3
+# eval 阶段低分带反馈重修上限（独立于 code_review 的 MAX_FIX_ITERATIONS；eval 在末段，重跑代价高，故更保守）
+MAX_EVAL_FIX_ITERATIONS = 2
 MAX_LLM_RETRIES = 3
 RETRY_BASE_DELAY = 2  # seconds
 LLM_STAGE_TIMEOUT = 600  # 单阶段 LLM 调用最大超时（秒）
@@ -203,6 +205,50 @@ def _build_code_review_fix_feedback(
         if part and str(part).strip()
     )
     return mismatch_feedback, fix_feedback
+
+
+def _build_eval_fix_feedback(eval_struct: Dict[str, Any]) -> Tuple[List[str], str]:
+    """从 eval 阶段 structured 结果构造重修反馈 (issues, fix_feedback)。纯函数。
+
+    把 judge 未过项 / E2E 问题 / 幻觉虚构 / 视觉摘要拼成可执行反馈，约束话术沿用
+    _build_code_review_fix_feedback（只修指出的问题、保留现有页面/接口/查询/表格列、增量改造）。
+    供 eval 低分→回到生成阶段重修的闭环（镜像 code_review fix-loop）。
+    """
+    issues: List[str] = []
+    parts: List[str] = ["自动评测未达标，请只修复评测指出的问题，生成完整可运行代码。"]
+    # judge 未过的 per_criterion（criterion + reason）
+    judge = eval_struct.get("judge") or {}
+    for c in judge.get("per_criterion") or []:
+        if isinstance(c, dict) and c.get("passed") is False:
+            line = "，".join(str(x) for x in (c.get("criterion"), c.get("reason")) if x)
+            if line:
+                issues.append(line)
+                parts.append(f"- {line}")
+    if judge.get("summary"):
+        parts.append(f"评审总结：{judge['summary']}")
+    # E2E 浏览器断言问题
+    e2e = eval_struct.get("e2e") or {}
+    for iss in e2e.get("issues") or []:
+        if str(iss).strip():
+            issues.append(f"E2E：{iss}")
+            parts.append(f"- E2E：{iss}")
+    # 幻觉虚构嫌疑（flagged: [{claim, why}]）
+    hallu = eval_struct.get("hallucination") or {}
+    for f in hallu.get("flagged") or []:
+        if isinstance(f, dict):
+            line = "，".join(str(x) for x in (f.get("claim"), f.get("why")) if x)
+        else:
+            line = str(f)
+        if line.strip():
+            issues.append(f"幻觉嫌疑：{line}")
+            parts.append(f"- 幻觉嫌疑：{line}")
+    # 视觉评审摘要（若有）
+    vision = eval_struct.get("vision") or {}
+    if isinstance(vision, dict) and vision.get("summary"):
+        parts.append(f"视觉：{vision['summary']}")
+    parts.append("必须保留现有页面、现有接口、现有查询条件和现有表格列；只做本次需求的增量改造。")
+    fix_feedback = "\n".join(p.strip() for p in parts if p and str(p).strip())
+    return issues, fix_feedback
 
 
 def _should_pause_for_stage(stage_key: str, auto_review_fix_active: bool = False) -> bool:
@@ -6281,13 +6327,47 @@ class DevPipelineManager:
                         "structured_output": eval_struct,
                         "completed_at": datetime.now().isoformat(),
                     })
-                    # 质量门控：LLM judge 低分 → 升级人工复核（NEEDS_HUMAN），不静默推进 report
+                    # 质量门控：LLM judge 低分 → 先带反馈重修（闭环），重修耗尽再升级人工
                     gate_reason = self._eval_quality_gate_reason(eval_struct)
                     if gate_reason:
                         await emit({"type": "stage_completed", "stage": "eval", "output": eval_md})
-                        await self._escalate_to_human(
-                            session, pipe, stages, "eval", reason=gate_reason, emit=emit,
-                        )
+                        if pipe.retry_count < MAX_EVAL_FIX_ITERATIONS and _has_code_review_fix_loop(stage_keys):
+                            # 闭环：把评测发现回灌给生成阶段重修，重跑后自然再评，直到达标或耗尽
+                            eval_issues, eval_fix_feedback = _build_eval_fix_feedback(eval_struct)
+                            pipe.retry_count += 1
+                            loop_stage = _fix_loop_stage_for_mode(stage_keys)
+                            auto_review_fix_active = True
+                            await _record_repair_attempt_temp_file(
+                                pipeline_id, loop_stage, pipe.retry_count, eval_issues,
+                                eval_fix_feedback, source_stage="eval",
+                            )
+                            idx = stage_keys.index(loop_stage)
+                            for sk in stage_keys[idx:]:
+                                if sk not in stages:
+                                    continue
+                                stages[sk]["status"] = "pending"
+                                stages[sk]["output"] = ""
+                                stages[sk]["error"] = ""
+                                stages[sk]["structured_output"] = {}
+                                stages[sk]["code_files"] = {}
+                                stages[sk]["preview_html"] = ""
+                                stages[sk]["completed_at"] = None
+                                stages[sk]["revision_feedback"] = eval_fix_feedback if sk == loop_stage else ""
+                            pipe.status = PipelineStatus.RUNNING.value
+                            pipe.current_stage = loop_stage
+                            pipe.stages_data = json.dumps(stages, ensure_ascii=False)
+                            pipe.update_time = int(time.time() * 1000)
+                            await session.commit()
+                            logger.info(
+                                "Pipeline %s: eval 低分(%s)，回 %s 重修（第%d/%d 次）",
+                                pipeline_id, gate_reason[:60], loop_stage,
+                                pipe.retry_count, MAX_EVAL_FIX_ITERATIONS,
+                            )
+                        else:
+                            # 重修耗尽 → 升级人工复核（NEEDS_HUMAN）
+                            await self._escalate_to_human(
+                                session, pipe, stages, "eval", reason=gate_reason, emit=emit,
+                            )
                         fix_feedback = ""
                         continue
                     pipe.current_stage = "report"

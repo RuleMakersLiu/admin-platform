@@ -168,3 +168,40 @@ def test_eval_quality_gate_disabled_no_reason(monkeypatch):
     assert flow_manager.DevPipelineManager._eval_quality_gate_reason(
         {"judge": {"overall_score": 10}}
     ) is None
+
+
+# ---------- eval 低分重修反馈构造（闭环 Stage 1）----------
+
+def test_build_eval_fix_feedback_extracts_findings():
+    """judge 未过项 + E2E 问题 + 幻觉 + 视觉摘要 → 可执行反馈，含保留约束。"""
+    issues, fb = flow_manager._build_eval_fix_feedback({
+        "judge": {"overall_score": 30, "summary": "缺登录校验", "per_criterion": [
+            {"criterion": "需求覆盖", "score": 30, "passed": False, "reason": "无验证码"},
+            {"criterion": "代码质量", "score": 90, "passed": True, "reason": "ok"}]},
+        "e2e": {"passed": False, "issues": ["缺少密码框", "无登录按钮"]},
+        "hallucination": {"hallucination_score": 50, "flagged": [{"claim": "虚构 /api/x", "why": "契约无此接口"}]},
+        "vision": {"overall_score": 40, "summary": "布局错乱"},
+    })
+    # 未过项入选，通过的项不入
+    assert any("需求覆盖" in i and "无验证码" in i for i in issues)
+    assert not any("代码质量" in i for i in issues)
+    # E2E / 幻觉 / 视觉
+    assert any("缺少密码框" in i for i in issues)
+    assert any("虚构 /api/x" in i for i in issues)
+    # 反馈含话术约束（增量改造）
+    assert "只修复评测指出的问题" in fb
+    assert "保留现有页面" in fb
+    assert "布局错乱" in fb  # 视觉摘要
+
+
+def test_build_eval_fix_feedback_empty_struct():
+    """空 eval_struct → 仍有话术框架（不崩），issues 为空。"""
+    issues, fb = flow_manager._build_eval_fix_feedback({})
+    assert issues == []
+    assert "只修复评测指出的问题" in fb
+
+
+def test_max_eval_fix_iterations_is_bounded():
+    """eval 重修上限=2（独立于 code_review 的 3，控末段重跑成本）。"""
+    assert flow_manager.MAX_EVAL_FIX_ITERATIONS == 2
+    assert flow_manager.MAX_EVAL_FIX_ITERATIONS <= flow_manager.MAX_FIX_ITERATIONS
