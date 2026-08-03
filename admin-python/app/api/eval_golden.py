@@ -103,6 +103,56 @@ async def create_case(
     return {"code": 200, "message": "创建成功", "data": _to_out(case)}
 
 
+class GoldenFromPipelineRequest(BaseModel):
+    name: Optional[str] = None
+    category: str = "general"
+    project_type: Optional[str] = None
+    criteria: Optional[list[str]] = None
+
+
+@router.post("/from-pipeline/{pipeline_id}")
+async def create_from_pipeline(
+    pipeline_id: str,
+    req: GoldenFromPipelineRequest,
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """从一条已跑完的 pipeline 一键生成 Golden case：input_spec 取 user_request（+ 参考产物供人工对照），
+    expected_criteria 默认 DEFAULT_EVAL_CRITERIA（可覆盖）。把人工认定的「好/坏」产物沉淀为回归基线。"""
+    from app.models.agent_models import DevPipeline
+    from app.ai.evaluators import DEFAULT_EVAL_CRITERIA
+
+    pipe = (await db.execute(
+        select(DevPipeline).where(
+            DevPipeline.pipeline_id == pipeline_id, DevPipeline.is_deleted == 0
+        )
+    )).scalar_one_or_none()
+    if not pipe:
+        raise HTTPException(status_code=404, detail="pipeline 不存在")
+    if pipe.tenant_id != user["tenantId"]:
+        raise HTTPException(status_code=403, detail="无权访问该 pipeline")
+    request_text = (pipe.user_request or "").strip()
+    if not request_text:
+        raise HTTPException(status_code=400, detail="该 pipeline 无 user_request，无法生成 Golden case")
+    reference = extract_pipeline_output(pipe.stages_data)
+    input_spec = {"request": request_text, "reference_output": (reference or "")[:6000]}
+    case = EvalGoldenCase(
+        tenant_id=user["tenantId"],
+        name=(req.name or "").strip() or request_text[:40],
+        category=req.category,
+        project_type=req.project_type,
+        input_spec=to_storage(input_spec),
+        expected_criteria=to_storage(req.criteria or DEFAULT_EVAL_CRITERIA),
+        tags=None,
+        enabled=1,
+        created_by=user["adminId"],
+    )
+    db.add(case)
+    await db.commit()
+    await db.refresh(case)
+    return {"code": 200, "message": "已存为 Golden case", "data": _to_out(case)}
+
+
 @router.get("/{case_id}")
 async def get_case(
     case_id: int,

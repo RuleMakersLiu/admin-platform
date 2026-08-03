@@ -94,6 +94,19 @@ async def ensure_runtime_schema():
         await conn.execute(text(
             "ALTER TABLE pipeline_eval_result ADD COLUMN IF NOT EXISTS e2e_passed SMALLINT"
         ))
+        # 人工覆盖分（校准 LLM judge）。
+        await conn.execute(text(
+            "ALTER TABLE pipeline_eval_result ADD COLUMN IF NOT EXISTS human_score INTEGER"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE pipeline_eval_result ADD COLUMN IF NOT EXISTS human_comment VARCHAR(500)"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE pipeline_eval_result ADD COLUMN IF NOT EXISTS human_scored_by BIGINT"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE pipeline_eval_result ADD COLUMN IF NOT EXISTS human_scored_at BIGINT"
+        ))
 
         # Eval 评测闭环：pipeline_eval_result（终端态聚合各 stage 评测信号）
         await conn.execute(text(
@@ -113,6 +126,10 @@ async def ensure_runtime_schema():
                 hallucination_score INTEGER,
                 vision_score INTEGER,
                 e2e_passed SMALLINT,
+                human_score INTEGER,
+                human_comment VARCHAR(500),
+                human_scored_by BIGINT,
+                human_scored_at BIGINT,
                 review_passed SMALLINT,
                 tests_passed SMALLINT,
                 tests_total INTEGER,

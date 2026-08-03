@@ -7564,6 +7564,8 @@ class DevPipelineManager:
                     "hallucination_score": e.hallucination_score if e else None,
                     "vision_score": e.vision_score if e else None,
                     "e2e_passed": e.e2e_passed if e else None,
+                    "human_score": e.human_score if e else None,
+                    "human_comment": e.human_comment if e else None,
                     "review_passed": e.review_passed if e else None,
                     "tests_passed": e.tests_passed if e else None,
                 }
@@ -7629,6 +7631,56 @@ class DevPipelineManager:
             "score_buckets": buckets,
             "daily_trend": trend,
         }
+
+    async def set_eval_human_score(
+        self,
+        pipeline_id: str,
+        tenant_id: int,
+        admin_id: int,
+        score: int,
+        comment: Optional[str],
+    ) -> Dict[str, Any]:
+        """人工覆盖分：upsert pipeline_eval_result 的 human_* 列（不动 LLM/规则分，重跑 eval 不清零）。
+
+        返回最新人工分；pipeline 不存在抛 ValueError，租户越权抛 PermissionError（由 API 层转 HTTP 码）。
+        """
+        from app.models.pipeline_eval import PipelineEvalResult
+
+        async with async_session_maker() as session:
+            pipe = (await session.execute(
+                select(DevPipeline).where(DevPipeline.pipeline_id == pipeline_id)
+            )).scalar_one_or_none()
+            if not pipe:
+                raise ValueError("pipeline 不存在")
+            if tenant_id and pipe.tenant_id != tenant_id:
+                raise PermissionError("无权评测该 pipeline")
+            rec = (await session.execute(
+                select(PipelineEvalResult).where(
+                    PipelineEvalResult.pipeline_id == pipeline_id,
+                    PipelineEvalResult.is_deleted == 0,
+                )
+            )).scalar_one_or_none()
+            now = int(time.time() * 1000)
+            if rec is None:
+                rec = PipelineEvalResult(
+                    eval_id=f"EVAL-{pipeline_id}",
+                    pipeline_id=pipeline_id,
+                    tenant_id=pipe.tenant_id,
+                    project_id=pipe.project_id,
+                    status=pipe.status,
+                    create_time=now,
+                )
+                session.add(rec)
+            rec.human_score = score
+            rec.human_comment = (comment or "")[:500] or None
+            rec.human_scored_by = admin_id
+            rec.human_scored_at = now
+            await session.commit()
+            return {
+                "pipeline_id": pipeline_id,
+                "human_score": rec.human_score,
+                "human_comment": rec.human_comment,
+            }
 
     async def delete_pipeline(self, pipeline_id: str, tenant_id: int = 0) -> None:
         """软删除流水线"""

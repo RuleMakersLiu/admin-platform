@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Card, Col, Row, Statistic, Table, Tag, Spin, Typography, Empty, Button } from 'antd'
+import { Card, Col, Row, Statistic, Table, Tag, Spin, Typography, Empty, Button, Modal, InputNumber, Input, message, Space } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { http } from '@/services/api'
 
@@ -21,8 +21,17 @@ interface EvalRow {
   hallucination_score: number | null
   vision_score: number | null
   e2e_passed: number | null
+  human_score: number | null
+  human_comment: string | null
   review_passed: number | null
   tests_passed: number | null
+}
+
+interface ScoreModalState {
+  visible: boolean
+  pid: string
+  score: number
+  comment: string
 }
 
 interface EvalStats {
@@ -47,6 +56,33 @@ export default function PipelineEvalPage() {
   const [loading, setLoading] = useState(false)
   const [rows, setRows] = useState<EvalRow[]>([])
   const [stats, setStats] = useState<EvalStats | null>(null)
+  const [scoreModal, setScoreModal] = useState<ScoreModalState>({ visible: false, pid: '', score: 80, comment: '' })
+
+  const openScoreModal = (row: EvalRow) =>
+    setScoreModal({ visible: true, pid: row.pipeline_id, score: row.human_score ?? 80, comment: row.human_comment ?? '' })
+
+  const submitScore = async () => {
+    try {
+      await http.put(`/flow/pipeline/eval/${scoreModal.pid}/human-score`, {
+        score: scoreModal.score,
+        comment: scoreModal.comment || null,
+      })
+      message.success('人工评分已保存')
+      setScoreModal((s) => ({ ...s, visible: false }))
+      refresh()
+    } catch {
+      message.error('保存失败，请稍后重试')
+    }
+  }
+
+  const saveAsGolden = async (row: EvalRow) => {
+    try {
+      const res = await http.post<{ id: number }>(`/eval/golden-cases/from-pipeline/${row.pipeline_id}`, {})
+      message.success(`已存为 Golden case #${res?.id ?? ''}（可在 Golden 用例页编辑标准）`)
+    } catch (e: unknown) {
+      message.error(((e as { message?: string })?.message) || '存为 Golden 失败')
+    }
+  }
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -230,6 +266,14 @@ export default function PipelineEvalPage() {
                   v === null ? '-' : <Tag color={v ? 'success' : 'error'}>{v ? '通过' : '未过'}</Tag>,
               },
               {
+                title: '人工分',
+                dataIndex: 'human_score',
+                width: 76,
+                sorter: (a, b) => (a.human_score ?? -1) - (b.human_score ?? -1),
+                render: (s: number | null) =>
+                  s === null || s === undefined ? '-' : <Text strong style={{ color: scoreColor(s) }}>{s}</Text>,
+              },
+              {
                 title: 'Review',
                 dataIndex: 'review_passed',
                 width: 80,
@@ -244,10 +288,50 @@ export default function PipelineEvalPage() {
                   v === null ? '-' : <Tag color={v ? 'success' : 'error'}>{v ? '通过' : '未过'}</Tag>,
               },
               { title: 'Retry', dataIndex: 'retry_count', width: 64 },
+              {
+                title: '操作',
+                width: 170,
+                render: (_: unknown, row: EvalRow) => (
+                  <Space size={0}>
+                    <Button size="small" type="link" onClick={() => openScoreModal(row)}>人工评分</Button>
+                    <Button size="small" type="link" onClick={() => saveAsGolden(row)}>存为 golden</Button>
+                  </Space>
+                ),
+              },
             ]}
           />
         </Card>
       </Spin>
+
+      <Modal
+        title="人工评分"
+        open={scoreModal.visible}
+        onOk={submitScore}
+        onCancel={() => setScoreModal((s) => ({ ...s, visible: false }))}
+        okText="保存"
+        cancelText="取消"
+        destroyOnClose
+      >
+        <div style={{ marginBottom: 12 }}>
+          <Text>分数（0-100，用于校准 LLM judge）</Text>
+          <InputNumber
+            min={0}
+            max={100}
+            value={scoreModal.score}
+            onChange={(v) => setScoreModal((s) => ({ ...s, score: Number(v) || 0 }))}
+            style={{ width: '100%', marginTop: 4 }}
+          />
+        </div>
+        <div>
+          <Text>评语（可选）</Text>
+          <Input.TextArea
+            rows={3}
+            value={scoreModal.comment}
+            onChange={(e) => setScoreModal((s) => ({ ...s, comment: e.target.value }))}
+            style={{ marginTop: 4 }}
+          />
+        </div>
+      </Modal>
     </div>
   )
 }

@@ -691,6 +691,32 @@ async def eval_stats(http_request: Request, days: int = Query(30, ge=1, le=365))
     return {"code": 200, "message": "查询成功", "data": stats}
 
 
+class HumanScoreRequest(BaseModel):
+    score: int  # 0-100
+    comment: Optional[str] = None
+
+
+@router.put("/pipeline/eval/{pipeline_id}/human-score")
+async def set_pipeline_human_score(
+    pipeline_id: str, req: HumanScoreRequest, http_request: Request
+):
+    """人工覆盖分：对最终交付打分（0-100）+ 评语，落 pipeline_eval_result.human_*。
+    用于校准 LLM judge（与 judge_score 并列展示）。"""
+    if not (0 <= req.score <= 100):
+        raise HTTPException(status_code=400, detail="score 须在 0-100 之间")
+    tenant_id = _get_tenant_id(http_request)
+    admin_id = _get_admin_id(http_request)
+    try:
+        data = await pipeline_manager.set_eval_human_score(
+            pipeline_id, tenant_id, admin_id, req.score, req.comment
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    return {"code": 200, "message": "人工评分已保存", "data": data}
+
+
 @router.post("/pipeline/{pipeline_id}/rollback")
 async def rollback_pipeline(pipeline_id: str, request: RollbackPipelineRequest = None):
     """回退到指定阶段，清空该阶段之后的结果。"""

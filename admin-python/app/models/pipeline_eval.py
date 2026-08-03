@@ -33,6 +33,13 @@ class PipelineEvalResult(Base):
     vision_score: Mapped[Optional[int]] = mapped_column(Integer)
     e2e_passed: Mapped[Optional[int]] = mapped_column(Integer)  # 0/1
 
+    # 人工覆盖分（人工对最终交付的主观打分；用于校准 LLM judge）。_record_pipeline_eval 的 upsert
+    # 不写这些列——重跑 eval 不会清掉人工分。
+    human_score: Mapped[Optional[int]] = mapped_column(Integer)            # 0-100
+    human_comment: Mapped[Optional[str]] = mapped_column(String(500))
+    human_scored_by: Mapped[Optional[int]] = mapped_column(BigInteger)    # admin id
+    human_scored_at: Mapped[Optional[int]] = mapped_column(BigInteger)    # epoch ms
+
     # 布尔门控结果（0/1）
     review_passed: Mapped[Optional[int]] = mapped_column(Integer)
     tests_passed: Mapped[Optional[int]] = mapped_column(Integer)
