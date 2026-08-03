@@ -147,9 +147,9 @@ Admin Platform 面向“把业务需求落到真实项目代码”的场景。�
 
 ### AI 评测体系
 - **评测看板**（`/pipeline/ai-metrics`）：响应速度、调用成本、按模型/按阶段分布来自 `llm_usage_log`（按调用时间窗口过滤）；准确率、生成效果、幻觉率来自 `eval_run`（按评审时间窗口过滤）
-- **Golden 用例**（`/pipeline/eval-golden`）：维护标准用例，可一键触发无人值守流水线并自动打分；watcher 在流水线进入 `needs_human` 时停止，绝不自动放行
+- **Golden 用例 + 回归**（`/pipeline/eval-golden`）：维护标准用例，可一键触发无人值守流水线并自动打分；watcher 在流水线进入 `needs_human` 时停止，绝不自动放行。**一键跑全部回归**（`/run-all`，改 prompt/换模型后防退化）+ **回归历史**（`/runs/history`，按 case 聚合均分/通过率，对比前后质量）
 - **LLM-as-judge**：低温 json 模式，复用为流水线内的子智能体评审官，并支持幻觉检测与视觉评判
-- **评测可执行化**：eval 阶段的 judge/幻觉/视觉/E2E 分落 `pipeline_eval_result`（看板 `/pipeline/eval` 列表新增 Judge/幻觉/视觉/E2E 列，`extract_eval_scores` 统一抽取）；**质量门控**——LLM judge 分低于阈值（`eval_quality_gate_score`，默认 40）升级 `needs_human` 人工复核，而非静默完成（judge 缺失 fail-open，沿用全栈容错哲学）
+- **评测可执行化 + 自治闭环**：eval 阶段的 judge/幻觉/视觉/E2E 分落 `pipeline_eval_result`（看板 `/pipeline/eval` 列表新增 Judge/幻觉/视觉/E2E 列，`extract_eval_scores` 统一抽取）；**质量门控**——LLM judge 分低于阈值（`eval_quality_gate_score`，默认 40）**先带反馈（judge 未过项/E2E/幻觉/视觉摘要）回到生成阶段重修**（`MAX_EVAL_FIX_ITERATIONS=2`，复用 fix-loop，重跑后自动再评，闭环），重修耗尽才升级 `needs_human`（judge 缺失 fail-open）——1 个开发流程可自治走完「生成→评测→低分重修→再评→达标」全闭环
 - **人工评测**：看板行内可对交付打**人工覆盖分**（`human_score` + 评语，落 `pipeline_eval_result.human_*`，与 LLM 分并列校准、重跑 eval 不清零）；一键**从 pipeline 存为 Golden case**（`/eval/golden-cases/from-pipeline/{pid}`，取 `user_request` 作 `input_spec` + 参考产物，沉淀为回归基线）
 - 调用级观测：每次 LLM 调用记录延迟、token 与成本，看板与流水线评审共享同一套数据源
 
