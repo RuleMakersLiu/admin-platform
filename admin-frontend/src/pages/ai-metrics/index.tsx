@@ -4,6 +4,7 @@ import {
 } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { http } from '@/services/api'
+import ReactECharts from 'echarts-for-react'
 
 const { Title, Text } = Typography
 
@@ -149,6 +150,48 @@ export default function AiMetricsPage() {
               </Col>
             </Row>
 
+            {/* 图表：模型延迟对比 + Token 消耗 */}
+            {data.speed.by_model.length > 0 && (
+              <Row gutter={16} style={{ marginTop: 16 }}>
+                <Col span={12}>
+                  <Card title="模型延迟对比（P50 / P95）" size="small">
+                    <ReactECharts
+                      style={{ height: 260 }}
+                      option={{
+                        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+                        legend: { bottom: 0, data: ['P50', 'P95'] },
+                        grid: { left: 50, right: 16, top: 12, bottom: 36 },
+                        xAxis: { type: 'category', data: data.speed.by_model.map(m => m.model), axisLabel: { fontSize: 10, rotate: 20 } },
+                        yAxis: { type: 'value', name: 'ms', splitLine: { lineStyle: { type: 'dashed', color: '#e5eaf3' } } },
+                        series: [
+                          { name: 'P50', type: 'bar', data: data.speed.by_model.map(m => m.p50_ms), itemStyle: { color: '#315cf6', borderRadius: [3, 3, 0, 0] }, barMaxWidth: 28 },
+                          { name: 'P95', type: 'bar', data: data.speed.by_model.map(m => m.p95_ms), itemStyle: { color: '#f59e0b', borderRadius: [3, 3, 0, 0] }, barMaxWidth: 28 },
+                        ],
+                      }}
+                    />
+                  </Card>
+                </Col>
+                <Col span={12}>
+                  <Card title="模型 Token 消耗（入 / 出）" size="small">
+                    <ReactECharts
+                      style={{ height: 260 }}
+                      option={{
+                        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+                        legend: { bottom: 0, data: ['输入', '输出'] },
+                        grid: { left: 55, right: 16, top: 12, bottom: 36 },
+                        xAxis: { type: 'category', data: data.speed.by_model.map(m => m.model), axisLabel: { fontSize: 10, rotate: 20 } },
+                        yAxis: { type: 'value', name: 'tokens', splitLine: { lineStyle: { type: 'dashed', color: '#e5eaf3' } } },
+                        series: [
+                          { name: '输入', type: 'bar', stack: 'tok', data: data.speed.by_model.map(m => m.input_tokens), itemStyle: { color: '#93c5fd' }, barMaxWidth: 36 },
+                          { name: '输出', type: 'bar', stack: 'tok', data: data.speed.by_model.map(m => m.output_tokens), itemStyle: { color: '#315cf6' }, barMaxWidth: 36 },
+                        ],
+                      }}
+                    />
+                  </Card>
+                </Col>
+              </Row>
+            )}
+
             {/* 按模型明细 */}
             <Card title={`按模型明细 · 近 ${data.window_hours} 小时`} size="small" style={{ marginTop: 16 }}>
               {data.speed.by_model.length ? (
@@ -178,6 +221,26 @@ export default function AiMetricsPage() {
                 <Empty description="该时间窗口内还没有已采集的 LLM 调用。发几条对话/跑条流水线后刷新即可。" />
               )}
             </Card>
+
+            {/* 图表：阶段延迟对比 */}
+            {data.speed.by_stage.length > 0 && (
+              <Card title="阶段延迟对比（均延迟 / P95）" size="small" style={{ marginTop: 16 }}>
+                <ReactECharts
+                  style={{ height: 240 }}
+                  option={{
+                    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+                    legend: { bottom: 0, data: ['均延迟', 'P95'] },
+                    grid: { left: 55, right: 16, top: 12, bottom: 36 },
+                    xAxis: { type: 'category', data: data.speed.by_stage.map(s => s.stage), axisLabel: { fontSize: 10, rotate: 20 } },
+                    yAxis: { type: 'value', name: 'ms', splitLine: { lineStyle: { type: 'dashed', color: '#e5eaf3' } } },
+                    series: [
+                      { name: '均延迟', type: 'bar', data: data.speed.by_stage.map(s => s.avg_latency_ms), itemStyle: { color: '#315cf6', borderRadius: [3, 3, 0, 0] }, barMaxWidth: 28 },
+                      { name: 'P95', type: 'bar', data: data.speed.by_stage.map(s => s.p95_ms), itemStyle: { color: '#f59e0b', borderRadius: [3, 3, 0, 0] }, barMaxWidth: 28 },
+                    ],
+                  }}
+                />
+              </Card>
+            )}
 
             {/* 按流水线阶段明细 */}
             <Card title={`按阶段明细 · 近 ${data.window_hours} 小时`} size="small" style={{ marginTop: 16 }}>
