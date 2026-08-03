@@ -63,6 +63,14 @@ MODEL_CONFIG = {
     "glm-4v-flash": (2048, False, False),
 }
 
+# 模型输入上下文窗口（token）——供 token_budget.trim_message_for_window 防超窗。
+# GLM-4 系列 128k；glm-4-long 1M；glm-4v 系列 8k（视觉模型窗口小，需注意图片+文本别超）；glm-5/5.1 128k。
+MODEL_INPUT_WINDOWS = {
+    "glm-4": 128000, "glm-4-plus": 128000, "glm-4-flash": 128000, "glm-4-long": 1_000_000,
+    "glm-5": 128000, "glm-5.1": 128000,
+    "glm-4v": 8192, "glm-4v-plus": 8192, "glm-4v-flash": 8192,
+}
+
 # 推理模型需要更多 token（reasoning tokens 计入 max_tokens）
 REASONING_MODEL_PREFIXES = ("glm-5",)
 

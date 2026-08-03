@@ -2999,7 +2999,7 @@ async def get_relevant_context(query: str, project_id: str = "",
             parts.append(proj_knowledge)
 
     # 2. 语义搜索相关知识
-    search_results = await semantic_search(query, tenant_id=tenant_id, top_k=3)
+    search_results = await semantic_search(query, tenant_id=tenant_id, top_k=settings.rag_top_k)
     if search_results:
         kb_section = "## 相关知识库条目\n"
         for r in search_results:

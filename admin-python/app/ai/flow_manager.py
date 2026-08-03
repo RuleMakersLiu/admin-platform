@@ -1456,7 +1456,8 @@ def _build_pipeline_prompt(stage_key: str, context: Dict[str, Any],
                             custom_prompts: Dict[str, str] = None) -> str:
     """根据阶段构建 Agent 的 prompt，注入记忆和修复反馈。支持自定义 prompt 覆盖。"""
     fix_feedback = _compact_fix_feedback(context.get("fix_feedback", ""))
-    memories_text = context.get("memories_text", "")
+    # memory 限长（_retrieve_memories 取 5 条但 content 不限长，叠加易超窗）——截断保头部经验
+    memories_text = _compact_context(context.get("memories_text", ""), 6000)
 
     memory_section = ""
     if memories_text:
@@ -4268,6 +4269,26 @@ def _is_retriable_error(e: Exception) -> bool:
     return any(kw in error_str for kw in retriable_keywords) or any(kw in type_name for kw in retriable_keywords)
 
 
+_CONTEXT_LENGTH_KEYWORDS = ("context length", "maximum context", "too long", "输入过长", "超出上下文", "1301")
+
+
+def _is_context_length_error(e: Exception) -> bool:
+    """判断是否为「输入超长」错误（GLM 1301 / context length exceeded）。"""
+    s = str(e).lower()
+    return any(kw in s for kw in _CONTEXT_LENGTH_KEYWORDS)
+
+
+def _agent_model_name(agent_type: str) -> str:
+    """取某 agent 类型当前用的 LLM 模型名（供 token 预算按模型窗口裁剪）。"""
+    try:
+        from app.ai.agents import AgentFactory
+        agent = AgentFactory.get_agent(agent_type)
+        llm = agent._get_llm() if hasattr(agent, "_get_llm") else getattr(agent, "_llm", None)
+        return getattr(llm, "model", "") or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 async def _call_agent_with_retry(agent_service: AgentService, session_id: str,
                                   message: str, agent_type: str,
                                   max_tokens_override: int = None,
@@ -4306,6 +4327,17 @@ async def _call_agent_with_retry(agent_service: AgentService, session_id: str,
 
             except Exception as e:
                 last_error = e
+                if _is_context_length_error(e):
+                    # 输入超长：截断 message（保尾部核心，丢头部上下文）后重试，而非直接失败
+                    from app.ai.token_budget import trim_message_for_window
+                    trimmed = trim_message_for_window(message, _agent_model_name(agent_type))
+                    if trimmed != message:
+                        logger.warning("Agent call context-length exceeded; trimming message and retrying (attempt %s/%s)",
+                                       attempt + 1, MAX_LLM_RETRIES)
+                        message = trimmed
+                        continue
+                    logger.error("Agent call context-length exceeded but message already minimal: %s", e)
+                    raise
                 if not _is_retriable_error(e):
                     logger.error(f"Agent call failed (permanent): {e}")
                     raise
@@ -4478,6 +4510,17 @@ async def _call_agent_with_retry_stream(
             except Exception as e:
                 last_error = e
                 error_label = "timeout waiting for final LLM reply" if isinstance(e, asyncio.TimeoutError) else str(e)
+                if _is_context_length_error(e) and not emitted_any:
+                    # 输入超长：截断 message（保尾部核心）后重试，而非直接失败
+                    from app.ai.token_budget import trim_message_for_window
+                    trimmed = trim_message_for_window(message, _agent_model_name(agent_type))
+                    if trimmed != message:
+                        logger.warning("Agent stream context-length exceeded; trimming and retrying (attempt %s/%s)",
+                                       attempt + 1, MAX_LLM_RETRIES)
+                        message = trimmed
+                        continue
+                    logger.error("Agent stream context-length exceeded but message already minimal: %s", e)
+                    raise
                 if emitted_any or not _is_retriable_error(e):
                     logger.error(f"Agent stream failed: {error_label}")
                     raise
