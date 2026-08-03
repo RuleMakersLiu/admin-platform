@@ -189,11 +189,11 @@ async def _render_url_screenshot(
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
             # 真实 vite dev server：轮询挂载后有内容（非 CDN 桩的同步挂载）
             body_text = ""
-            for _ in range(24):
+            for _ in range(40):  # 真实 vite dev server 就绪需更久（npm install 后首编译），轮询 ~30s
                 body_text = await page.evaluate("() => (document.body?.innerText || '').trim()")
                 if body_text:
                     break
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.75)
             await asyncio.sleep(1.0)  # 等 antd 组件渲染稳定
             if not body_text:
                 return None  # 空白 → 回退桩
@@ -303,7 +303,7 @@ async def acquire_live_preview(pipeline_id: str):
                     artifact.get("frontend_files") or {},
                     project_info,
                 ),
-                timeout=180,
+                timeout=300,  # Vue3 等现代前端 npm install + vite 首编译较慢，180s 常超时 → 视觉评测跳过
             )
             url = sandbox_preview_service.direct_preview_url(pipeline_id)
             owned = bool(url)
