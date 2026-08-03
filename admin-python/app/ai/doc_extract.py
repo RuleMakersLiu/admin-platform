@@ -5,6 +5,7 @@
 .docx/.xlsx/.pptx 或转成 PDF / 图片上传。
 """
 import io
+import itertools
 import logging
 import os
 from typing import Optional
@@ -25,10 +26,13 @@ _MIME_KIND = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
     "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+    "text/csv": "csv",
 }
 _EXT_KIND = {
     ".pdf": "pdf", ".docx": "docx", ".xlsx": "xlsx", ".pptx": "pptx",
-    ".doc": "ole", ".xls": "ole", ".ppt": "ole",
+    ".xls": "xls",  # 旧版 BIFF Excel（xlrd 解析）
+    ".csv": "csv",
+    ".doc": "ole", ".ppt": "ole",  # .doc/.ppt 旧版仍不支持
 }
 
 
@@ -54,10 +58,14 @@ def extract_text_from_bytes(data: bytes, mime: str = "", filename: str = "") -> 
             return _extract_docx(data)
         if kind == "xlsx":
             return _extract_xlsx(data)
+        if kind == "xls":
+            return _extract_xls(data)
+        if kind == "csv":
+            return _extract_csv(data)
         if kind == "pptx":
             return _extract_pptx(data)
         if kind == "ole":
-            logger.info("legacy Office (.doc/.xls/.ppt) not supported: %s", filename)
+            logger.info("legacy Office (.doc/.ppt) not supported: %s", filename)
             return ""
         # text 或未知：尝试 UTF-8 解码
         return data.decode("utf-8", errors="ignore")
@@ -92,6 +100,18 @@ def _extract_docx(data: bytes) -> str:
     return "\n".join(parts).strip()
 
 
+def _rows_to_markdown_table(rows: list[list[str]]) -> str:
+    """二维行（已去空行）→ markdown 表格（首行表头 + 分隔行）。列对齐补齐。"""
+    if not rows:
+        return ""
+    ncols = max(len(r) for r in rows)
+    rows = [r + [""] * (ncols - len(r)) for r in rows]
+    lines = ["| " + " | ".join(rows[0]) + " |"]
+    lines.append("|" + "|".join([" --- "] * ncols) + "|")
+    lines.extend("| " + " | ".join(r) + " |" for r in rows[1:])
+    return "\n".join(lines)
+
+
 def _extract_xlsx(data: bytes) -> str:
     from openpyxl import load_workbook
 
@@ -102,11 +122,38 @@ def _extract_xlsx(data: bytes) -> str:
         for row in ws.iter_rows(values_only=True):
             cells = ["" if c is None else str(c) for c in row]
             if any(c.strip() for c in cells):
-                rows.append("\t".join(cells))
+                rows.append(cells)
         if rows:
-            blocks.append(f"## {ws.title}\n" + "\n".join(rows))
+            blocks.append(f"## {ws.title}\n" + _rows_to_markdown_table(rows))
     wb.close()
     return "\n\n".join(blocks).strip()
+
+
+def _extract_xls(data: bytes) -> str:
+    """旧版 .xls（BIFF）→ markdown 表格。xlrd 2.0+ 仅支持 .xls。"""
+    import xlrd
+
+    wb = xlrd.open_workbook(file_contents=data)
+    blocks = []
+    for ws in wb.sheets():
+        rows = []
+        for rx in range(ws.nrows):
+            cells = [str(ws.cell_value(rx, cx)) for cx in range(ws.ncols)]
+            if any(c.strip() for c in cells):
+                rows.append(cells)
+        if rows:
+            blocks.append(f"## {ws.name}\n" + _rows_to_markdown_table(rows))
+    return "\n\n".join(blocks).strip()
+
+
+def _extract_csv(data: bytes) -> str:
+    """CSV → markdown 表格（首行表头）。取前 200 行控体积。"""
+    import csv
+
+    text = data.decode("utf-8", errors="ignore")
+    reader = csv.reader(io.StringIO(text))
+    rows = [[c for c in row] for row in itertools.islice(reader, 200) if any(c.strip() for c in row)]
+    return _rows_to_markdown_table(rows) if rows else text.strip()
 
 
 def _extract_pptx(data: bytes) -> str:

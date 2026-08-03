@@ -51,6 +51,7 @@ dependencies = [
     "openpyxl>=3.1",
     "python-pptx>=0.6",
     "pymupdf>=1.24",  # PDF 页转图（扫描件/图片 PDF 视觉兜底，自包含 wheel 不走 poppler）
+    "xlrd>=2.0",  # 旧版 .xls（BIFF）解析（xlrd 2.0+ 仅支持 .xls）
 
     # Utilities
     "httpx>=0.26.0",

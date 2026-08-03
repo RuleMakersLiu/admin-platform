@@ -45,6 +45,16 @@ def test_extract_xlsx_roundtrip():
         "r.xlsx",
     )
     assert "张三" in out and "姓名" in out
+    # A5: markdown 表格语法（列对齐 + 分隔行）
+    assert "| --- |" in out or "| ---" in out
+    assert out.count("|") >= 4  # 至少一行表头 + 分隔行
+
+
+def test_extract_csv_markdown_table():
+    out = doc_extract.extract_text_from_bytes(b"name,age\nAlice,30\nBob,25", "text/csv", "r.csv")
+    assert "| name | age |" in out
+    assert "| ---" in out
+    assert "Alice" in out and "Bob" in out
 
 
 def test_extract_pptx_roundtrip():
@@ -77,4 +87,4 @@ def test_kind_dispatch():
     assert doc_extract._kind("", "d.xlsx") == "xlsx"
     assert doc_extract._kind("", "deck.pptx") == "pptx"
     assert doc_extract._kind("", "legacy.doc") == "ole"
-    assert doc_extract._kind("text/csv", "") == "text"
+    assert doc_extract._kind("text/csv", "") == "csv"  # A5: CSV 路由到表格抽取（原为 text）
