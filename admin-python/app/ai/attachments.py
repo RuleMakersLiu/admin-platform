@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import unquote
 
 from app.ai import asr, doc_extract
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -100,12 +101,54 @@ async def process_attachments(attachments: list[Any]) -> tuple[str, list[str]]:
             # 可能是公网 URL；此处只处理内联 data URI，URL 留待后续
             extra_parts.append(f"[文档 {filename}] 仅支持内联上传，外部链接未抓取")
             continue
-        text = doc_extract.extract_text_from_bytes(raw, real_mime or mime, filename)
+        effective_mime = real_mime or mime
+        text = doc_extract.extract_text_from_bytes(raw, effective_mime, filename)
+        is_pdf = doc_extract._kind(effective_mime, filename) == "pdf"
         if text.strip():
+            # A3: 大文档截断上限（防全文进 prompt 超窗）
+            max_chars = settings.attachment_max_chars
+            if len(text) > max_chars:
+                text = text[:max_chars] + f"\n\n...[文档已截断，仅取前 {max_chars} 字符]"
             extra_parts.append(f"[文档 {filename}]\n{text}")
+        elif is_pdf:
+            # A2: PDF 文本空/极短 → 视觉兜底：页转图喂 GLM-4V（扫描件/图片 PDF）
+            page_images = _pdf_pages_to_image_data_uris(raw, max_pages=4)
+            if page_images:
+                image_urls.extend(page_images)
+                extra_parts.append(
+                    f"[文档 {filename}] 为扫描件/图片 PDF（无可抽文本），已转 {len(page_images)} 页图交视觉模型识别"
+                )
+            else:
+                extra_parts.append(f"[文档 {filename}] 无法抽取文本（空 PDF 且转图失败）")
         else:
             extra_parts.append(
-                f"[文档 {filename}] 无法抽取文本（可能是扫描件/旧版二进制 Office，建议转 PDF 文字版或截图上传）"
+                f"[文档 {filename}] 无法抽取文本（可能是旧版二进制 Office，建议转 PDF/截图上传）"
             )
 
     return ("\n\n".join(extra_parts), image_urls)
+
+
+def _pdf_pages_to_image_data_uris(data: bytes, max_pages: int = 4, dpi: int = 130) -> list[str]:
+    """PDF 前若干页渲染成 PNG data_uri（pymupdf/fitz）。用于扫描件/图片 PDF 的视觉兜底。
+
+    自包含（pymupdf wheel 不依赖 poppler）；失败返回 []。dpi=130 平衡清晰度与 base64 体积。
+    """
+    try:
+        import fitz  # pymupdf  # noqa: F401
+    except ImportError:
+        logger.info("pymupdf 未安装，PDF 扫描件视觉兜底跳过")
+        return []
+    try:
+        doc = fitz.open(stream=data, filetype="pdf")
+        uris: list[str] = []
+        for i in range(min(max_pages, doc.page_count)):
+            page = doc.load_page(i)
+            pix = page.get_pixmap(dpi=dpi)
+            png = pix.tobytes("png")
+            b64 = base64.b64encode(png).decode("ascii")
+            uris.append(f"data:image/png;base64,{b64}")
+        doc.close()
+        return uris
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("PDF 页转图失败: %s", exc)
+        return []

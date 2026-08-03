@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     # RAG 检索参数
     rag_top_k: int = 5
     rag_min_similarity: float = 0.75
+    # 单个文档附件抽取文本后注入 prompt 的字符上限（防全文进 prompt 超窗；超出截断+提示）
+    attachment_max_chars: int = 12000
 
     # CORS配置
     cors_origins: list[str] = ["http://localhost:3000", "http://localhost:3001"]
