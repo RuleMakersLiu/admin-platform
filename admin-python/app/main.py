@@ -143,6 +143,28 @@ async def lifespan(app: FastAPI):
         logger.warning(f"⚠️ 消息模块初始化失败: {e}")
 
     await ensure_runtime_schema()
+
+    # 从 DB sys_llm_config 加载默认 LLM 配置，覆盖 .env 默认值（让 UI /system/llm 配的模型真正生效）
+    try:
+        from sqlalchemy import select as _select
+        from app.core.database import async_session_maker as _asm
+        from app.models.models import SysLlmConfig as _Cfg
+        async with _asm() as session:
+            cfg = (await session.execute(
+                _select(_Cfg).where(_Cfg.is_default == 1, _Cfg.status == 1).limit(1)
+            )).scalar_one_or_none()
+            if cfg and cfg.model_name:
+                settings.zai_default_model = cfg.model_name
+                if cfg.api_key:
+                    settings.zai_api_key = cfg.api_key
+                if cfg.max_tokens:
+                    settings.zai_max_tokens = cfg.max_tokens
+                logger.info(f"✅ DB LLM 配置生效: model={cfg.model_name} max_tokens={cfg.max_tokens}（覆盖 .env 默认）")
+            else:
+                logger.info(f"未找到 DB 默认 LLM 配置，使用 .env: model={settings.zai_default_model}")
+    except Exception as e:
+        logger.warning(f"加载 DB LLM 配置失败（回退 .env 默认）: {e}")
+
     try:
         from app.ai.flow_manager import recover_stale_running_pipelines
         recovered = await recover_stale_running_pipelines()
