@@ -5878,7 +5878,8 @@ class DevPipelineManager:
         session_id = f"{pipeline_id}_{stage_key}"
         html_stages = {"prototype", "ui_preview"}
         max_tok = 32768 if compact_preview_stage else (8192 if compact_pm_design_stage else (16384 if stage_key in html_stages else None))
-        thinking_override = {"type": "disabled"} if compact_preview_stage or compact_pm_design_stage else None
+        # 推理模型（glm-5.x）thinking 模式每阶段多花 5-15 分钟深度推理 → 全阶段关闭，spec→template 不需要
+        thinking_override = {"type": "disabled"}
         # prototype 已强制 JSON-only 输出，启用 GLM json mode 从源头保证合法 JSON
         response_format_override = {"type": "json_object"} if stage_key == "prototype" else None
 
