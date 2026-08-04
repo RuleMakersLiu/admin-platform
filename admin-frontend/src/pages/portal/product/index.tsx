@@ -1426,6 +1426,15 @@ export default function ProductPortal() {
               current={Math.max(stageOrder.indexOf(activeStage), 0)}
               style={{ marginTop: 18 }}
             />
+            {status?.status === 'failed' && (
+              <Alert
+                type="error"
+                showIcon
+                style={{ marginTop: 16 }}
+                message={`阶段「${stageLabel[status?.current_stage || ''] || status?.current_stage || '未知'}」失败`}
+                description={status?.stages?.[status?.current_stage || '']?.error || '未知错误，请重试或查看下方日志'}
+              />
+            )}
             {status?.status === 'waiting_confirm' && (
               <Alert
                 type="warning"
