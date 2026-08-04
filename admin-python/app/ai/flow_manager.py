@@ -826,28 +826,65 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 13. 数组兜底重点在页面组件里完成：例如 `const rows = Array.isArray(payload.list) ? payload.list : []`，模板和渲染逻辑只读取 `rows`；API/mock 服务模块只要返回契约正确的列表对象，不要因为参数处理中的 `.map/.filter/.length` 影响页面可用性。
 
 ## 输出格式
-只允许输出 JSON 文件数组，不要输出 Markdown，不要输出代码块围栏，不要输出解释文字。系统会直接解析这个 JSON 并写入前端项目。
+只允许输出 JSON 页面规格，不要输出完整代码文件、不要输出 Markdown 围栏、不要输出解释文字。系统会用模板引擎自动把规格渲染成完整的 antd-vue 3.x 组件代码。
 
 JSON 格式如下:
-[
-  {"path": "src/views/system/UserList.vue", "content": "完整文件内容"},
-  {"path": "src/api/system.js", "content": "完整文件内容"}
-]
+{
+  "pages": [
+    {
+      "path": "src/views/product/List.vue",
+      "title": "商品管理",
+      "components": [
+        {
+          "type": "search_bar",
+          "fields": [
+            {"name": "keyword", "label": "关键词", "input": "text", "placeholder": "搜索商品名"},
+            {"name": "status", "label": "状态", "input": "select", "options": [{"label":"全部","value":""},{"label":"上架","value":1}]}
+          ]
+        },
+        {
+          "type": "data_table",
+          "columns": [
+            {"name": "id", "label": "ID", "width": 80},
+            {"name": "name", "label": "商品名称"},
+            {"name": "price", "label": "价格"}
+          ],
+          "row_actions": ["edit", "delete"],
+          "toolbar": ["create"],
+          "pagination": true
+        }
+      ]
+    }
+  ],
+  "api_modules": [
+    {
+      "path": "src/api/product.js",
+      "base_url": "/api/product",
+      "endpoints": [
+        {"name": "getList", "method": "GET", "url": "/list", "paginated": true},
+        {"name": "create", "method": "POST", "url": "/create"},
+        {"name": "update", "method": "PUT", "url": "/update"},
+        {"name": "remove", "method": "DELETE", "url": "/delete"}
+      ]
+    }
+  ],
+  "pm_quality": {"score": 85, "issues": []}
+}
+
+支持的组件类型：
+- search_bar: 搜索筛选区（fields: [{name, label, input: text|select|date, options, placeholder}]）
+- data_table: 数据表格（columns: [{name, label, width}], row_actions: [edit|delete], toolbar: [create], pagination）
+- modal_form: 弹窗表单（title, trigger: edit, fields: [{name, label, input: text|number|select|textarea|upload|date|switch, required, options}]）
+- stats_cards: 统计卡片（cards: [{label, value, suffix}]）
+- description: 详情描述（fields: [{name, label}]）
 
 要求：
-- 必须是合法 JSON，最外层必须是数组
-- 每项必须包含 path 和 content
-- content 里放完整文件内容，换行用 JSON 字符串转义；必须完整闭合所有 JSON 字符串、对象和数组
-- 简单后台 Web 页面通常可以只输出 2 个文件：页面组件 + API/mock 服务模块；如果页面设计声明多个主页面，必须输出覆盖所有主页面的页面文件
-- 原生小程序必须输出小程序页面文件 + `public/sandbox-miniapp-preview.html`
-- 禁止输出 ```json 或任何 Markdown 包裹
-- 输出前必须自检 JSON 合法性、文件路径合理性、方法完整性、字段一致性和首屏运行安全性
-
-示例:
-[
-  {"path": "src/views/system/UserList.vue", "content": "完整文件内容"},
-  {"path": "src/api/system.js", "content": "完整文件内容"}
-]""",
+- 必须是合法 JSON，最外层是对象，必须包含 pages 数组
+- 每个 page 必须有 path（.vue 路径）和 components 数组
+- 如果页面设计声明多个主页面，pages 里必须覆盖所有主页面
+- 根据页面设计里的接口和字段，完整定义 columns 和 form fields
+- pm_quality.score 是你对本次产出的自评（0-100）
+- 禁止输出完整代码或 Markdown，只输出规格 JSON""",
 
     "delivery": """基于需求分析、页面设计和前端预览代码，整理一份完整、边界清晰、可进入开发和测试的交付文档包。
 
@@ -3596,6 +3633,29 @@ async def _load_existing_preview_page_files(
     return existing_paths, existing_frontend_files
 
 
+def _try_parse_page_spec(raw_output: str) -> Optional[Dict[str, Any]]:
+    """尝试从 LLM 输出中解析页面规格 JSON（Spec→模板渲染模式）。
+
+    Spec 格式：{"pages": [{path, title, components: [...]}], "api_modules": [...], "pm_quality": {...}}
+    如果输出不含 "pages" 键 → 返回 None（fallback 到原 [{path, content}] 解析）。
+    """
+    text = (raw_output or "").strip()
+    # 去掉 ```json ... ``` 包裹
+    fence = re.search(r"```(?:json)?\s*\n(.*?)```", text, re.DOTALL)
+    if fence:
+        text = fence.group(1).strip()
+    for candidate in (text, text[text.index("{"):text.rindex("}") + 1] if "{" in text and "}" in text else ""):
+        if not candidate:
+            continue
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict) and "pages" in parsed:
+                return parsed
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return None
+
+
 def _try_parse_json_code_files(raw_output: str) -> Dict[str, str]:
     """尝试从 LLM 输出中提取 JSON 格式的代码文件映射。
     支持格式: ```json\n{"path": "src/xxx", "content": "..."}\n``` 或直接 JSON 对象
@@ -4172,13 +4232,27 @@ def _parse_agent_output(stage_key: str, raw_output: str) -> Dict[str, Any]:
         result["preview_quality"] = _validate_preview_html(result.get("preview_html", ""))
 
     if stage_key in ("development", "prototype", "frontend_dev", "backend_dev", "testing"):
-        # 优先尝试解析 JSON 结构化输出
-        files = _try_parse_json_code_files(raw_output)
-        if not files:
-            # fallback: 正则解析
-            files = _parse_markdown_code_files(raw_output)
-        if files:
-            result["code_files"] = files
+        # Spec → 模板渲染（prototype 优先）：LLM 输出页面规格 JSON（~2000 token），模板引擎渲染 .vue
+        if stage_key == "prototype":
+            spec = _try_parse_page_spec(raw_output)
+            if spec:
+                try:
+                    from app.ai.frontend_scaffold import render_spec_to_code_files
+                    files = render_spec_to_code_files(spec)
+                    if files:
+                        result["code_files"] = files
+                        result["page_spec"] = spec
+                        result["pm_quality"] = spec.get("pm_quality", {"score": 80})
+                        logger.info("prototype spec→template: %d files rendered", len(files))
+                except Exception as exc:
+                    logger.warning("prototype spec→template 渲染失败，fallback 到原解析: %s", exc)
+        # Fallback: 原逻辑（LLM 直接输出 [{path, content}] 或 markdown 代码块）
+        if not result.get("code_files"):
+            files = _try_parse_json_code_files(raw_output)
+            if not files:
+                files = _parse_markdown_code_files(raw_output)
+            if files:
+                result["code_files"] = files
 
     if stage_key == "requirement":
         prd_document = _extract_markdown_fence(raw_output, ["prg", "markdown", "md"])
