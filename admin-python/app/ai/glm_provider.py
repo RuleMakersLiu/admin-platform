@@ -169,7 +169,7 @@ class ChatGLM:
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
             # 推理模型需要更长时间
-            timeout = 600.0 if _is_reasoning_model(self.model) else 300.0
+            timeout = 900.0  # 匹配 LLM_STAGE_TIMEOUT，防 httpx 先于 stage 超时放弃 GLM 调用
             self._client = httpx.AsyncClient(timeout=timeout)
         return self._client
 
