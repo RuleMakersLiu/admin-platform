@@ -43,7 +43,7 @@ MAX_PREVIEW_GENERATION_ATTEMPTS = 3
 MAX_EVAL_FIX_ITERATIONS = 2
 MAX_LLM_RETRIES = 3
 RETRY_BASE_DELAY = 2  # seconds
-LLM_STAGE_TIMEOUT = 600  # 单阶段 LLM 调用最大超时（秒）
+LLM_STAGE_TIMEOUT = 900  # 单阶段 LLM 调用最大超时（秒）——prototype 生成大型 JSON HTML 输出需更长时间
 LLM_STREAM_IDLE_TIMEOUT = 45  # seconds without stream chunks before fallback
 LLM_FINAL_REPLY_TIMEOUT = 90  # seconds to wait for non-stream fallback reply
 
