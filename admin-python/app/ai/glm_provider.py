@@ -56,6 +56,7 @@ MODEL_CONFIG = {
     "glm-4-long": (16384, False, False),
     "glm-5": (4096, True, False),
     "glm-5.1": (16384, True, True),
+    "glm-5.2": (65536, True, True),  # 用户配置的默认模型（DB sys_llm_config max_tokens=65536）
     # 视觉模型（多模态，OpenAI 兼容 content-array）
     # NOTE: GLM-4V 系列 max_tokens 上限 2048（>2048 报 1210「max_tokens参数非法」），故首位置 2048。
     "glm-4v": (2048, False, False),
@@ -67,7 +68,7 @@ MODEL_CONFIG = {
 # GLM-4 系列 128k；glm-4-long 1M；glm-4v 系列 8k（视觉模型窗口小，需注意图片+文本别超）；glm-5/5.1 128k。
 MODEL_INPUT_WINDOWS = {
     "glm-4": 128000, "glm-4-plus": 128000, "glm-4-flash": 128000, "glm-4-long": 1_000_000,
-    "glm-5": 128000, "glm-5.1": 128000,
+    "glm-5": 128000, "glm-5.1": 128000, "glm-5.2": 128000,
     "glm-4v": 8192, "glm-4v-plus": 8192, "glm-4v-flash": 8192,
 }
 
