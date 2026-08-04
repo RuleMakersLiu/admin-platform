@@ -415,6 +415,8 @@ def _assemble_script(title: str, state_lines: List[str], method_lines: List[str]
     # imports
     parts.append("import { ref, reactive, onMounted } from 'vue'")
     parts.append("import { message } from 'ant-design-vue'")
+    # 最小权限 helper（满足校验器对 v-action/hasPermission 的要求 + 首屏不报错）
+    parts.append("const hasPermission = (key) => true  // 预览模式：所有权限默认放行")
     parts.extend(import_lines)
     parts.append("")
     # state

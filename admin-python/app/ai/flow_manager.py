@@ -2788,7 +2788,9 @@ def _validate_frontend_preview_code_files(
                     continue
                 if "listmixin" in content.lower() and handler in {"searchQuery", "searchReset"}:
                     continue
-                if f"{handler} (" not in content and f"{handler}(" not in content:
+                if (f"{handler} (" not in content and f"{handler}(" not in content
+                        and f"const {handler}" not in content and f"function {handler}" not in content
+                        and f"{handler} =" not in content):
                     issues.append(f"{safe_path} 模板事件 {handler} 未实现")
         if safe_path.endswith(".wxml"):
             for handler in re.findall(r"bind(?:tap|change|input|submit)=\"([A-Za-z_$][\w$]*)\"", content):
