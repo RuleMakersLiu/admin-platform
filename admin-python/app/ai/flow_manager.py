@@ -5713,7 +5713,7 @@ class DevPipelineManager:
             "frontend_tech": pipe_config.get("frontend_tech", ""),
             "pipeline_mode": pipe_config.get("pipeline_mode", "full"),
             "workspace_path": pipe.workspace_path or get_workspace_path(pipeline_id),
-            "use_spec_mode": _use_spec_mode,
+            "use_spec_mode": _use_spec_mode if "_use_spec_mode" in dir() else False,
         }
         selected_frontend_page_path = str(pipe_config.get("selected_frontend_page_path") or "").strip()
 
