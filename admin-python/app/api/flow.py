@@ -787,6 +787,38 @@ async def get_git_status(pipeline_id: str):
         raise HTTPException(status_code=404, detail=str(e))
 
 
+class GitCommitRequest(BaseModel):
+    commit_message: Optional[str] = None
+    branch: Optional[str] = None
+    git_config_id: Optional[int] = None
+    repo_url: Optional[str] = None
+    target_branch: Optional[str] = None
+    merge_strategy: str = "merge"
+
+
+@router.post("/pipeline/{pipeline_id}/git/commit")
+async def git_commit_pipeline(
+    pipeline_id: str, req: GitCommitRequest, http_request: Request
+):
+    """手动触发 Git 提交（pipeline 完成后用）。支持自动合并到目标分支 + 冲突自动解决。"""
+    tenant_id = _get_tenant_id(http_request)
+    try:
+        data = await pipeline_manager.git_commit_pipeline(
+            pipeline_id,
+            commit_message=req.commit_message,
+            branch=req.branch,
+            git_config_id=req.git_config_id,
+            repo_url=req.repo_url,
+            target_branch=req.target_branch,
+            merge_strategy=req.merge_strategy,
+        )
+        return {"code": 200, "message": "Git 提交完成", "data": data}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/pipeline/{pipeline_id}/deploy-status")
 async def get_deploy_status(pipeline_id: str):
     """获取部署任务状态"""

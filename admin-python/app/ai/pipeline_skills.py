@@ -426,8 +426,13 @@ def _do_git_operations(
     branch: str,
     git_config: Any,
     ssh_key_path: Optional[str] = None,
+    target_branch: Optional[str] = None,
+    merge_strategy: str = "merge",
 ) -> Dict[str, Any]:
-    """同步 Git 操作（在 asyncio.to_thread 中执行）"""
+    """同步 Git 操作（在 asyncio.to_thread 中执行）。
+
+    支持自动冲突解决（--theirs 优先保留生成代码）和可选合并到目标分支。
+    """
     import git as gitpython
 
     env = os.environ.copy()
@@ -436,18 +441,22 @@ def _do_git_operations(
 
     if repo_url:
         auth_url = _build_auth_url(repo_url, git_config)
-        # 如果工作区已有 .git，做 pull；否则 clone
         if os.path.isdir(os.path.join(workspace_path, ".git")):
             repo = gitpython.Repo(workspace_path)
             try:
-                repo.remotes.origin.pull(branch)
-            except Exception:
-                pass
+                repo.remotes.origin.fetch()
+                # 冲突自动解决：pull --strategy-option theirs（优先保留生成代码）
+                repo.git.merge(f"origin/{branch}", "-X", "theirs", "--no-edit")
+            except gitpython.GitCommandError as e:
+                if "CONFLICT" in str(e) or "merge conflict" in str(e).lower():
+                    # 强制用生成代码版本解决冲突
+                    repo.git.checkout("--theirs", ".")
+                    repo.git.add("-A")
+                    repo.index.commit(f"merge {branch}: auto-resolve conflicts (theirs)", parent_commits=repo.head.commit.parents)
+                else:
+                    pass  # 非 pull 相关错误，继续（可能首次 push）
         else:
-            repo = gitpython.Repo.clone_from(
-                auth_url, workspace_path,
-                branch=branch, env=env,
-            )
+            repo = gitpython.Repo.clone_from(auth_url, workspace_path, branch=branch, env=env)
     else:
         repo = gitpython.Repo.init(workspace_path)
 
@@ -457,20 +466,20 @@ def _do_git_operations(
     config_writer.set_value("user", "email", "pipeline@admin-platform.local")
     config_writer.release()
 
-    # 添加所有文件
-    repo.index.add(repo.untracked_files)
-    # 也添加已修改的文件
-    for item in repo.index.diff(None):
-        repo.index.add([item.a_path])
-    for item in repo.index.diff("HEAD"):
-        repo.index.add([item.a_path])
+    # 添加所有文件（新增 + 修改 + 删除）
+    repo.git.add("-A")
 
     # 提交
+    if not repo.is_dirty(index=True) and not repo.untracked_files:
+        # 没有变更
+        return {"commit_sha": repo.head.commit.hexsha, "pushed": False, "branch": branch,
+                "message": "无变更，跳过提交", "skipped": True}
     commit = repo.index.commit(commit_message)
     commit_sha = commit.hexsha
 
     # 推送
     pushed = False
+    push_error = ""
     if repo_url and "origin" in [r.name for r in repo.remotes]:
         for attempt in range(3):
             try:
@@ -478,12 +487,34 @@ def _do_git_operations(
                 pushed = True
                 break
             except Exception as e:
+                push_error = str(e)
                 if attempt < 2:
                     time.sleep(5)
-                else:
-                    return {"commit_sha": commit_sha, "pushed": False, "error": str(e)}
 
-    return {"commit_sha": commit_sha, "pushed": pushed, "branch": branch}
+    # 可选：合并到目标分支（如 main）
+    merged = False
+    merge_info = ""
+    if pushed and target_branch and target_branch != branch:
+        try:
+            # 切到目标分支，合并 feature 分支，推回
+            repo.git.checkout(target_branch)
+            if merge_strategy == "rebase":
+                repo.git.rebase(branch)
+            elif merge_strategy == "squash":
+                repo.git.merge("--squash", branch)
+                repo.index.commit(f"squash merge {branch} into {target_branch}")
+            else:
+                repo.git.merge(branch, "--no-edit", "-X", "theirs")
+            repo.remotes.origin.push(f"{target_branch}:{target_branch}", env=env)
+            merged = True
+            merge_info = f"{branch} → {target_branch} ({merge_strategy})"
+            repo.git.checkout(branch)  # 切回 feature 分支
+        except Exception as e:
+            merge_info = f"合并失败: {e}"
+
+    return {"commit_sha": commit_sha, "pushed": pushed, "branch": branch,
+            "merged": merged, "merge_info": merge_info,
+            "error": push_error if not pushed else ""}
 
 
 @skill_registry.register(
@@ -540,6 +571,10 @@ async def git_commit(
 
     if not repo_url and not git_config:
         return {"commit_sha": "local", "pushed": False, "skipped": True, "message": "无 Git 配置，仅本地提交"}
+
+    # 如果有 git_config 但没 repo_url，从 config 推断
+    if not repo_url and git_config:
+        repo_url = git_config.base_url or ""
 
     try:
         ssh_key_path = await _write_ssh_key_via_skill(git_config)
