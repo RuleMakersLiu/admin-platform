@@ -368,8 +368,6 @@ export default function ProductPortal() {
   const [gitTargetBranch, setGitTargetBranch] = useState('')
   const [gitMergeStrategy, setGitMergeStrategy] = useState('merge')
   const [gitSubmitting, setGitSubmitting] = useState(false)
-  const [uploadedFiles, setUploadedFiles] = useState<File[]>([])
-  const [uploading, setUploading] = useState(false)
   const [editedFiles, setEditedFiles] = useState<Record<string, string>>({})
   const [editingFile, setEditingFile] = useState('')
   const [savingFile, setSavingFile] = useState('')
@@ -1554,140 +1552,92 @@ export default function ProductPortal() {
                       onChange={(event) => setFeedback(event.target.value)}
                       placeholder="人工通过可不填；带反馈重生成请填修改意见"
                     />
-                    <Space wrap>
-                      <Button type="primary" loading={running} onClick={() => resumeFromHuman('approve')}>
-                        人工通过并继续
-                      </Button>
-                      <Button danger icon={<ReloadOutlined />} loading={running} onClick={() => resumeFromHuman('retry')}>
-                        带反馈重新生成
-                      </Button>
-                      <Button
-                        icon={<DownloadOutlined />}
-                        disabled={!pipelineId || !Object.keys(artifact?.frontend_files || {}).length}
-                        onClick={handleDownloadFrontend}
-                      >
-                        下载前端代码
-                      </Button>
-                      <Upload
-                        multiple
-                        showUploadList
-                        beforeUpload={(file) => {
-                          setUploadedFiles(prev => [...prev, file])
-                          return false
-                        }}
-                        onRemove={(file) => {
-                          setUploadedFiles(prev => prev.filter(f => f.name !== file.name))
-                          return true
-                        }}
-                      >
-                        <Button icon={<UploadOutlined />} disabled={!pipelineId}>
-                          上传修改后的代码
+                    <div style={{ width: '100%' }}>
+                      <Space style={{ marginBottom: 12 }}>
+                        <Button type="primary" loading={running} onClick={() => resumeFromHuman('approve')}>
+                          通过并继续
                         </Button>
-                      </Upload>
-                      {uploadedFiles.length > 0 && (
+                        <Button danger icon={<ReloadOutlined />} loading={running} onClick={() => resumeFromHuman('retry')}>
+                          带反馈重生成
+                        </Button>
                         <Button
-                          type="primary"
-                          icon={<CheckCircleOutlined />}
-                          loading={uploading}
-                          onClick={async () => {
-                            if (!pipelineId) return
-                            setUploading(true)
-                            try {
-                              const res = await pipelineApi.uploadCode(pipelineId, uploadedFiles)
-                              message.success(`已上传 ${res?.files?.length || 0} 个文件，点击「人工通过并继续」生效`)
-                              setUploadedFiles([])
-                            } catch (e) {
-                              message.error(e instanceof Error ? e.message : '上传失败')
-                            } finally {
-                              setUploading(false)
-                            }
-                          }}
+                          icon={<DownloadOutlined />}
+                          disabled={!pipelineId || !Object.keys(artifact?.frontend_files || {}).length}
+                          onClick={handleDownloadFrontend}
                         >
-                          确认上传（{uploadedFiles.length} 个文件）
+                          下载代码
                         </Button>
-                      )}
+                      </Space>
+                      <TextArea
+                        rows={2}
+                        value={feedback}
+                        onChange={(event) => setFeedback(event.target.value)}
+                        placeholder="带反馈重生成时填写修改意见；通过可不填"
+                        style={{ marginBottom: 12 }}
+                      />
                       {(() => {
                         const codeFiles = artifact?.frontend_files || {}
                         const fileEntries = Object.entries(codeFiles).slice(0, 20)
-                        return fileEntries.length > 0 ? (
-                          <Collapse
-                            size="small"
-                            style={{ width: '100%', marginTop: 8, overflow: 'hidden' }}
-                            items={[{
-                              key: 'code',
-                              label: `查看/编辑生成的代码（${fileEntries.length} 个文件，可直接修改后保存）`,
-                              children: (
-                                <div>
-                                  <Select
-                                    value={editingFile || fileEntries[0]?.[0]}
-                                    onChange={setEditingFile}
-                                    style={{ width: '100%', marginBottom: 8 }}
-                                    options={fileEntries.map(([p]) => ({ value: p, label: p }))}
-                                  />
-                                  {(() => {
-                                    const current = fileEntries.find(([p]) => p === (editingFile || fileEntries[0]?.[0]))
-                                    if (!current) return null
-                                    const [path, content] = current
-                                    return (
-                                      <div style={{ overflow: 'hidden', borderRadius: 6 }}>
-                                        <Space style={{ marginBottom: 4 }}>
-                                          <Button
-                                            size="small"
-                                            type="primary"
-                                            loading={savingFile === path}
-                                            onClick={async () => {
-                                              if (!pipelineId) return
-                                              setSavingFile(path)
-                                              try {
-                                                const edited = editedFiles[path] ?? String(content)
-                                                await pipelineApi.saveCode(pipelineId, { [path]: edited })
-                                                message.success(`${path} 已保存`)
-                                              } catch { message.error('保存失败') }
-                                              finally { setSavingFile('') }
-                                            }}
-                                          >
-                                            保存当前文件
-                                          </Button>
-                                          <Button
-                                            size="small"
-                                            loading={savingAll}
-                                            onClick={async () => {
-                                              if (!pipelineId) return
-                                              setSavingAll(true)
-                                              try {
-                                                const toSave: Record<string, string> = {}
-                                                for (const [p, c] of fileEntries)
-                                                  toSave[p] = editedFiles[p] ?? String(c)
-                                                const res = await pipelineApi.saveCode(pipelineId, toSave)
-                                                message.success(`已保存 ${res?.files?.length || 0} 个文件`)
-                                              } catch { message.error('保存失败') }
-                                              finally { setSavingAll(false) }
-                                            }}
-                                          >
-                                            全部保存
-                                          </Button>
-                                        </Space>
-                                        <div style={{ border: '1px solid #e5eaf3', borderRadius: 6, overflow: 'hidden' }}>
-                                          <CodeEditor
-                                            key={path}
-                                            value={editedFiles[path] ?? String(content)}
-                                            filename={path}
-                                            height="400px"
-                                            onChange={(val) => {
-                                              setEditedFiles(prev => ({ ...prev, [path]: val }))
-                                            }}
-                                          />
-                                        </div>
-                                      </div>
-                                    )
-                                  })()}
-                                </div>
-                              ),
-                            }]}
-                          />
-                        ) : null
+                        if (!fileEntries.length) return null
+                        const currentPath = editingFile || fileEntries[0][0]
+                        const current = fileEntries.find(([p]) => p === currentPath) || fileEntries[0]
+                        return (
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                              <Select
+                                value={currentPath}
+                                onChange={setEditingFile}
+                                style={{ flex: 1 }}
+                                options={fileEntries.map(([p]) => ({ value: p, label: p }))}
+                              />
+                              <Button
+                                size="small"
+                                type="primary"
+                                loading={savingFile === currentPath}
+                                onClick={async () => {
+                                  if (!pipelineId) return
+                                  setSavingFile(currentPath)
+                                  try {
+                                    await pipelineApi.saveCode(pipelineId, { [currentPath]: editedFiles[currentPath] ?? String(current[1]) })
+                                    message.success('已保存')
+                                  } catch { message.error('保存失败') }
+                                  finally { setSavingFile('') }
+                                }}
+                              >
+                                保存
+                              </Button>
+                              <Button
+                                size="small"
+                                loading={savingAll}
+                                onClick={async () => {
+                                  if (!pipelineId) return
+                                  setSavingAll(true)
+                                  try {
+                                    const toSave: Record<string, string> = {}
+                                    for (const [p, c] of fileEntries)
+                                      toSave[p] = editedFiles[p] ?? String(c)
+                                    const res = await pipelineApi.saveCode(pipelineId, toSave)
+                                    message.success(`已保存 ${res?.files?.length || 0} 个文件`)
+                                  } catch { message.error('保存失败') }
+                                  finally { setSavingAll(false) }
+                                }}
+                              >
+                                全部保存
+                              </Button>
+                            </div>
+                            <CodeEditor
+                              key={currentPath}
+                              value={editedFiles[currentPath] ?? String(current[1])}
+                              filename={currentPath}
+                              height="400px"
+                              onChange={(val) => {
+                                setEditedFiles(prev => ({ ...prev, [currentPath]: val }))
+                              }}
+                            />
+                          </div>
+                        )
                       })()}
-                    </Space>
+                    </div>
                   </Space>
                 }
               />

@@ -4,7 +4,6 @@ import CodeMirror from '@uiw/react-codemirror'
 import { javascript } from '@codemirror/lang-javascript'
 import { html } from '@codemirror/lang-html'
 import { css } from '@codemirror/lang-css'
-import { oneDark } from '@codemirror/theme-one-dark'
 
 const EXT_LANG: Record<string, () => any> = {
   '.js': () => javascript({ jsx: true }),
@@ -40,11 +39,10 @@ export default function CodeEditor({ value, onChange, filename, height = '300px'
   const langExt = EXT_LANG[ext]?.() || javascript()
 
   return (
-    <div style={{ width: '100%', overflow: 'hidden', borderRadius: 6 }}>
+    <div style={{ width: '100%', overflow: 'hidden', borderRadius: 4, border: '1px solid #e5eaf3' }}>
       <CodeMirror
         value={value}
         height={height}
-        theme={oneDark}
         extensions={[langExt]}
         onChange={onChange}
         readOnly={readOnly}
@@ -52,9 +50,7 @@ export default function CodeEditor({ value, onChange, filename, height = '300px'
         basicSetup={{
           lineNumbers: true,
           highlightActiveLine: !readOnly,
-          highlightActiveLineGutter: !readOnly,
           foldGutter: true,
-          autocompletion: !readOnly,
           bracketMatching: true,
           closeBrackets: !readOnly,
           indentOnInput: !readOnly,
