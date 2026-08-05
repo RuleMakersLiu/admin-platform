@@ -286,6 +286,22 @@ def _is_product_pm_design_stage(stage_key: str, pipe_config: Dict[str, Any]) -> 
     return stage_key == "page_design" and pipe_config.get("pipeline_mode") == "frontend_contract_review"
 
 
+def _is_antd_vue_project(pipe_config: Dict[str, Any], pipe: "DevPipeline") -> bool:
+    """检测是否 antd-vue PC 后台项目（spec→模板模式适用）。
+
+    判定：frontend_tech 含 vue + antd，或 pipeline_mode=full 且 user_request 提到 Vue/antd/后台/管理。
+    其它项目（uni-app 小程序、React、纯 HTML 等）返回 False，走原模式。
+    """
+    ft = str(pipe_config.get("frontend_tech") or "").lower()
+    if "vue" in ft and ("antd" in ft or "ant-design" in ft):
+        return True
+    req = (pipe.user_request or "").lower() if pipe else ""
+    if pipe_config.get("pipeline_mode") == "full":
+        if any(k in req for k in ("vue3", "vue 3", "antd-vue", "ant design vue", "element-plus")):
+            return True
+    return False
+
+
 def _compact_context(text: str, limit: int = 4000) -> str:
     text = (text or "").strip()
     if len(text) <= limit:
@@ -412,7 +428,7 @@ def _build_repair_tasks_from_issues(issues: List[str]) -> List[Dict[str, Any]]:
                 add_task("component_usage", f"补齐项目组件 {component}", text, component)
             continue
 
-        page_match = re.search(r"主页面[“\"](.+?)[”\"]没有对应的前端页面文件", text)
+        page_match = re.search(r'主页面["\'](.+?)["\']没有对应的前端页面文件', text)
         if page_match:
             page_name = page_match.group(1)
             add_task("page_file", f"补齐页面文件：{page_name}", text, page_name)
@@ -663,8 +679,8 @@ def _knowledge_to_project_skill_dict(project_skill: ProjectKnowledge) -> Dict[st
 PIPELINE_GLOBAL_PROMPT_CONTRACT = """
 
 ## 全局执行契约（所有阶段必须遵守）
-1. 事实边界：只能基于用户需求、已匹配 Project Skill、项目代码参考、上游阶段产物和明确修复反馈推理；不确定的信息必须写入“假设/待确认”，禁止伪造接口、字段、组件、权限或外部事实。
-2. 范围边界：只处理当前阶段职责，不提前替代后续阶段，也不遗漏当前阶段必须交付的内容；如果当前阶段输出格式有特殊要求，以当前阶段“输出格式/输出要求”为最高优先级。
+1. 事实边界：只能基于用户需求、已匹配 Project Skill、项目代码参考、上游阶段产物和明确修复反馈推理；不确定的信息必须写入"假设/待确认"，禁止伪造接口、字段、组件、权限或外部事实。
+2. 范围边界：只处理当前阶段职责，不提前替代后续阶段，也不遗漏当前阶段必须交付的内容；如果当前阶段输出格式有特殊要求，以当前阶段"输出格式/输出要求"为最高优先级。
 3. 逻辑边界：每个结论都要能追溯到业务目标、页面行为、数据字段、权限策略或接口契约；前端字段、mock 字段、API 字段、后端字段必须保持同名同义同类型。
 4. 异常边界：必须覆盖空数据、加载中、无权限、接口失败、重复提交、并发操作、数据越权、输入非法、分页越界、状态流转非法等边界。
 5. 项目边界：优先复用匹配项目的目录结构、组件、API 封装、权限约定、响应模型和命名风格；不知道是否存在的组件/工具不要引用。
@@ -691,8 +707,8 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 如果上方有「Confirmed Frontend Project Skill Snapshot」「Confirmed Backend/API Project Skill Snapshot」「前端项目代码参考」或「后端项目代码参考」，请同时结合前端和后端项目的现有架构、字段、组件、接口规范来撰写需求，保持与项目一致的技术风格。
 
 ## PRD 输出边界
-- 只描述本需求相关范围；明确“不做范围”和“暂不支持范围”。
-- 不把技术实现细节写成业务事实；不确定内容进入“假设与待确认问题”。
+- 只描述本需求相关范围；明确"不做范围"和"暂不支持范围"。
+- 不把技术实现细节写成业务事实；不确定内容进入"假设与待确认问题"。
 - 需求必须能被页面设计、API 契约和 QA 测试直接消费。
 
 ## 需求分析执行步骤
@@ -779,54 +795,47 @@ DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
 ## 重要：参考项目
 结合 Frontend Project Skill，优先复用现有项目的目录、组件库、路由、API 封装、权限判断、表格/表单模式和样式规范。不要展开解释。
 如果没有匹配到前端项目或 Project Skill 信息不足，不要生成独立 demo 页面，应该让本阶段失败并说明缺少匹配项目依据。
-如果「前端项目关键文件参考」里提供了「与本需求相关的已确认前端页面路径」，这些路径是判断现有功能的唯一可信依据；不要选择无关业务页面。
 
 ## 生成目标
-本阶段就是前端代码生成阶段，不再有后续单独的“前端开发”阶段。产物会直接覆盖到匹配前端项目的沙箱副本中，并通过该项目自己的 npm 脚本启动预览。
-你生成的是“对匹配前端项目的增量文件修改”，不是创建一个新项目、独立页面、独立演示系统或脱离项目的 demo。
-
-## 产品经理验收目标
-产品经理不关心代码结构细节，只关心一个结果：点击“启动真实前端预览”后，能打开一个与需求匹配、首屏不报错、按钮能点、列表/详情/表单状态完整的可用页面。
-如果页面设计列出了多个主页面，prototype 必须交付完整页面集，而不是只生成其中 1 个页面。每个主页面都要有真实前端页面文件；共用 API/mock/service 可以复用同一个模块，但页面文件数量必须覆盖页面设计清单。
+本阶段就是前端代码生成阶段。产物会直接写入项目并启动真实预览。
+你生成的是前端页面代码文件（.vue / .tsx / .wxml+.js 等），根据目标项目技术栈选择。
 
 ## 实现要求
-1. 根据目标技术栈生成真实项目代码，不要再输出纯静态 HTML mock。
-2. 根据匹配项目的真实技术栈生成文件：Vue 后台通常生成 `src/views/**/*.vue` + `src/api/*.js`；React 后台通常生成 `src/pages/**/*.tsx|jsx` + service/api 文件；uni-app/小程序项目按项目现有 `pages/**`、`*.vue` 或 `*.wxml/*.js/*.json/*.wxss` 结构生成。不要把所有项目都当 Vue 后台。
-   - 文件路径必须像目标项目里的真实业务模块路径，优先沿用 Project Skill 或代码参考里的目录命名。
-   - 如果用户需求表达的是“现有/已有/当前/原有页面或功能上增加、修改、优化、补充筛选/字段/按钮/查询”，必须修改「与本需求相关的已确认前端页面路径」中的现有页面；禁止凭语义新建 `src/views/**/List.vue` 或 `src/pages/**/List.vue` 来冒充改造，禁止选择与已确认页面路径无关的业务页面。
-   - 现有功能改造必须做最小增量：旧表格列、旧列表数据、旧查询接口、旧 mixin、旧组件、旧操作列都是既有能力，不要重写整页架构，不要重新生成整页 mock 数据或新建一套列表 API。比如“给现有零售商品列表增加商品ID筛选项”，只需要在现有页面新增查询控件、queryParam 和请求参数传递；已存在页面改造一律复用原 API/原数据流，不输出 `mockProductList`、`Mock.mock`、`mockRequestWrapper`、`Promise.resolve` 假接口或完整假数据。
-   - Mock 边界必须先判断页面来源：已存在页面不要 mock，只改现有页面和现有 API 调用参数；全新页面为了真实前端预览可用，需要在独立 API/service 模块提供与 API 契约一致的 mock 数据，但不能与真实请求函数同名重复导出。
-   - 如果用户说“新增/增加/添加某个筛选项”，这是新增筛选项，不是把已有筛选项改名。必须保留原页面已有筛选控件及其 `queryParam` 字段，再为新增筛选项绑定 API 契约确认的独立请求字段。例如新增“商品ID”时，保留原“商品编号”及 `queryParam.productCode`，再新增“商品ID”及 `queryParam.id`。只有用户明确说“改名/调整文案/重命名”时，才允许修改旧 label/placeholder。
-   - 修改现有 Vue 列表页时必须保留原页面的 `ListMixin`/`mixins`、`<s-table :data="loadData">`、`url.list` 接口、已有 columns/slots/操作按钮和已有导入；除非用户明确要求删除，否则不要用本地 `data()`、新 API 文件或新接口替代原列表加载方式。
-   - 如果找不到与现有功能对应的已确认页面路径，本阶段不要编造新页面，应输出空 JSON 数组让系统失败并在修复反馈中暴露“缺少真实页面路径”。
-   - 禁止生成 `Demo`、`Example`、`Standalone`、`SandboxPreview`、`PreviewOnly`、`MockPage`、`GeneratedPage` 这类独立演示路径或组件名。
-   - 禁止生成新的 `package.json`、`vite.config.*`、`main.*`、`App.*`、`index.html` 来伪造一个独立应用。
-3. 第一屏必须匹配需求页面类型：列表页要有搜索筛选、表格和批量/行操作；详情页要有分区详情、状态标签、返回/编辑/启停等操作；表单页要有校验、提交、取消和异常提示；配置/看板页要有对应业务控件和状态。
-4. 所有按钮必须有真实前端交互，不允许出现未定义函数、空 onclick、只展示不响应的控件。
-5. Mock 只允许用于全新页面的预览数据；已存在页面改造禁止 mock，必须复用现有 API 封装和页面数据流。小程序项目必须同时给出浏览器 HTML/H5 等效预览文件。
-6. 代码要短而完整：页面组件控制在 260 行以内，API/mock 服务模块控制在 120 行以内。
-7. 只生成与本需求相关的新增/修改文件，不要输出说明文字。
-8. 代码必须体现页面设计中的权限、状态和边界；不要只做 happy path。
-9. 新页面 API/service 文件中的 mock 数据必须与页面字段、交付 API 契约候选字段完全一致；已存在页面不生成 mock 数据。
-10. 不允许用“占位按钮”“待实现方法”“console.log 替代业务逻辑”来冒充完成。
-
-## 可预览硬约束
-1. 先判断页面类型，不要把详情页/表单页/配置页强行写成列表页；列表契约只适用于列表或表格页面。
-2. 如果使用项目 `STable` 组件，`loadData` 必须返回分页对象：`{ page, pageNo, pageSize, count, totalCount, list }`，其中 `list` 必须是数组；禁止只返回数组、`result.data` 数组或没有 `list` 的对象。
-3. API/mock 服务模块里的列表接口必须返回同一分页对象，可包在 `result` 或 `data` 中，但对象内必须同时提供 `list/page/count/pageNo/totalCount`。
-4. 详情/编辑/配置接口必须返回对象，可包在 `result` 或 `data` 中；页面读取前必须有默认空对象，禁止直接对可能为 undefined 的对象取深层字段。
-5. 接口函数必须兼容真实接口和 mock 接口，推荐写法：列表 `then(res => res.result || res.data || res)`，详情 `then(res => res.result || res.data || {})`。
-6. 小程序/uni-app 页面必须遵循项目路由和页面生命周期：原生小程序至少成对生成 `pages/.../*.wxml` 和 `pages/.../*.js`，需要样式/配置时补 `*.wxss/*.json`；uni-app 使用 `pages/.../*.vue`，不要引用 Web-only 组件。
-7. uni-app monorepo 必须按目标应用真实结构生成，例如 `apps/<app>/pages/**/index.vue` 和 `apps/<app>/api/*.ts`；不要生成 Web 后台路径。API/service 必须复用项目已确认的请求导出；如果无法确认 `@hc-agent/http` 是否导出 `http`，禁止写 `import { http } from '@hc-agent/http'` 这类未验证命名导入，改用项目既有 API 文件中的实际封装或页面内预览 mock。
-8. 使用 `hasPermission`、`v-action`、权限指令或全局 helper 前必须确认目标项目已有该能力；如果未确认但页面设计要求体现按钮权限，必须在当前页面内定义可运行的最小权限 helper，确保首屏不会因未定义变量报错。
-9. 原生小程序必须额外生成 `public/sandbox-miniapp-preview.html`，作为浏览器可打开的 H5 等效预览。该 HTML 必须自包含 CSS/JS/mock 数据，并真实呈现小程序页面的布局、状态和交互；它是验收预览，不替代小程序源码。
-10. 禁止引用项目中未确认存在的组件、指令或工具；如果不确定，直接使用目标项目基础组件和本文件内方法。
-11. 所有模板事件引用的方法必须实现；表格列的 `scopedSlots` 必须有对应 slot。
-12. 代码必须能在首屏无运行时报错：不得访问可能为 undefined 的 `.length`、`.map`、`.filter`，除非先做 `Array.isArray` 或默认空数组。
-13. 数组兜底重点在页面组件里完成：例如 `const rows = Array.isArray(payload.list) ? payload.list : []`，模板和渲染逻辑只读取 `rows`；API/mock 服务模块只要返回契约正确的列表对象，不要因为参数处理中的 `.map/.filter/.length` 影响页面可用性。
+1. 根据目标技术栈生成真实项目代码：Vue 生成 `src/views/**/*.vue` + `src/api/*.js`；React 生成 `src/pages/**/*.tsx`；uni-app 生成 `pages/**/*.vue`；小程序生成 `pages/**/*.wxml` + `.js`。
+2. 每个页面组件控制在 260 行以内，API/mock 服务模块 120 行以内。
+3. 所有按钮必须有真实前端交互，不允许未定义函数或空 onclick。
+4. 代码必须能在首屏无运行时报错。
 
 ## 输出格式
-只允许输出 JSON 页面规格，不要输出完整代码文件、不要输出 Markdown 围栏、不要输出解释文字。系统会用模板引擎自动把规格渲染成完整的 antd-vue 3.x 组件代码。
+只允许输出 JSON 文件数组，不要输出 Markdown，不要输出代码块围栏，不要输出解释文字。
+
+JSON 格式如下:
+[
+  {"path": "src/views/product/List.vue", "content": "完整文件内容"},
+  {"path": "src/api/product.js", "content": "完整文件内容"}
+]
+
+要求：
+- 必须是合法 JSON，最外层必须是数组
+- 每项必须包含 path 和 content
+- 禁止输出 ```json 或任何 Markdown 包裹""",
+
+    "prototype_spec": """根据需求文档和页面设计，输出页面规格 JSON（antd-vue 3.x PC 后台专用）。系统会用模板引擎自动渲染成完整 .vue 组件代码。
+
+## 需求文档
+{{requirement_output}}
+
+## 页面设计
+{{page_design_output}}
+
+## 本次预览页面范围
+{{prototype_focus}}
+
+## 用户需求
+{{user_request}}
+
+## 输出格式
+只允许输出 JSON 页面规格，不要输出完整代码文件、不要输出 Markdown 围栏、不要输出解释文字。
 
 JSON 格式如下:
 {
@@ -835,56 +844,20 @@ JSON 格式如下:
       "path": "src/views/product/List.vue",
       "title": "商品管理",
       "components": [
-        {
-          "type": "search_bar",
-          "fields": [
-            {"name": "keyword", "label": "关键词", "input": "text", "placeholder": "搜索商品名"},
-            {"name": "status", "label": "状态", "input": "select", "options": [{"label":"全部","value":""},{"label":"上架","value":1}]}
-          ]
-        },
-        {
-          "type": "data_table",
-          "columns": [
-            {"name": "id", "label": "ID", "width": 80},
-            {"name": "name", "label": "商品名称"},
-            {"name": "price", "label": "价格"}
-          ],
-          "row_actions": ["edit", "delete"],
-          "toolbar": ["create"],
-          "pagination": true
-        }
+        {"type": "search_bar", "fields": [{"name": "keyword", "label": "关键词", "input": "text"}]},
+        {"type": "data_table", "columns": [{"name": "id", "label": "ID"}, {"name": "name", "label": "名称"}], "row_actions": ["edit", "delete"], "toolbar": ["create"], "pagination": true}
       ]
     }
   ],
-  "api_modules": [
-    {
-      "path": "src/api/product.js",
-      "base_url": "/api/product",
-      "endpoints": [
-        {"name": "getList", "method": "GET", "url": "/list", "paginated": true},
-        {"name": "create", "method": "POST", "url": "/create"},
-        {"name": "update", "method": "PUT", "url": "/update"},
-        {"name": "remove", "method": "DELETE", "url": "/delete"}
-      ]
-    }
-  ],
+  "api_modules": [{"path": "src/api/product.js", "base_url": "/api/product", "endpoints": [{"name": "getList", "method": "GET", "url": "/list", "paginated": true}]}],
   "pm_quality": {"score": 85, "issues": []}
 }
 
-支持的组件类型：
-- search_bar: 搜索筛选区（fields: [{name, label, input: text|select|date, options, placeholder}]）
-- data_table: 数据表格（columns: [{name, label, width}], row_actions: [edit|delete], toolbar: [create], pagination）
-- modal_form: 弹窗表单（title, trigger: edit, fields: [{name, label, input: text|number|select|textarea|upload|date|switch, required, options}]）
-- stats_cards: 统计卡片（cards: [{label, value, suffix}]）
-- description: 详情描述（fields: [{name, label}]）
-
+支持的组件类型：search_bar / data_table / modal_form / stats_cards / description / tabs。
 要求：
-- 必须是合法 JSON，最外层是对象，必须包含 pages 数组
-- 每个 page 必须有 path（.vue 路径）和 components 数组
-- 如果页面设计声明多个主页面，pages 里必须覆盖所有主页面
-- 根据页面设计里的接口和字段，完整定义 columns 和 form fields
-- pm_quality.score 是你对本次产出的自评（0-100）
-- 禁止输出完整代码或 Markdown，只输出规格 JSON""",
+- 必须包含 pages 数组，覆盖页面设计所有主页面
+- 每个 page 有 path（.vue）和 components
+- pm_quality.score 是自评（0-100）""",
 
     "delivery": """基于需求分析、页面设计和前端预览代码，整理一份完整、边界清晰、可进入开发和测试的交付文档包。
 
@@ -903,8 +876,8 @@ JSON 格式如下:
 
 ## 现有功能改造契约继承规则
 - 如果前端预览代码是修改现有页面，交付包必须继承真实页面代码里的接口路径、请求字段、响应字段、权限 key、mixin/组件行为，不得根据中文展示名另起字段或接口。
-- 如果需求是“新增/增加/添加某个筛选项”，交付包必须写清楚这是新增字段：保留所有原筛选项及其请求字段，再为新增筛选项使用 API 契约确认的独立请求字段；不得把旧字段改名来冒充新增。例如新增“商品ID”时，应保留原“商品编号”请求字段 `productCode`，新增字段按 API 契约使用 `id`。
-- 如果用户只是要求“把商品编号改成商品ID/调整文案”，且真实页面中该筛选绑定的是 `queryParam.productCode`，交付文档中的请求字段也必须写 `productCode`；不得改成未确认的 `goodsId`、`productId`。
+- 如果需求是"新增/增加/添加某个筛选项"，交付包必须写清楚这是新增字段：保留所有原筛选项及其请求字段，再为新增筛选项使用 API 契约确认的独立请求字段；不得把旧字段改名来冒充新增。例如新增"商品ID"时，应保留原"商品编号"请求字段 `productCode`，新增字段按 API 契约使用 `id`。
+- 如果用户只是要求"把商品编号改成商品ID/调整文案"，且真实页面中该筛选绑定的是 `queryParam.productCode`，交付文档中的请求字段也必须写 `productCode`；不得改成未确认的 `goodsId`、`productId`。
 - 如果真实页面中列表接口来自 `url.list` 或已有 API 封装，交付文档必须沿用该接口；不得凭空写 `/goods/retail/list`、`/product/retail/list` 等新路径。
 - Mock 数据只补充新增/变化字段的示例；旧列表字段、旧接口和旧分页结构按现有页面能力继承，不要把老功能重新设计成另一套 API。
 
@@ -915,7 +888,7 @@ JSON 格式如下:
 4. 边界与异常清单（空数据、无权限、失败重试、重复提交、并发操作、状态非法、分页越界）
 5. 前端实现要点（组件选择、状态管理、路由规划、权限展示、字段兜底）
 6. API 接口草案（接口路径、请求方法、请求参数、响应格式）
-   - 必须单独写明“参考后端项目：{{backend_project_name}}”
+   - 必须单独写明"参考后端项目：{{backend_project_name}}"
    - 必须按后端 Project Skill 的 API Contract Patterns 生成，不能凭空创造另一套规范
    - 必须体现后端鉴权、权限校验、错误响应、Swagger/接口文档规则
    - 响应格式必须逐字遵循后端 Project Skill 中的统一响应模型；如果后端 Skill 定义了 ApiResult/traceId/message/data 结构，所有接口响应示例都必须使用该结构，不允许改成扁平的 {code,message,data}
@@ -984,7 +957,7 @@ JSON 格式如下:
 - 必须严格遵循交付包 API 契约，不得擅自改接口路径、请求字段、响应字段和统一响应模型。
 - 必须复用目标后端项目的分层、命名、异常、鉴权、权限、日志和数据访问模式。
 - 只实现本需求相关文件；不输出无关框架脚手架和泛化示例。
-- 如果交付包信息不足，必须在代码后“待确认问题”列出，不要用虚构字段补齐。
+- 如果交付包信息不足，必须在代码后"待确认问题"列出，不要用虚构字段补齐。
 
 **注意**: 如果前端层是 PHP 转发层（BFF），则后端需要提供完整的 RESTful API 供 PHP 层调用，接口需要考虑：
 - 统一的响应格式（code/msg/data）
@@ -1005,8 +978,8 @@ JSON 格式如下:
 - 用对应语言的代码块包裹（```java, ```php, ```go, ```python, ```sql 等）
 - 包含 Controller、Service、Model/Entity、数据库建表 SQL
 - 遵循该技术栈的最佳实践和常见分层架构
-- 每个文件内容必须完整，不要用“省略”“同上”“TODO 实现”代替
-- 代码后附“契约对齐说明”和“待确认问题”，说明接口/字段/权限如何对应交付包
+- 每个文件内容必须完整，不要用"省略""同上""TODO 实现"代替
+- 代码后附"契约对齐说明"和"待确认问题"，说明接口/字段/权限如何对应交付包
 
 在所有代码之后，请用以下 JSON 格式汇总文件列表（方便自动化解析）:
 ```json
@@ -1106,7 +1079,7 @@ JSON 格式如下:
 请输出:
 1. 后端/API 契约评分 (A/B/C/D/F)
 2. 前端代码评分 (A/B/C/D/F)
-3. 契约对齐结论：列出接口级、字段级、权限级差异；每条必须指出“前端使用字段/接口”和“契约或后端提供字段/接口”
+3. 契约对齐结论：列出接口级、字段级、权限级差异；每条必须指出"前端使用字段/接口"和"契约或后端提供字段/接口"
 4. 代码合理性问题列表（含严重程度: critical/major/minor，标注前端/后端/API/契约）
 5. 改进建议（每个问题给出具体修复方案）
 6. 是否通过审查 (PASS/FAIL)
@@ -1518,6 +1491,9 @@ def _build_pipeline_prompt(stage_key: str, context: Dict[str, Any],
     # 优先使用自定义 prompt，否则用默认
     if custom_prompts and custom_prompts.get(stage_key):
         template = custom_prompts[stage_key]
+    elif stage_key == "prototype" and context.get("use_spec_mode"):
+        # antd-vue PC 后台：用 spec→模板 prompt（LLM 只输出页面规格 JSON，模板引擎渲染 .vue）
+        template = DEFAULT_STAGE_PROMPTS.get("prototype_spec", DEFAULT_STAGE_PROMPTS["prototype"])
     else:
         template = DEFAULT_STAGE_PROMPTS.get(stage_key, f"请处理 {stage_key} 阶段的任务。")
 
@@ -1634,7 +1610,7 @@ def _is_known_support_page_name(name: str) -> bool:
 
 
 def _page_name_tokens(name: str) -> List[str]:
-    original = re.sub(r"[`'\"“”‘’（）()\[\]【】]", "", name or "")
+    original = re.sub(r"[`'\"""『』（）()\[\]【】]", "", name or "")
     text = original
     text = re.sub(r"(页面|页|列表|详情|表单|管理|配置|审核|创建|新建|编辑)", " ", text)
     tokens = [
@@ -2483,25 +2459,25 @@ def _validate_existing_feature_preservation(
             for label, field in original_bindings:
                 if field in generated and label not in generated_labels:
                     issues.append(
-                        f"{safe_path} 现有筛选项“{label}”被改名或覆盖；用户需求是新增筛选项，"
+                        f'{safe_path} 现有筛选项「{label}」被改名或覆盖；用户需求是新增筛选项，'
                         f"必须保留原筛选项和 queryParam.{field}"
                     )
             if requested_label and requested_label not in generated:
-                issues.append(f"{safe_path} 用户需求是新增“{requested_label}”筛选项，但生成代码未出现该筛选控件")
+                issues.append(f'{safe_path} 用户需求是新增「{requested_label}」筛选项，但生成代码未出现该筛选控件')
             if requested_label and requested_fields and requested_fields <= original_fields:
                 reused = "、".join(f"queryParam.{field}" for field in sorted(requested_fields))
                 issues.append(
-                    f"{safe_path} 新增“{requested_label}”筛选不能复用原有字段 {reused}；"
+                    f'{safe_path} 新增「{requested_label}」筛选不能复用原有字段 {reused}；'
                     "必须使用独立请求字段，不能把旧筛选项改名来冒充新增"
                 )
             if requested_label and requested_label in generated and not requested_fields:
-                issues.append(f"{safe_path} 新增“{requested_label}”筛选项没有绑定 queryParam 请求字段")
+                issues.append(f'{safe_path} 新增「{requested_label}」筛选项没有绑定 queryParam 请求字段')
             if requested_label and _is_identifier_filter_label(requested_label) and requested_fields:
                 query_param_match = re.search(r"\bqueryParam\s*:\s*\{(?P<body>[^{}]*)\}", generated)
                 query_param_body = query_param_match.group("body") if query_param_match else ""
                 for field in sorted(requested_fields):
                     if not re.search(rf"\b{re.escape(field)}\s*:", query_param_body):
-                        issues.append(f"{safe_path} 新增“{requested_label}”筛选项绑定了 queryParam.{field}，但 data() 中缺少默认字段初始化")
+                        issues.append(f'{safe_path} 新增「{requested_label}」筛选项绑定了 queryParam.{field}，但 data() 中缺少默认字段初始化')
                 missing_parts = []
                 if "productIdValidateStatus" not in generated:
                     missing_parts.append("productIdValidateStatus")
@@ -2513,7 +2489,7 @@ def _validate_existing_feature_preservation(
                     missing_parts.append("searchReset")
                 if missing_parts:
                     issues.append(
-                        f"{safe_path} 新增“{requested_label}”筛选项缺少校验/重置实现："
+                        f'{safe_path} 新增「{requested_label}」筛选项缺少校验/重置实现：'
                         + "、".join(missing_parts)
                     )
 
@@ -2688,7 +2664,7 @@ def _validate_frontend_preview_code_files(
             or any(token in str(files.get(generated_path, "")).lower() for token in tokens[:3])
             for generated_path in generated_pages
         ):
-            issues.append(f"页面设计主页面“{page_name}”没有对应的前端页面文件")
+            issues.append(f'页面设计主页面「{page_name}」没有对应的前端页面文件')
     for wxml_path in mini_wxml_paths:
         if wxml_path[:-5] not in mini_js_paths:
             issues.append(f"{wxml_path} 缺少同名小程序逻辑文件 .js")
@@ -3551,7 +3527,7 @@ def _auto_fix_existing_feature_from_original(
                 continue
             return {path: patched}, [
                 (
-                    f"{path}: 检测到需求是新增“{requested_label}”筛选，已保留原页面已有筛选项，"
+                    f'{path}: 检测到需求是新增「{requested_label}」筛选，已保留原页面已有筛选项，'
                     "并新增独立 queryParam 筛选字段，同时移除新建 API 文件"
                 )
             ]
@@ -3854,7 +3830,7 @@ def _prototype_focus_from_page_design(page_design_stage: Dict[str, Any]) -> str:
             + locked_paths
         )
     return (
-        f"本次 prototype 生成主页面：“{primary_pages[0]}”及必要支撑组件；"
+        f'本次 prototype 生成主页面：「{primary_pages[0]}」及必要支撑组件；'
         "重试时必须继续修同一组业务文件。"
         + locked_paths
     )
@@ -5737,6 +5713,7 @@ class DevPipelineManager:
             "frontend_tech": pipe_config.get("frontend_tech", ""),
             "pipeline_mode": pipe_config.get("pipeline_mode", "full"),
             "workspace_path": pipe.workspace_path or get_workspace_path(pipeline_id),
+            "use_spec_mode": _use_spec_mode,
         }
         selected_frontend_page_path = str(pipe_config.get("selected_frontend_page_path") or "").strip()
 
@@ -5878,10 +5855,13 @@ class DevPipelineManager:
         session_id = f"{pipeline_id}_{stage_key}"
         html_stages = {"prototype", "ui_preview"}
         max_tok = 32768 if compact_preview_stage else (8192 if compact_pm_design_stage else (16384 if stage_key in html_stages else None))
-        # 推理模型（glm-5.x）thinking 模式每阶段多花 5-15 分钟深度推理 → 全阶段关闭，spec→template 不需要
+        # 推理模型（glm-5.x）thinking 模式每阶段多花 5-15 分钟深度推理 → 全阶段关闭
         thinking_override = {"type": "disabled"}
-        # prototype 已强制 JSON-only 输出，启用 GLM json mode 从源头保证合法 JSON
-        response_format_override = {"type": "json_object"} if stage_key == "prototype" else None
+        # spec→模板模式仅对 antd-vue PC 后台启用（其它项目类型走原模式，LLM 直接生成代码文件）
+        _is_antd_vue = _is_antd_vue_project(pipe_config, pipe)
+        _use_spec_mode = stage_key == "prototype" and _is_antd_vue and not compact_preview_stage
+        # prototype json mode：spec 模式（antd-vue）或原 full 模式都需要 json mode
+        response_format_override = {"type": "json_object"} if (stage_key == "prototype" and not compact_preview_stage) else None
 
         # A4: 需求阶段传附件（图片走 GLM-4V 多模态，文档走文本抽取）——仅 requirement 阶段从 pipe.attachments 取
         stage_attachments = None
