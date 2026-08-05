@@ -40,24 +40,27 @@ export default function CodeEditor({ value, onChange, filename, height = '300px'
   const langExt = EXT_LANG[ext]?.() || javascript()
 
   return (
-    <CodeMirror
-      value={value}
-      height={height}
-      theme={oneDark}
-      extensions={[langExt]}
-      onChange={onChange}
-      readOnly={readOnly}
-      basicSetup={{
-        lineNumbers: true,
-        highlightActiveLine: !readOnly,
-        highlightActiveLineGutter: !readOnly,
-        foldGutter: true,
-        autocompletion: !readOnly,
-        bracketMatching: true,
-        closeBrackets: !readOnly,
-        indentOnInput: !readOnly,
-      }}
-      style={{ fontSize: 13, borderRadius: 6, overflow: 'hidden' }}
-    />
+    <div style={{ width: '100%', overflow: 'hidden', borderRadius: 6 }}>
+      <CodeMirror
+        value={value}
+        height={height}
+        theme={oneDark}
+        extensions={[langExt]}
+        onChange={onChange}
+        readOnly={readOnly}
+        width="100%"
+        basicSetup={{
+          lineNumbers: true,
+          highlightActiveLine: !readOnly,
+          highlightActiveLineGutter: !readOnly,
+          foldGutter: true,
+          autocompletion: !readOnly,
+          bracketMatching: true,
+          closeBrackets: !readOnly,
+          indentOnInput: !readOnly,
+        }}
+        style={{ fontSize: 13, maxWidth: '100%' }}
+      />
+    </div>
   )
 }
