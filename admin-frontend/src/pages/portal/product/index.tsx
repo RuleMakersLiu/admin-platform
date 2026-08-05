@@ -1553,6 +1553,41 @@ export default function ProductPortal() {
                       <Button danger icon={<ReloadOutlined />} loading={running} onClick={() => resumeFromHuman('retry')}>
                         带反馈重新生成
                       </Button>
+                      <Button
+                        icon={<DownloadOutlined />}
+                        disabled={!pipelineId || !Object.keys(artifact?.frontend_files || {}).length}
+                        onClick={handleDownloadFrontend}
+                      >
+                        下载前端代码
+                      </Button>
+                      {(() => {
+                        const codeFiles = artifact?.frontend_files || {}
+                        const fileEntries = Object.entries(codeFiles).slice(0, 20)
+                        return fileEntries.length > 0 ? (
+                          <Collapse
+                            size="small"
+                            style={{ width: '100%', marginTop: 8 }}
+                            items={[{
+                              key: 'code',
+                              label: `查看生成的代码文件（${fileEntries.length} 个）`,
+                              children: (
+                                <div style={{ maxHeight: 400, overflow: 'auto' }}>
+                                  {fileEntries.map(([path, content]) => (
+                                    <div key={path} style={{ marginBottom: 8 }}>
+                                      <Tag color="blue">{path}</Tag>
+                                      <pre style={{
+                                        background: '#f5f5f5', padding: 8, borderRadius: 4,
+                                        fontSize: 12, maxHeight: 200, overflow: 'auto',
+                                        whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                                      }}>{String(content).slice(0, 2000)}</pre>
+                                    </div>
+                                  ))}
+                                </div>
+                              ),
+                            }]}
+                          />
+                        ) : null
+                      })()}
                     </Space>
                   </Space>
                 }
