@@ -16,6 +16,7 @@ import {
   UploadOutlined,
 } from '@ant-design/icons'
 import { pipelineApi, type FrontendPageCandidate, type FrontendPageCandidates, type PipelineArtifact, type PipelineListItem, type PipelineStatus, type ProjectSkillMatch } from '@/services/pipeline'
+import CodeEditor from '@/components/CodeEditor'
 import { type ApiError } from '@/services/api'
 import { saveLastPortalPath, useAuthStore } from '@/stores/auth'
 
@@ -1641,15 +1642,12 @@ export default function ProductPortal() {
                                           保存此文件
                                         </Button>
                                       </Space>
-                                      <Input.TextArea
-                                        rows={Math.min(20, Math.max(5, String(content).split('\n').length))}
-                                        defaultValue={String(content)}
-                                        onChange={(e) => {
-                                          setEditedFiles(prev => ({ ...prev, [path]: e.target.value }))
-                                        }}
-                                        style={{
-                                          fontFamily: 'monospace', fontSize: 12,
-                                          background: '#f8f9fa', borderRadius: 4,
+                                      <CodeEditor
+                                        value={String(content)}
+                                        filename={path}
+                                        height="350px"
+                                        onChange={(val) => {
+                                          setEditedFiles(prev => ({ ...prev, [path]: val }))
                                         }}
                                       />
                                     </div>
