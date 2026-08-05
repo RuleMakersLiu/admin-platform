@@ -159,7 +159,12 @@ async def lifespan(app: FastAPI):
                     settings.zai_api_key = cfg.api_key
                 if cfg.max_tokens:
                     settings.zai_max_tokens = cfg.max_tokens
-                logger.info(f"✅ DB LLM 配置生效: model={cfg.model_name} max_tokens={cfg.max_tokens}（覆盖 .env 默认）")
+                if cfg.base_url:
+                    settings.zai_base_url = cfg.base_url
+                    # 同步更新 glm_provider 的模块级常量（GLM_API_URL 在 import 时固定，需运行时覆盖）
+                    import app.ai.glm_provider as _glm
+                    _glm.GLM_API_URL = cfg.base_url.rstrip("/")
+                    logger.info(f"✅ DB LLM 配置生效: model={cfg.model_name} base_url={cfg.base_url} max_tokens={cfg.max_tokens}（覆盖 .env 默认）")
             else:
                 logger.info(f"未找到 DB 默认 LLM 配置，使用 .env: model={settings.zai_default_model}")
     except Exception as e:
