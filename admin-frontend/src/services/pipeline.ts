@@ -197,8 +197,24 @@ export const pipelineApi = {
     pipeline_mode?: string
     skill_config?: Record<string, unknown>
     attachments?: { type?: string; mime: string; filename: string; data_uri: string }[]
+    git_config_id?: number
+    git_repo_url?: string
+    git_branch?: string
   }) =>
     http.post<{ pipeline_id: string; status: string }>(`${BASE}/create`, data),
+  gitCommit: (pipelineId: string, data: {
+    commit_message?: string
+    branch?: string
+    git_config_id?: number
+    repo_url?: string
+    target_branch?: string
+    merge_strategy?: string
+  }) =>
+    http.post<{ commit_sha: string; pushed: boolean; branch: string; merged: boolean; merge_info: string }>(
+      `${BASE}/${pipelineId}/git/commit`, data,
+    ),
+  gitStatus: (pipelineId: string) =>
+    http.get<{ repo_url: string; branch: string; commit_sha: string }>(`${BASE}/${pipelineId}/git-status`),
 
   matchProjectSkill: (data: { user_request: string }) =>
     http.post<ProjectSkillMatch>(`${BASE}/match`, data),

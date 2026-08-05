@@ -7,6 +7,7 @@ import {
   FileSearchOutlined,
   FileTextOutlined,
   FullscreenOutlined,
+  GithubOutlined,
   PictureOutlined,
   PlusOutlined,
   PlayCircleOutlined,
@@ -359,6 +360,12 @@ export default function ProductPortal() {
   const { user } = useAuthStore()
   const [requirement, setRequirement] = useState('')
   const [attachments, setAttachments] = useState<{ mime: string; filename: string; data_uri: string }[]>([])
+  const [gitModalOpen, setGitModalOpen] = useState(false)
+  const [gitCommitMsg, setGitCommitMsg] = useState('')
+  const [gitBranch, setGitBranch] = useState('feature/auto-generated')
+  const [gitTargetBranch, setGitTargetBranch] = useState('')
+  const [gitMergeStrategy, setGitMergeStrategy] = useState('merge')
+  const [gitSubmitting, setGitSubmitting] = useState(false)
   const [running, setRunning] = useState(false)
   const [pipelineId, setPipelineId] = useState('')
   const [status, setStatus] = useState<PipelineStatus | null>(null)
@@ -1071,8 +1078,30 @@ export default function ProductPortal() {
     }
   }
 
-  const handleDownloadFrontend = async () => {
+  const handleGitCommit = async () => {
     if (!pipelineId) return
+    setGitSubmitting(true)
+    try {
+      const res = await pipelineApi.gitCommit(pipelineId, {
+        commit_message: gitCommitMsg || undefined,
+        branch: gitBranch || undefined,
+        target_branch: gitTargetBranch || undefined,
+        merge_strategy: gitMergeStrategy,
+      })
+      if (res?.pushed) {
+        message.success(`提交成功！commit: ${res.commit_sha?.slice(0, 8)}${res.merged ? `，已合并: ${res.merge_info}` : ''}`)
+      } else {
+        message.warning(`已提交（commit: ${res?.commit_sha?.slice(0, 8) || 'N/A'}），但推送可能失败，请检查 Git 配置`)
+      }
+      setGitModalOpen(false)
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Git 提交失败')
+    } finally {
+      setGitSubmitting(false)
+    }
+  }
+
+  const handleDownloadFrontend = async () => {
     if (!Object.keys(artifact?.frontend_files || {}).length) {
       message.info('前端代码还没有生成，等“前端代码”阶段完成后再下载')
       return
@@ -1408,6 +1437,15 @@ export default function ProductPortal() {
                 >
                   下载前端代码
                 </Button>
+                {status?.status === 'completed' && (
+                  <Button
+                    type="primary"
+                    icon={<GithubOutlined />}
+                    onClick={() => setGitModalOpen(true)}
+                  >
+                    提交到 Git
+                  </Button>
+                )}
               </Space>
             </Space>
             {status && (
@@ -1657,6 +1695,45 @@ export default function ProductPortal() {
           </div>
         </div>
       </div>
+
+      <Modal
+        title="提交到 Git"
+        open={gitModalOpen}
+        onCancel={() => setGitModalOpen(false)}
+        onOk={handleGitCommit}
+        confirmLoading={gitSubmitting}
+        okText="提交"
+        cancelText="取消"
+        width={560}
+        destroyOnClose
+      >
+        <div style={{ marginBottom: 12 }}>
+          <Text>分支名</Text>
+          <Input value={gitBranch} onChange={(e) => setGitBranch(e.target.value)} placeholder="feature/auto-generated" style={{ marginTop: 4 }} />
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <Text>Commit Message（留空自动生成）</Text>
+          <Input.TextArea rows={3} value={gitCommitMsg} onChange={(e) => setGitCommitMsg(e.target.value)} style={{ marginTop: 4 }} />
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <Text>合并到目标分支（可选，留空不合并）</Text>
+          <Input value={gitTargetBranch} onChange={(e) => setGitTargetBranch(e.target.value)} placeholder="如 main / develop" style={{ marginTop: 4 }} />
+        </div>
+        {gitTargetBranch && (
+          <div>
+            <Text>合并策略</Text>
+            <Select value={gitMergeStrategy} onChange={setGitMergeStrategy} style={{ width: '100%', marginTop: 4 }}
+              options={[
+                { value: 'merge', label: 'Merge（保留完整历史）' },
+                { value: 'rebase', label: 'Rebase（线性历史）' },
+                { value: 'squash', label: 'Squash（压缩为单提交）' },
+              ]} />
+          </div>
+        )}
+        <Alert type="info" showIcon style={{ marginTop: 12 }}
+          message="提交时会自动解决冲突（优先保留生成代码）。确保系统管理-Git 配置中已配置仓库地址和凭证。"
+        />
+      </Modal>
     </div>
   )
 }
