@@ -215,6 +215,13 @@ export const pipelineApi = {
     ),
   gitStatus: (pipelineId: string) =>
     http.get<{ repo_url: string; branch: string; commit_sha: string }>(`${BASE}/${pipelineId}/git-status`),
+  uploadCode: (pipelineId: string, files: File[]) => {
+    const formData = new FormData()
+    files.forEach(f => formData.append('files', f))
+    return http.post<{ files: string[] }>(`${BASE}/${pipelineId}/upload-code`, formData)
+  },
+  saveCode: (pipelineId: string, files: Record<string, string>) =>
+    http.post<{ files: string[] }>(`${BASE}/${pipelineId}/save-code`, { files }),
 
   matchProjectSkill: (data: { user_request: string }) =>
     http.post<ProjectSkillMatch>(`${BASE}/match`, data),

@@ -645,6 +645,81 @@ async def update_stage_output(pipeline_id: str, stage: str, request: UpdateStage
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/pipeline/{pipeline_id}/upload-code")
+async def upload_code_files(pipeline_id: str, http_request: Request):
+    """上传修改后的代码文件到 pipeline 工作区（人工修复后传回）。
+
+    接受 multipart files，按原始相对路径写入 workspace。
+    上传后用户点「人工通过并继续」即可用修复后的代码继续流水线。
+    """
+    import os
+    from app.ai.pipeline_skills import get_workspace_path
+
+    tenant_id = _get_tenant_id(http_request)
+    form = await http_request.form()
+    files = form.getlist("files")
+    if not files:
+        raise HTTPException(status_code=400, detail="未上传文件")
+
+    workspace = get_workspace_path(pipeline_id)
+    if not os.path.isdir(workspace):
+        raise HTTPException(status_code=404, detail=f"工作区不存在: {pipeline_id}")
+
+    written = []
+    for upload_file in files:
+        filename = upload_file.filename or ""
+        if not filename:
+            continue
+        # 安全：禁止路径穿越
+        safe_path = os.path.normpath(filename).lstrip("/\\")
+        if ".." in safe_path:
+            continue
+        target = os.path.join(workspace, safe_path)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        content = await upload_file.read()
+        with open(target, "wb") as f:
+            f.write(content)
+        written.append(safe_path)
+
+    return {"code": 200, "message": f"已上传 {len(written)} 个文件", "data": {"files": written}}
+
+
+class SaveCodeRequest(BaseModel):
+    files: Dict[str, str] = Field(default={}, description="{相对路径: 文件内容}")
+
+
+@router.post("/pipeline/{pipeline_id}/save-code")
+async def save_code_files(pipeline_id: str, req: SaveCodeRequest, http_request: Request):
+    """在线编辑后保存代码到 pipeline 工作区。
+
+    body: {"files": {"src/views/List.vue": "修改后的完整内容"}}
+    保存后点「人工通过并继续」即用修改后的代码继续流水线。
+    """
+    import os as _os
+    from app.ai.pipeline_skills import get_workspace_path as _gwp
+
+    _get_tenant_id(http_request)
+    if not req.files:
+        raise HTTPException(status_code=400, detail="未提供文件")
+
+    workspace = _gwp(pipeline_id)
+    if not _os.path.isdir(workspace):
+        raise HTTPException(status_code=404, detail=f"工作区不存在: {pipeline_id}")
+
+    saved = []
+    for rel_path, content in req.files.items():
+        safe = _os.path.normpath(rel_path).lstrip("/\\")
+        if ".." in safe:
+            continue
+        target = _os.path.join(workspace, safe)
+        _os.makedirs(_os.path.dirname(target) or workspace, exist_ok=True)
+        with open(target, "w", encoding="utf-8") as f:
+            f.write(content)
+        saved.append(safe)
+
+    return {"code": 200, "message": f"已保存 {len(saved)} 个文件", "data": {"files": saved}}
+
+
 @router.post("/pipeline/{pipeline_id}/resume")
 async def resume_pipeline(pipeline_id: str, request: ResumePipelineRequest):
     """人工介入恢复：从 needs_human 状态继续（approve 推进 / retry 重新生成）。"""

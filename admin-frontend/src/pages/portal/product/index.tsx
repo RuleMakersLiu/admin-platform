@@ -13,6 +13,7 @@ import {
   PlayCircleOutlined,
   ReloadOutlined,
   RocketOutlined,
+  UploadOutlined,
 } from '@ant-design/icons'
 import { pipelineApi, type FrontendPageCandidate, type FrontendPageCandidates, type PipelineArtifact, type PipelineListItem, type PipelineStatus, type ProjectSkillMatch } from '@/services/pipeline'
 import { type ApiError } from '@/services/api'
@@ -366,6 +367,11 @@ export default function ProductPortal() {
   const [gitTargetBranch, setGitTargetBranch] = useState('')
   const [gitMergeStrategy, setGitMergeStrategy] = useState('merge')
   const [gitSubmitting, setGitSubmitting] = useState(false)
+  const [uploadedFiles, setUploadedFiles] = useState<File[]>([])
+  const [uploading, setUploading] = useState(false)
+  const [editedFiles, setEditedFiles] = useState<Record<string, string>>({})
+  const [savingFile, setSavingFile] = useState('')
+  const [savingAll, setSavingAll] = useState(false)
   const [running, setRunning] = useState(false)
   const [pipelineId, setPipelineId] = useState('')
   const [status, setStatus] = useState<PipelineStatus | null>(null)
@@ -1560,6 +1566,44 @@ export default function ProductPortal() {
                       >
                         下载前端代码
                       </Button>
+                      <Upload
+                        multiple
+                        showUploadList
+                        beforeUpload={(file) => {
+                          setUploadedFiles(prev => [...prev, file])
+                          return false
+                        }}
+                        onRemove={(file) => {
+                          setUploadedFiles(prev => prev.filter(f => f.name !== file.name))
+                          return true
+                        }}
+                      >
+                        <Button icon={<UploadOutlined />} disabled={!pipelineId}>
+                          上传修改后的代码
+                        </Button>
+                      </Upload>
+                      {uploadedFiles.length > 0 && (
+                        <Button
+                          type="primary"
+                          icon={<CheckCircleOutlined />}
+                          loading={uploading}
+                          onClick={async () => {
+                            if (!pipelineId) return
+                            setUploading(true)
+                            try {
+                              const res = await pipelineApi.uploadCode(pipelineId, uploadedFiles)
+                              message.success(`已上传 ${res?.files?.length || 0} 个文件，点击「人工通过并继续」生效`)
+                              setUploadedFiles([])
+                            } catch (e) {
+                              message.error(e instanceof Error ? e.message : '上传失败')
+                            } finally {
+                              setUploading(false)
+                            }
+                          }}
+                        >
+                          确认上传（{uploadedFiles.length} 个文件）
+                        </Button>
+                      )}
                       {(() => {
                         const codeFiles = artifact?.frontend_files || {}
                         const fileEntries = Object.entries(codeFiles).slice(0, 20)
@@ -1569,19 +1613,70 @@ export default function ProductPortal() {
                             style={{ width: '100%', marginTop: 8 }}
                             items={[{
                               key: 'code',
-                              label: `查看生成的代码文件（${fileEntries.length} 个）`,
+                              label: `查看/编辑生成的代码（${fileEntries.length} 个文件，可直接修改后保存）`,
                               children: (
-                                <div style={{ maxHeight: 400, overflow: 'auto' }}>
+                                <div style={{ maxHeight: 500, overflow: 'auto' }}>
                                   {fileEntries.map(([path, content]) => (
-                                    <div key={path} style={{ marginBottom: 8 }}>
-                                      <Tag color="blue">{path}</Tag>
-                                      <pre style={{
-                                        background: '#f5f5f5', padding: 8, borderRadius: 4,
-                                        fontSize: 12, maxHeight: 200, overflow: 'auto',
-                                        whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                                      }}>{String(content).slice(0, 2000)}</pre>
+                                    <div key={path} style={{ marginBottom: 12 }}>
+                                      <Space style={{ marginBottom: 4 }}>
+                                        <Tag color="blue">{path}</Tag>
+                                        <Button
+                                          size="small"
+                                          type="link"
+                                          loading={savingFile === path}
+                                          onClick={async () => {
+                                            if (!pipelineId) return
+                                            setSavingFile(path)
+                                            try {
+                                              const edited = editedFiles[path] ?? String(content)
+                                              await pipelineApi.saveCode(pipelineId, { [path]: edited })
+                                              message.success(`${path} 已保存到工作区`)
+                                            } catch (e) {
+                                              message.error('保存失败')
+                                            } finally {
+                                              setSavingFile('')
+                                            }
+                                          }}
+                                        >
+                                          保存此文件
+                                        </Button>
+                                      </Space>
+                                      <Input.TextArea
+                                        rows={Math.min(20, Math.max(5, String(content).split('\n').length))}
+                                        defaultValue={String(content)}
+                                        onChange={(e) => {
+                                          setEditedFiles(prev => ({ ...prev, [path]: e.target.value }))
+                                        }}
+                                        style={{
+                                          fontFamily: 'monospace', fontSize: 12,
+                                          background: '#f8f9fa', borderRadius: 4,
+                                        }}
+                                      />
                                     </div>
                                   ))}
+                                  <Button
+                                    type="primary"
+                                    loading={savingAll}
+                                    style={{ marginTop: 8 }}
+                                    onClick={async () => {
+                                      if (!pipelineId) return
+                                      setSavingAll(true)
+                                      try {
+                                        const toSave: Record<string, string> = {}
+                                        for (const [path, content] of fileEntries) {
+                                          toSave[path] = editedFiles[path] ?? String(content)
+                                        }
+                                        const res = await pipelineApi.saveCode(pipelineId, toSave)
+                                        message.success(`已保存 ${res?.files?.length || 0} 个文件到工作区，点击「人工通过并继续」生效`)
+                                      } catch (e) {
+                                        message.error('保存失败')
+                                      } finally {
+                                        setSavingAll(false)
+                                      }
+                                    }}
+                                  >
+                                    全部保存
+                                  </Button>
                                 </div>
                               ),
                             }]}
