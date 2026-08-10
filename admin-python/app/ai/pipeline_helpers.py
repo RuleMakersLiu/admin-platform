@@ -4,7 +4,7 @@
 独立成模块以避免循环 import。全部为纯函数（仅依赖 re + typing）。
 """
 import re
-from typing import List
+from typing import Any, List, Optional
 
 
 def _has_new_page_structure_signal(text: str) -> bool:
@@ -69,3 +69,16 @@ def _is_frontend_page_path(path: str) -> bool:
         path.startswith(("src/views/", "src/pages/", "pages/"))
         and path.endswith((".vue", ".tsx", ".jsx", ".wxml"))
     )
+
+
+def _coerce_string_list(value: Any, fallback: Optional[List[str]] = None) -> List[str]:
+    """把 LLM 输出的字符串/列表/null 统一规整成字符串列表（处理中英文分号/换行）。"""
+    """Normalize LLM quality fields that may arrive as strings, lists, or nulls."""
+    if value is None:
+        return fallback or []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        parts = [part.strip(" -\t") for part in value.replace("；", "\n").replace(";", "\n").split("\n")]
+        return [part for part in parts if part]
+    return fallback or []
