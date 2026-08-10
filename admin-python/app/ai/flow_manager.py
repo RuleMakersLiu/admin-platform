@@ -8,25 +8,25 @@
   - AgentMemory 记忆集成
   - 数据库持久化
 
-文件分区（自上而下）：
-  1. 常量/契约定义区 —— 阶段定义、重试上限、评审关卡阈值、流水线状态枚举
-  2. 辅助函数区（启动恢复 / 阶段元信息 / 反馈构造 / 上下文压缩 / 修复任务）——
-     纯函数，不依赖运行时状态，供主流程拼装
-  3. 阶段初始化与产物构造区 —— stages 字典、pipeline snapshot、对外 artifact
-  4. 默认 Prompt 模板区（DEFAULT_STAGE_PROMPTS）—— 各阶段发往 LLM 的指令模板
-  5. Prompt 构造区（_render_prompt_template / _build_pipeline_prompt）——
-     占位符替换 + 记忆 + 修复反馈 + 全局契约拼接
-  6. 输出解析区（_parse_agent_output 及大量 _validate_* / 辅助判定）——
-     解析 LLM 流式输出，抽取结构化字段、代码文件、质量评分
-  7. 自动修复 / 校验区（_auto_fix_* / _patch_*）——
-     对 LLM 生成的代码做确定性兜底改写，不依赖 LLM
-  8. LLM 调用区（带重试 + 流式 + 超时 + 上下文裁剪）—— _call_agent_with_retry(_stream)
-  9. 项目上下文加载区（git clone / 关键文件筛选 / 缓存）——
-     从 Git 拉项目代码作 prompt 上下文
- 10. DevPipelineManager 类（核心执行引擎）——
-     create / execute / confirm / resume / query，含 fix-loop、eval 门控、
-     fan-out 并行、escalate_to_human 等关键分支
+模块结构：本文件只保留「编排胶水 + DevPipelineManager 核心类」，各主题已拆到 app/ai/
+下的独立模块（顶部 re-import 维持公共 API，`from app.ai.flow_manager import _xxx` 不变）：
+
+  - pipeline_helpers.py          共享纯函数（页面路径 / 需求类型判定 / 强制转换）
+  - pipeline_project_context.py  项目上下文加载（git clone + 关键文件筛选 + 页面候选匹配）
+  - pipeline_llm.py              LLM 调用（重试 + 流式 + 超时 + 上下文裁剪）
+  - pipeline_page_design.py      页面设计解析（期望页面路径 / 组件 / API 端点需求）
+  - pipeline_output_parse.py     LLM 输出解析 + 代码审查结果归一化
+  - pipeline_preview_validation.py  前端预览代码覆盖校验 + 确定性补丁
+
+本文件内（自上而下）：
+  1. 常量/契约定义 —— 阶段定义、重试上限、评审关卡阈值、流水线状态枚举
+  2. 编排辅助 —— 启动恢复 / 阶段元信息 / 反馈构造 / 上下文压缩 / 修复任务 / 阶段初始化与产物快照
+  3. Prompt 构造 —— _render_prompt_template / _build_pipeline_prompt（占位符替换 + 记忆 + 修复反馈 + 全局契约）
+  4. _parse_agent_output —— LLM 输出编排入口（调 output_parse / preview_validation）
+  5. DevPipelineManager —— 核心执行引擎：create / execute / confirm / resume / query，
+     含 fix-loop、eval 门控、fan-out 并行、escalate_to_human 等关键分支
 """
+
 import json
 import uuid
 import asyncio
