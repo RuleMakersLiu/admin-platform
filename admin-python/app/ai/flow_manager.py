@@ -297,7 +297,10 @@ STAGE_DEFINITIONS = [
     {"key": "commit",         "name": "代码提交",   "agent": "PJM", "need_confirm": False},
     {"key": "deploy",         "name": "部署发布",   "agent": "PJM", "need_confirm": False},
     {"key": "eval",           "name": "自动测评",   "agent": "QA",  "need_confirm": False},
-    {"key": "report",         "name": "总结报告",   "agent": "RPT", "need_confirm": False},
+    # report 需确认：跑完报告后暂停，让用户审阅再「确认报告，完成流水线」（前端已为此准备了
+    # confirmActionLabel/confirmRejectLabel/confirmMessage）。此前 need_confirm=False 导致 report
+    # 自动跑完直接 completed，前端永不出确认按钮 → 用户「点不了报告」。
+    {"key": "report",         "name": "总结报告",   "agent": "RPT", "need_confirm": True},
 ]
 
 STAGE_KEYS = [s["key"] for s in STAGE_DEFINITIONS]
