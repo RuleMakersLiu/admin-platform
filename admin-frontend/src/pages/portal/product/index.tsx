@@ -15,7 +15,7 @@ import {
   RocketOutlined,
 } from '@ant-design/icons'
 import { pipelineApi, type FrontendPageCandidate, type FrontendPageCandidates, type PipelineArtifact, type PipelineListItem, type PipelineStatus, type ProjectSkillMatch } from '@/services/pipeline'
-import CodeEditor from '@/components/CodeEditor'
+import NeedsHumanDialog from '@/components/NeedsHumanDialog'
 import { type ApiError } from '@/services/api'
 import { saveLastPortalPath, useAuthStore } from '@/stores/auth'
 
@@ -367,10 +367,6 @@ export default function ProductPortal() {
   const [gitTargetBranch, setGitTargetBranch] = useState('')
   const [gitMergeStrategy, setGitMergeStrategy] = useState('merge')
   const [gitSubmitting, setGitSubmitting] = useState(false)
-  const [editedFiles, setEditedFiles] = useState<Record<string, string>>({})
-  const [editingFile, setEditingFile] = useState('')
-  const [savingFile, setSavingFile] = useState('')
-  const [savingAll, setSavingAll] = useState(false)
   const [running, setRunning] = useState(false)
   const [pipelineId, setPipelineId] = useState('')
   const [status, setStatus] = useState<PipelineStatus | null>(null)
@@ -1522,116 +1518,20 @@ export default function ProductPortal() {
               />
             )}
             {status?.status === 'needs_human' && (
-              <Alert
-                type="error"
-                showIcon
-                style={{ marginTop: 16 }}
-                message={`阶段「${stageLabel[activeStage] || activeStage}」自动重试耗尽，待人工处理${humanReview?.retry_count ? `（已重试 ${humanReview.retry_count} 次）` : ''}`}
-                description={
-                  <Space direction="vertical" style={{ width: '100%' }}>
-                    {humanReview?.reason && <Text type="secondary">{humanReview.reason}</Text>}
-                    {Array.isArray(humanReview?.issues) && humanReview.issues.length > 0 && (
-                      <div style={{ fontSize: 12, color: '#b91c1c' }}>
-                        {humanReview.issues.map((issue, idx) => (
-                          <div key={idx}>• {issue}</div>
-                        ))}
-                      </div>
-                    )}
-                    {Array.isArray(humanReview?.file_hints) && humanReview.file_hints.length > 0 && (
-                      <Space wrap>
-                        <Text type="secondary" style={{ fontSize: 12 }}>涉及文件：</Text>
-                        {humanReview.file_hints.map((fileHint, idx) => (
-                          <Tag key={idx} color="gold">{fileHint}</Tag>
-                        ))}
-                      </Space>
-                    )}
-                    <TextArea
-                      rows={2}
-                      value={feedback}
-                      onChange={(event) => setFeedback(event.target.value)}
-                      placeholder="人工通过可不填；带反馈重生成请填修改意见"
-                    />
-                    <div style={{ width: '100%' }}>
-                      <Space style={{ marginBottom: 12 }}>
-                        <Button type="primary" loading={running} onClick={() => resumeFromHuman('approve')}>
-                          通过并继续
-                        </Button>
-                        <Button danger icon={<ReloadOutlined />} loading={running} onClick={() => resumeFromHuman('retry')}>
-                          带反馈重生成
-                        </Button>
-                        <Button
-                          icon={<DownloadOutlined />}
-                          disabled={!pipelineId || !Object.keys(artifact?.frontend_files || {}).length}
-                          onClick={handleDownloadFrontend}
-                        >
-                          下载代码
-                        </Button>
-                      </Space>
-                      {(() => {
-                        const codeFiles = artifact?.frontend_files || {}
-                        const fileEntries = Object.entries(codeFiles).slice(0, 20)
-                        if (!fileEntries.length) return null
-                        const currentPath = editingFile || fileEntries[0][0]
-                        const current = fileEntries.find(([p]) => p === currentPath) || fileEntries[0]
-                        return (
-                          <div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                              <Select
-                                value={currentPath}
-                                onChange={setEditingFile}
-                                style={{ flex: 1 }}
-                                options={fileEntries.map(([p]) => ({ value: p, label: p }))}
-                              />
-                              <Button
-                                size="small"
-                                type="primary"
-                                loading={savingFile === currentPath}
-                                onClick={async () => {
-                                  if (!pipelineId) return
-                                  setSavingFile(currentPath)
-                                  try {
-                                    await pipelineApi.saveCode(pipelineId, { [currentPath]: editedFiles[currentPath] ?? String(current[1]) })
-                                    message.success('已保存')
-                                  } catch { message.error('保存失败') }
-                                  finally { setSavingFile('') }
-                                }}
-                              >
-                                保存
-                              </Button>
-                              <Button
-                                size="small"
-                                loading={savingAll}
-                                onClick={async () => {
-                                  if (!pipelineId) return
-                                  setSavingAll(true)
-                                  try {
-                                    const toSave: Record<string, string> = {}
-                                    for (const [p, c] of fileEntries)
-                                      toSave[p] = editedFiles[p] ?? String(c)
-                                    const res = await pipelineApi.saveCode(pipelineId, toSave)
-                                    message.success(`已保存 ${res?.files?.length || 0} 个文件`)
-                                  } catch { message.error('保存失败') }
-                                  finally { setSavingAll(false) }
-                                }}
-                              >
-                                全部保存
-                              </Button>
-                            </div>
-                            <CodeEditor
-                              key={currentPath}
-                              value={editedFiles[currentPath] ?? String(current[1])}
-                              filename={currentPath}
-                              height="400px"
-                              onChange={(val) => {
-                                setEditedFiles(prev => ({ ...prev, [currentPath]: val }))
-                              }}
-                            />
-                          </div>
-                        )
-                      })()}
-                    </div>
-                  </Space>
-                }
+              <NeedsHumanDialog
+                open={!!pipelineId}
+                onClose={() => {}}
+                pipelineId={pipelineId}
+                stageName={stageLabel[activeStage] || activeStage}
+                reason={humanReview?.reason || `自动重试耗尽${humanReview?.retry_count ? `（已重试 ${humanReview.retry_count} 次）` : ''}`}
+                issues={humanReview?.issues || []}
+                fileHints={humanReview?.file_hints || []}
+                codeFiles={artifact?.frontend_files || {}}
+                onApprove={() => resumeFromHuman('approve')}
+                onRetry={(fb) => { setFeedback(fb); resumeFromHuman('retry') }}
+                onDownload={handleDownloadFrontend}
+                onSaveCode={async (files) => { await pipelineApi.saveCode(pipelineId, files) }}
+                loading={running}
               />
             )}
             {status?.status === 'completed' && (
