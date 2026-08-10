@@ -1519,21 +1519,39 @@ export default function ProductPortal() {
               />
             )}
             {status?.status === 'needs_human' && (
-              <NeedsHumanDialog
-                open={!!pipelineId && !needsHumanDismissed}
-                onClose={() => setNeedsHumanDismissed(true)}
-                pipelineId={pipelineId}
-                stageName={stageLabel[activeStage] || activeStage}
-                reason={humanReview?.reason || `自动重试耗尽${humanReview?.retry_count ? `（已重试 ${humanReview.retry_count} 次）` : ''}`}
-                issues={humanReview?.issues || []}
-                fileHints={humanReview?.file_hints || []}
-                codeFiles={artifact?.frontend_files || {}}
-                onApprove={() => resumeFromHuman('approve')}
-                onRetry={(fb) => { setFeedback(fb); resumeFromHuman('retry') }}
-                onDownload={handleDownloadFrontend}
-                onSaveCode={async (files) => { await pipelineApi.saveCode(pipelineId, files) }}
-                loading={running}
-              />
+              <>
+                <NeedsHumanDialog
+                  open={!!pipelineId && !needsHumanDismissed}
+                  onClose={() => setNeedsHumanDismissed(true)}
+                  pipelineId={pipelineId}
+                  stageName={stageLabel[activeStage] || activeStage}
+                  reason={humanReview?.reason || `自动重试耗尽${humanReview?.retry_count ? `（已重试 ${humanReview.retry_count} 次）` : ''}`}
+                  issues={humanReview?.issues || []}
+                  fileHints={humanReview?.file_hints || []}
+                  codeFiles={artifact?.frontend_files || {}}
+                  onApprove={() => { setNeedsHumanDismissed(false); resumeFromHuman('approve') }}
+                  onRetry={(fb) => { setNeedsHumanDismissed(false); setFeedback(fb); resumeFromHuman('retry') }}
+                  onDownload={handleDownloadFrontend}
+                  onSaveCode={async (files) => { await pipelineApi.saveCode(pipelineId, files) }}
+                  loading={running}
+                />
+                {needsHumanDismissed && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    style={{ marginTop: 16 }}
+                    message="人工介入待处理"
+                    description={
+                      <Button
+                        type="primary"
+                        onClick={() => setNeedsHumanDismissed(false)}
+                      >
+                        重新打开介入对话框
+                      </Button>
+                    }
+                  />
+                )}
+              </>
             )}
             {status?.status === 'completed' && (
               <Alert
