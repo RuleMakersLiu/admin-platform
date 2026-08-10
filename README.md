@@ -260,7 +260,13 @@ admin-platform/
 ├── admin-python/          # Python 后端
 │   └── app/
 │       ├── ai/            # AI Agent 核心
-│       │   ├── flow_manager.py   # 流水线引擎
+│       │   ├── flow_manager.py          # 流水线引擎（编排胶水 + DevPipelineManager 核心类）
+│       │   ├── pipeline_helpers.py          # 共享纯函数（页面路径/需求类型判定/强制转换）
+│       │   ├── pipeline_project_context.py  # 项目上下文加载（git clone + 文件筛选 + 页面候选）
+│       │   ├── pipeline_llm.py              # LLM 调用（重试+流式+超时+上下文裁剪）
+│       │   ├── pipeline_page_design.py      # 页面设计解析（期望路径/组件/API 端点需求）
+│       │   ├── pipeline_output_parse.py     # LLM 输出解析 + 代码审查结果归一化
+│       │   ├── pipeline_preview_validation.py  # 前端预览代码覆盖校验 + 确定性补丁
 │       │   ├── agents.py         # Agent 工厂
 │       │   ├── skills.py         # 技能注册表
 │       │   └── mcp_server.py     # MCP 协议
