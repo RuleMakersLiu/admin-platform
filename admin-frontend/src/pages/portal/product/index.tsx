@@ -1567,13 +1567,6 @@ export default function ProductPortal() {
                           下载代码
                         </Button>
                       </Space>
-                      <TextArea
-                        rows={2}
-                        value={feedback}
-                        onChange={(event) => setFeedback(event.target.value)}
-                        placeholder="带反馈重生成时填写修改意见；通过可不填"
-                        style={{ marginBottom: 12 }}
-                      />
                       {(() => {
                         const codeFiles = artifact?.frontend_files || {}
                         const fileEntries = Object.entries(codeFiles).slice(0, 20)
