@@ -1,6 +1,7 @@
 """消息模块数据模式"""
+import time
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from enum import Enum
 
 
@@ -119,7 +120,8 @@ class UnifiedMessage(BaseModel):
     channel_id: str
     sender_id: str
     content: str
-    timestamp: int
+    # 未显式传入时默认取当前 unix 时间——消息总应带时间戳
+    timestamp: int = Field(default_factory=lambda: int(time.time()))
     original_id: Optional[str] = None
     sender_name: Optional[str] = None
     sender_avatar: Optional[str] = None
