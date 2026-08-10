@@ -616,7 +616,8 @@ export default {
         existing_frontend_files={"src/views/selfOperateCommodity/commodityList/List.vue": original_page},
     )
 
-    assert any("现有筛选项“商品编号”被改名或覆盖" in issue for issue in issues)
+    # 引号无关：代码用「」、历史用例曾期望弯引号——只要检测到「商品编号」被改名或覆盖即可
+    assert any("商品编号" in issue and "被改名或覆盖" in issue for issue in issues)
     assert any("不能复用原有字段 queryParam.productCode" in issue for issue in issues)
 
 

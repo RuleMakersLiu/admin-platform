@@ -223,9 +223,17 @@ def _permission_keys_from_design(document: str) -> List[str]:
     excluded_prefixes = {"http", "https"}
     result: List[str] = []
     seen = set()
+    in_perm_table = False  # 进入「权限表」后，后续表行（数据行不含"权限"字样）也提取
     for line in document.splitlines():
-        if not re.search(r"权限|permission", line, re.I):
-            continue  # 仅在显式提到权限的行里找权限码
+        stripped = line.strip()
+        is_table_row = stripped.startswith("|")
+        has_perm_word = bool(re.search(r"权限|permission", line, re.I))
+        if is_table_row and has_perm_word:
+            in_perm_table = True  # 表头行（如 | 按钮名称 | 权限Key |）
+        elif not is_table_row:
+            in_perm_table = False  # 空行/标题/正文 → 表结束
+        if not (has_perm_word or in_perm_table):
+            continue  # 仅在显式提到权限的行或权限表内找权限码
         for tok in re.findall(r"\b([A-Za-z][\w-]*(?::[A-Za-z][\w-]*)+)\b", line):
             if tok.split(":", 1)[0] in excluded_prefixes or tok in seen:
                 continue
