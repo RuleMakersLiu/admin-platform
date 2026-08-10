@@ -166,6 +166,9 @@ class ChatGLM:
 
         if not self.api_key:
             raise ValueError("GLM API Key 未配置")
+        # LLM 熔断器：连续 429/超时 → 30s 冷却拒绝新请求
+        self._consecutive_failures = 0
+        self._circuit_open_until = 0.0  # monotonic timestamp
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -212,16 +215,26 @@ class ChatGLM:
 
     async def ainvoke(self, messages: list) -> GLMMessage:
         """异步非流式调用（含延迟/成功指标采集，每条逻辑调用记录一次）。"""
+        # 熔断器检查
+        now = time.monotonic()
+        if self._circuit_open_until > now:
+            cooldown = int(self._circuit_open_until - now)
+            raise RuntimeError(f"LLM 熔断中（连续失败 {self._consecutive_failures} 次），{cooldown}s 后恢复")
         t0 = time.monotonic()
         try:
             content, usage = await self._do_invoke(messages)
         except Exception as exc:
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= 5:
+                self._circuit_open_until = time.monotonic() + 30
+                logger.warning("LLM 熔断器打开：连续 %d 次失败，30s 冷却", self._consecutive_failures)
             _safe_record_usage(
                 self.model, 0, 0,
                 latency_ms=int((time.monotonic() - t0) * 1000), ttft_ms=None,
                 success=False, error=str(exc), stage=None,
             )
             raise
+        self._consecutive_failures = 0  # 成功 → 重置
         _safe_record_usage(
             self.model,
             usage.get("prompt_tokens", 0),

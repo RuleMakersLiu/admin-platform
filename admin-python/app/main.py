@@ -4,7 +4,8 @@ import os
 from contextlib import asynccontextmanager
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import api_router
@@ -84,6 +85,44 @@ async def _usage_flush_task():
         except Exception as e:
             logger.error(f"LLM usage flush failed: {e}")
             await asyncio.sleep(60)
+
+
+async def _pipeline_watchdog_task():
+    """僵尸流水线 watchdog：每 5 分钟扫描 running 状态的 pipeline，
+    超过 2 小时未更新的标记为 failed（防止 LLM 卡死/进程崩溃导致僵尸）。"""
+    from sqlalchemy import select, update, text
+    from app.core.database import async_session_maker
+    from app.models.agent_models import DevPipeline
+    from app.ai.flow_manager import PipelineStatus
+    while True:
+        try:
+            await asyncio.sleep(300)
+            cutoff = int((time.time() - 7200) * 1000)  # 2 小时前
+            async with async_session_maker() as session:
+                result = await session.execute(
+                    select(DevPipeline.pipeline_id, DevPipeline.current_stage).where(
+                        DevPipeline.status == PipelineStatus.RUNNING.value,
+                        DevPipeline.update_time < cutoff,
+                        DevPipeline.is_deleted == 0,
+                    ).limit(20)
+                )
+                stale = result.all()
+                for pid, stage in stale:
+                    logger.warning(f"Watchdog: pipeline {pid} 僵尸（{stage} 超过 2h），标记 failed")
+                if stale:
+                    await session.execute(
+                        update(DevPipeline).where(
+                            DevPipeline.status == PipelineStatus.RUNNING.value,
+                            DevPipeline.update_time < cutoff,
+                        ).values(status=PipelineStatus.FAILED.value)
+                    )
+                    await session.commit()
+                    logger.warning(f"Watchdog: 清理 {len(stale)} 条僵尸流水线")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Pipeline watchdog failed: {e}")
+            await asyncio.sleep(600)
 
 
 async def _sandbox_reaper_task():
@@ -194,6 +233,10 @@ async def lifespan(app: FastAPI):
     reaper_task = asyncio.create_task(_sandbox_reaper_task())
     logger.info(f"✅ 沙箱回收任务已启动 (每 60s，空闲 {settings.pipeline_sandbox_idle_ttl}s 自动 stop)")
 
+    # 僵尸流水线 watchdog（每 5 分钟扫一次，running > 2h → failed）
+    watchdog_task = asyncio.create_task(_pipeline_watchdog_task())
+    logger.info("✅ 流水线 watchdog 已启动 (每 5 分钟扫僵尸)")
+
     # container 模式：清残留沙箱容器（崩溃/重启后 reaper 注册表丢失的兜底）
     try:
         await _sweep_orphan_sandbox_containers()
@@ -207,6 +250,7 @@ async def lifespan(app: FastAPI):
     embedding_task.cancel()
     usage_task.cancel()
     reaper_task.cancel()
+    watchdog_task.cancel()
     try:
         from app.messaging.setup import shutdown_messaging
         await shutdown_messaging()
@@ -234,6 +278,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# API 限流（slowapi）——防暴力/滥用
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+
+limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 # 注册API路由
 app.include_router(api_router, prefix="/api")

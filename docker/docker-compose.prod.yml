@@ -1,0 +1,18 @@
+# 生产环境 overlay——与 docker-compose.yml 叠加使用：
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# 改动：DEBUG=false / JWT_SECRET 从环境变量读（不写默认值）/ CORS 显式配置
+# 必须设置环境变量：JWT_SECRET, CORS_ORIGINS（逗号分隔）
+version: '3.8'
+
+services:
+  admin-python:
+    environment:
+      - DEBUG=false
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set}
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
+    env_file: []  # 生产不读 .env（密钥走环境变量/secrets）
+
+  admin-gateway:
+    environment:
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set}
