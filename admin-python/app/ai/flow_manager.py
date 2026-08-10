@@ -46,6 +46,14 @@ from app.ai import backend_scaffold  # noqa: F401  (注册 backend_scaffolder sk
 from app.ai import contract_prober  # noqa: F401  (注册 contract_prober skill — 4c 活契约探针)
 from app.ai.pipeline_skills import ensure_workspace, get_workspace_path
 from app.ai.evaluators import DEFAULT_EVAL_CRITERIA, extract_eval_scores
+from app.prompts import (
+    DEFAULT_STAGE_PROMPTS,
+    PIPELINE_GLOBAL_PROMPT_CONTRACT,
+    PM_REQUIREMENT_REVIEW_CONTRACT,
+    PM_PAGE_DESIGN_REVIEW_CONTRACT,
+    REVIEW_GATE_CRITERIA,
+    REVIEW_GATE_PASS_SCORE,
+)
 from app.ai.skills import SkillStatus, skill_registry
 from app.ai.model_router import pipeline_context
 from app.models.agent_models import DevPipeline, ProjectKnowledge
@@ -725,20 +733,6 @@ def _knowledge_to_project_skill_dict(project_skill: ProjectKnowledge) -> Dict[st
     }
 
 
-PIPELINE_GLOBAL_PROMPT_CONTRACT = """
-
-## 全局执行契约（所有阶段必须遵守）
-1. 事实边界：只能基于用户需求、已匹配 Project Skill、项目代码参考、上游阶段产物和明确修复反馈推理；不确定的信息必须写入"假设/待确认"，禁止伪造接口、字段、组件、权限或外部事实。
-2. 范围边界：只处理当前阶段职责，不提前替代后续阶段，也不遗漏当前阶段必须交付的内容；如果当前阶段输出格式有特殊要求，以当前阶段"输出格式/输出要求"为最高优先级。
-3. 逻辑边界：每个结论都要能追溯到业务目标、页面行为、数据字段、权限策略或接口契约；前端字段、mock 字段、API 字段、后端字段必须保持同名同义同类型。
-4. 异常边界：必须覆盖空数据、加载中、无权限、接口失败、重复提交、并发操作、数据越权、输入非法、分页越界、状态流转非法等边界。
-5. 项目边界：优先复用匹配项目的目录结构、组件、API 封装、权限约定、响应模型和命名风格；不知道是否存在的组件/工具不要引用。
-6. 输出边界：不要寒暄，不要解释自己如何工作；不要输出与当前阶段无关的散文。Markdown 阶段直接输出文档；JSON 阶段必须输出可解析 JSON；代码阶段必须给完整文件内容。
-7. 自检要求：输出前检查是否满足当前阶段清单、是否存在字段不一致、是否遗漏权限/异常/验收标准、是否有不可执行或不可验证内容。
-8. 文件上下文边界：涉及文件审查、比对、搜索或读取时，优先按 workspace_path 和相对路径使用文件搜索/文件读取 skill；prompt 中只传文件清单、路径、行数和关键符号摘要，避免粘贴完整文件正文。
-9. 多轮修复边界：重新生成或自动修复只携带压缩后的失败摘要、字段差异、目标文件路径和必要契约；禁止反复粘贴历史完整源码、完整日志或完整产物，防止上下文膨胀造成误判。
-"""
-
 
 DEFAULT_STAGE_PROMPTS: Dict[str, str] = {
     "requirement": """请根据以下用户需求，生成一份完整、可交付、可评审的需求文档(PRD)。
@@ -1272,72 +1266,6 @@ JSON 格式如下:
 }
 
 
-PM_REQUIREMENT_REVIEW_CONTRACT = """
-
-## 产品经理质量门
-请把这份 PRD 当作要交给前端、后端、QA 继续执行的正式输入，必须覆盖：
-- 业务目标、目标用户、使用场景、范围边界和不做范围
-- 功能清单，按 P0/P1/P2/P3 标注优先级
-- 角色与权限矩阵，写清页面级权限和按钮/操作级权限
-- 参考成熟权限体系的表达方式：RBAC 用 `subject/role/resource/action`，ABAC 补充租户、部门、本人/下级、状态等条件，资源权限按菜单/页面/按钮/API/数据范围拆开
-- 给出至少 3 条策略样例，例如 `role=运营主管, resource=order, action=export, condition=同部门数据`，并说明拒绝态、隐藏态、禁用态和审计日志
-- 数据对象与关键字段，包含字段名、类型、是否必填、校验规则、默认值
-- 主流程、异常流程、空数据、加载中、无权限、失败重试等状态
-- 可验收的 Acceptance Criteria，每条都能被 QA 直接测试
-- 明确假设与待确认问题，避免把不确定内容伪装成事实
-
-文档末尾额外输出一个 JSON 代码块，便于系统做质量评审，格式如下：
-```json
-{
-  "pm_quality": {
-    "score": 0,
-    "ready_for_review": false,
-    "missing_items": [],
-    "review_focus": [],
-    "primary_pages": [],
-    "permission_points": [],
-    "permission_model": [],
-    "data_scope_rules": [],
-    "policy_examples": [],
-    "data_entities": [],
-    "acceptance_criteria": []
-  }
-}
-```
-"""
-
-
-PM_PAGE_DESIGN_REVIEW_CONTRACT = """
-
-## 页面设计质量门
-请把页面设计写到前端可以直接做原型、后端可以直接拆接口的程度，必须覆盖：
-- 页面清单、路由/入口、层级关系和默认落点
-- 每个页面的表格列、搜索项、表单字段、详情字段和字段校验
-- 按钮、批量操作、危险操作、二次确认、抽屉/弹窗交互
-- 页面状态：空数据、加载中、无权限、搜索无结果、接口异常、提交成功/失败
-- 权限点：菜单权限、页面权限、按钮权限、API 权限、数据范围权限；必须写清 permission key 命名、禁用/隐藏/无权限提示和审计点
-- 权限设计参考成熟项目模式：RBAC 负责角色到资源动作，ABAC/条件策略负责租户、部门、本人/下级、状态、金额等上下文约束；前端按路由、菜单、按钮、表格行操作分别呈现
-- 与 wealth-admin-home / Java / Node / PHP 生成链路相关的实现约束或待确认点
-
-文档末尾额外输出一个 JSON 代码块，便于系统做质量评审，格式如下：
-```json
-{
-  "design_quality": {
-    "score": 0,
-    "ready_for_review": false,
-    "missing_items": [],
-    "review_focus": [],
-    "primary_pages": [],
-    "permission_points": [],
-    "permission_model": [],
-    "data_scope_rules": [],
-    "policy_examples": [],
-    "data_entities": [],
-    "acceptance_criteria": []
-  }
-}
-```
-"""
 
 
 def _render_prompt_template(template: str, context: Dict[str, Any]) -> str:
