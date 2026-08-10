@@ -16,9 +16,13 @@ from app.core.deps import get_current_user
 router = APIRouter(prefix="/flow", tags=["智能体流程"], dependencies=[Depends(get_current_user)])
 logger = logging.getLogger(__name__)
 
+# 流水线后台执行任务表（pipeline_id → asyncio.Task），支持 SSE 流式推送
 _pipeline_tasks: Dict[str, asyncio.Task] = {}
+# 每个 pipeline 的 SSE 订阅队列集合，后台任务通过它广播事件
 _pipeline_subscribers: Dict[str, Set[asyncio.Queue]] = {}
+# 保护 _pipeline_tasks 增删的异步锁
 _pipeline_task_lock = asyncio.Lock()
+# 限制同时执行的流水线阶段数（并发上限由配置决定）
 _pipeline_execution_semaphore = asyncio.Semaphore(settings.pipeline_execution_concurrency)
 
 
@@ -119,6 +123,7 @@ def _active_pipeline_task_count() -> int:
 
 
 async def _run_pipeline_background(pipeline_id: str, user_input: str) -> None:
+    # 后台执行流水线阶段：先排队（信号量限流）→ 执行 → 通过 SSE 广播 queued/dequeued/done/error
     try:
         await _broadcast_pipeline_event(
             pipeline_id,
@@ -201,6 +206,8 @@ async def create_pipeline(request: CreatePipelineRequest, http_request: Request)
         backend_tech = request.backend_tech or ""
         frontend_tech = request.frontend_tech or ""
 
+        # 前端契约评审模式：若未指定后端项目，按需求文本自动匹配已确认的后端 Project Skill
+        # （语言/框架/版本一并带出），供前端阶段对齐后端契约
         if pipeline_mode == "frontend_contract_review" and not backend_project_id:
             from app.services.knowledge_service import match_backend_project_skill_for_requirement
 
@@ -562,6 +569,7 @@ async def start_backend_sandbox(pipeline_id: str):
 
 @router.get("/pipeline/{pipeline_id}/backend-sandbox/status")
 async def backend_sandbox_status(pipeline_id: str):
+    """查询后端沙箱运行状态及直连地址"""
     from app.services.backend_runner_service import backend_runner_service
 
     return {
@@ -575,6 +583,7 @@ async def backend_sandbox_status(pipeline_id: str):
 
 @router.post("/pipeline/{pipeline_id}/backend-sandbox/stop")
 async def stop_backend_sandbox(pipeline_id: str):
+    """停止后端沙箱进程并释放端口"""
     from app.services.backend_runner_service import backend_runner_service
 
     stopped = await backend_runner_service.stop(pipeline_id)
@@ -635,6 +644,7 @@ async def get_stage_output(pipeline_id: str, stage: str = ""):
 async def update_stage_output(pipeline_id: str, stage: str, request: UpdateStageOutputRequest):
     """编辑并保存阶段输出，后续阶段会读取保存后的内容。"""
     try:
+        # skip_validation=True 时跳过可运行性校验，用于 needs_human 状态下的人工覆盖
         output = await pipeline_manager.update_stage_output(
             pipeline_id, stage, request.output, skip_validation=request.skip_validation
         )
@@ -724,6 +734,7 @@ async def save_code_files(pipeline_id: str, req: SaveCodeRequest, http_request: 
 async def resume_pipeline(pipeline_id: str, request: ResumePipelineRequest):
     """人工介入恢复：从 needs_human 状态继续（approve 推进 / retry 重新生成）。"""
     try:
+        # action=approve：人工通过当前阶段，推进到下一阶段；action=retry：带反馈重跑当前阶段
         result = await pipeline_manager.resume_from_human(
             pipeline_id, request.action, request.feedback or ""
         )
@@ -798,6 +809,7 @@ async def set_pipeline_human_score(
 async def rollback_pipeline(pipeline_id: str, request: RollbackPipelineRequest = None):
     """回退到指定阶段，清空该阶段之后的结果。"""
     try:
+        # 回退到 target_stage（不指定则回退到当前阶段的上一阶段），其后所有阶段产出一并清空
         result = await pipeline_manager.rollback(
             pipeline_id,
             target_stage=request.stage if request else None,

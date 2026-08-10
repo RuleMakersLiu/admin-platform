@@ -26,16 +26,19 @@ WORKSPACE_ROOT = settings.pipeline_workspace_root
 
 
 def get_workspace_path(pipeline_id: str) -> str:
+    """返回某条流水线的工作区绝对路径。"""
     return os.path.join(WORKSPACE_ROOT, pipeline_id)
 
 
 def ensure_workspace(pipeline_id: str) -> str:
+    """确保工作区存在（不存在则创建），返回路径。"""
     path = get_workspace_path(pipeline_id)
     os.makedirs(path, exist_ok=True)
     return path
 
 
 def cleanup_workspace(pipeline_id: str) -> None:
+    """删除整条流水线的工作区目录（忽略错误）。"""
     path = get_workspace_path(pipeline_id)
     shutil.rmtree(path, ignore_errors=True)
 
@@ -264,6 +267,7 @@ _FRAMEWORK_COMMANDS = {
 
 
 def _detect_frameworks(workspace: str, preferred: Optional[List[str]] = None) -> List[str]:
+    """探测工作区使用的测试框架：优先用 preferred，否则按特征文件自动识别。"""
     if preferred:
         return [f for f in preferred if f in _FRAMEWORK_COMMANDS]
     return [name for name, detector in _FRAMEWORK_DETECTORS.items() if detector(workspace)]
@@ -282,6 +286,7 @@ def _parse_pytest_output(stdout: str) -> Dict[str, int]:
 
 
 def _parse_npm_output(stdout: str) -> Dict[str, int]:
+    """从 npm test 输出提取 passed/failed 计数。"""
     import re
     m = re.search(r"Tests:\s+\d+\s+failed", stdout)
     failed = int(re.search(r"(\d+)", m.group(0)).group(1)) if m else 0
@@ -712,6 +717,7 @@ def _detect_project_type(workspace_path: str) -> str:
 
 
 def _generate_dockerfile(project_type: str) -> str:
+    """按项目类型返回对应 Dockerfile 模板（python/node/go/java，默认 python）。"""
     templates = {
         "python": "FROM python:3.11-slim\nWORKDIR /app\nCOPY . .\nRUN pip install -e .\nCMD [\"python\", \"-m\", \"app.main\"]",
         "node": "FROM node:20-alpine\nWORKDIR /app\nCOPY . .\nRUN npm install && npm run build\nCMD [\"npm\", \"start\"]",
@@ -752,6 +758,7 @@ def _generate_dockerfile(project_type: str) -> str:
     },
 )
 async def dockerfile_generator(workspace_path: str, project_type: str = None, **kwargs) -> Dict[str, Any]:
+    """根据项目类型生成 Dockerfile 并写入工作区（已存在则不覆盖）。"""
     if not project_type:
         project_type = _detect_project_type(workspace_path)
 

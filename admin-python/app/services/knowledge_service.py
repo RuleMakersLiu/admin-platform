@@ -1,4 +1,12 @@
-"""知识库服务 - 知识CRUD、搜索、图谱维护"""
+"""知识库服务 - 知识CRUD、搜索、图谱维护、Project Skill 与上下文工程。
+
+主要分区：
+- 辅助函数：标签/契约文本归一化、embedding 文本与哈希、图谱去重 key
+- Project Skill 路由：规则匹配 + LLM 匹配，区分前端/后端/Dubbo 分层项目组
+- KnowledgeService 类：知识条目 CRUD、关键词搜索、知识图谱（边 CRUD/遍历/可视化/自动关联）、统计
+- 项目分析：analyze_project 拉取源码→LLM 提炼结构化知识→写库；含 Project Skill 生成与确认
+- 上下文工程：semantic_search（向量+BM25）、get_relevant_context（项目知识+语义检索）、embedding 回填
+"""
 import time
 import uuid
 import json
@@ -197,6 +205,7 @@ def _project_graph_role(project: ProjectKnowledge) -> str:
 
 
 def _project_graph_edge(source: ProjectKnowledge, target: ProjectKnowledge, relation: str, weight: float, reason: str) -> Dict[str, Any]:
+    """构造一条项目关系图谱的推断边（前端可视化用）。"""
     return {
         "id": f"PROJECT-{source.project_id}-{relation}-{target.project_id}",
         "source": f"PROJECT-{source.project_id}",
@@ -284,6 +293,7 @@ def _json_contract_text(value: Any) -> str:
 
 
 def _format_contract_block(value: Any, fallback: str) -> str:
+    """把结构化契约归一化为 JSON 文本，空值给兜底说明。"""
     text = _json_contract_text(value)
     return text or fallback
 
@@ -495,6 +505,7 @@ def _extract_match_terms(text: str) -> List[str]:
 
 
 def _project_skill_match_text(skill: Dict) -> str:
+    """把 Project Skill 的多个文本字段拼成匹配用正文（已小写）。"""
     fields = [
         "project_name",
         "language",
@@ -672,6 +683,7 @@ def select_backend_project_skill_match(requirement: str, candidates: List[Any]) 
 
 
 def _backend_layer_rank(skill: Dict) -> int:
+    """后端项目分层排序：0=controller/API 层，1=service 层，2=core/model 层，3=其它。"""
     text = _project_skill_match_text(skill)
     project_name = str(skill.get("project_name") or "").lower()
     if "controller" in text or "接口项目" in text or project_name.endswith("-home") or "admin-home" in project_name:
@@ -684,6 +696,7 @@ def _backend_layer_rank(skill: Dict) -> int:
 
 
 def _backend_business_terms(skill: Dict) -> set:
+    """抽取后端项目的业务域关键词，用于判断多个后端项目是否属同一业务系统。"""
     text = f"{skill.get('project_name') or ''}\n{skill.get('project_brief') or ''}\n{skill.get('skill_content') or ''}"
     terms = set()
     for term in ("商品管理平台", "商城管理平台", "供应链中台", "酒店智能体管理平台", "管理平台"):
@@ -755,6 +768,7 @@ def select_backend_project_skill_matches(requirement: str, candidates: List[Any]
 
 
 def _build_match_candidate_prompt(skills: List[Dict]) -> str:
+    """把候选 Project Skill 压缩成精简 JSON（截断长字段），供 LLM 路由 prompt 注入。"""
     brief_candidates = []
     for skill in skills[:20]:
         brief_candidates.append({
@@ -770,6 +784,7 @@ def _build_match_candidate_prompt(skills: List[Dict]) -> str:
 
 
 def _parse_match_json(raw: str) -> Optional[Dict]:
+    """从 LLM 输出（含 markdown 代码块）中抽取并解析首个 JSON 对象。"""
     if not raw:
         return None
     text = str(raw).strip()
@@ -789,6 +804,7 @@ def _parse_match_json(raw: str) -> Optional[Dict]:
 
 
 async def _select_project_skill_match_with_llm(requirement: str, skills: List[Dict]) -> Optional[Dict]:
+    """用 PM agent LLM 选最匹配的 Project Skill；失败/未配置返回 None 以走规则兜底。"""
     try:
         from app.ai.agents import AgentFactory
         async with async_session_maker() as cfg_session:
@@ -2363,6 +2379,7 @@ def _enrich_api_patterns_from_source(analysis: Dict, files: Dict) -> Dict:
 
 
 def _parse_analysis_json(raw: str) -> Dict:
+    """从 LLM 分析输出中抽取 JSON；解析失败退化为只填 tech_summary 的兜底结构。"""
     text = raw.strip()
     if text.startswith("```"):
         lines = text.split("\n")
@@ -2381,6 +2398,7 @@ def _parse_analysis_json(raw: str) -> Dict:
 
 
 def _knowledge_to_dict(k) -> Dict:
+    """把 ProjectKnowledge ORM 行转成稳定的 dict（供匹配/序列化使用）。"""
     return {
         "project_id": k.project_id,
         "project_name": k.project_name,
@@ -2410,6 +2428,7 @@ def _knowledge_to_dict(k) -> Dict:
 
 
 def _project_scope_filter(allowed_tenant_ids: Optional[List[int]], fallback_tenant_id: int = 0):
+    """构造租户范围过滤条件：项目在授权租户的 scope 内 或 项目自身租户在范围内。"""
     allowed = [int(item) for item in (allowed_tenant_ids or []) if int(item) > 0]
     if fallback_tenant_id > 0 and fallback_tenant_id not in allowed:
         allowed.append(int(fallback_tenant_id))
@@ -2425,6 +2444,7 @@ def _project_scope_filter(allowed_tenant_ids: Optional[List[int]], fallback_tena
 
 
 async def get_project_skill(project_id: str) -> Optional[Dict]:
+    """读取单个项目的 Project Skill（含技能内容 + 租户范围），无则返回 None。"""
     async with async_session_maker() as session:
         result = await session.execute(
             select(ProjectKnowledge).where(ProjectKnowledge.project_id == int(project_id))
@@ -2455,6 +2475,7 @@ async def update_project_tenant_scope(
     tenant_scope_ids: List[int],
     admin_id: int = 0,
 ) -> None:
+    """全量替换项目的租户授权范围（先删后插）。"""
     async with async_session_maker() as session:
         now = int(time.time() * 1000)
         await session.execute(delete(ProjectTenantScope).where(ProjectTenantScope.project_id == int(project_id)))
@@ -2505,6 +2526,7 @@ async def match_project_skill_for_requirement(
 
 
 def _is_backend_project_skill(skill: Dict) -> bool:
+    """判断 Project Skill 是否属于后端项目（按技术栈/关键词信号，非后端则返回 False）。"""
     language = str(skill.get("language") or "").lower()
     framework = str(skill.get("framework") or "").lower()
     text = _project_skill_match_text(skill)
@@ -2531,6 +2553,7 @@ def _is_backend_project_skill(skill: Dict) -> bool:
 
 
 def _is_frontend_project_skill(skill: Dict) -> bool:
+    """判断 Project Skill 是否属于前端项目（按技术栈/关键词信号）。"""
     language = str(skill.get("language") or "").lower()
     framework = str(skill.get("framework") or "").lower()
     text = _project_skill_match_text(skill)
@@ -2639,6 +2662,7 @@ async def update_project_skill(
     skill_content: Optional[str] = None,
     project_brief: Optional[str] = None,
 ) -> Optional[Dict]:
+    """手动编辑 Project Skill 内容/简介；改动后状态回退为 draft、版本号 +1。"""
     async with async_session_maker() as session:
         result = await session.execute(
             select(ProjectKnowledge).where(ProjectKnowledge.project_id == int(project_id))
@@ -2675,6 +2699,7 @@ async def update_project_skill(
 
 
 async def confirm_project_skill(project_id: str, confirmed_by: int = 0) -> Optional[Dict]:
+    """确认 Project Skill（状态置 confirmed，记录确认人/时间），供需求路由使用。"""
     async with async_session_maker() as session:
         result = await session.execute(
             select(ProjectKnowledge).where(ProjectKnowledge.project_id == int(project_id))

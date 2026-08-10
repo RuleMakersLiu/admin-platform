@@ -28,6 +28,7 @@ router = APIRouter(prefix="/eval/golden-cases", tags=["评测 Golden Cases"])
 
 
 def _to_out(case: EvalGoldenCase) -> dict:
+    """把 EvalGoldenCase ORM 对象序列化为对外输出 dict（input_spec/criteria 反序列化为结构）。"""
     return {
         "id": case.id,
         "tenant_id": case.tenant_id,
@@ -44,6 +45,7 @@ def _to_out(case: EvalGoldenCase) -> dict:
 
 
 async def _load_owned(case_id: int, tenant_id: int, db: AsyncSession) -> EvalGoldenCase:
+    """加载 Golden case 并校验租户归属（不存在 404，跨租户 403）。"""
     stmt = select(EvalGoldenCase).where(
         EvalGoldenCase.id == case_id,
         EvalGoldenCase.is_deleted == 0,
@@ -244,6 +246,7 @@ async def get_case(
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
+    """获取 Golden case 详情。"""
     case = await _load_owned(case_id, user["tenantId"], db)
     return {"code": 200, "message": "查询成功", "data": _to_out(case)}
 
@@ -255,6 +258,7 @@ async def update_case(
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
+    """更新 Golden case（按字段覆盖；input_spec/criteria 单独序列化存储）。"""
     case = await _load_owned(case_id, user["tenantId"], db)
     data = req.model_dump(exclude_unset=True)
     if "input_spec" in data and data["input_spec"] is not None:
@@ -275,6 +279,7 @@ async def delete_case(
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
+    """软删除 Golden case（置 is_deleted=1）。"""
     case = await _load_owned(case_id, user["tenantId"], db)
     case.is_deleted = 1
     case.update_time = int(time.time() * 1000)

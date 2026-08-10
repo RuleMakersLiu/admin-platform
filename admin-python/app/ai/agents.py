@@ -125,6 +125,7 @@ CHARS_PER_TOKEN = 2  # 粗略估算
 
 
 def _estimate_tokens(text: str) -> int:
+    """粗略估算文本 token 数（按 2 字符/token）。"""
     return len(text) // CHARS_PER_TOKEN
 
 
@@ -148,6 +149,7 @@ class BaseAgent(ABC):
     """Agent 基类"""
 
     def __init__(self, agent_type: str):
+        # 按 agent_type 装配系统 prompt 与（延迟创建的）LLM 实例
         self.agent_type = agent_type
         self.system_prompt = AGENT_PROMPTS.get(agent_type, "")
         self._llm = None
@@ -239,7 +241,7 @@ class BaseAgent(ABC):
 
 
 class SimpleAgent(BaseAgent):
-    """简单 Agent 实现"""
+    """简单 Agent 实现：直接复用基类的 process/astream，无额外逻辑。"""
 
     def __init__(self, agent_type: str):
         super().__init__(agent_type)
@@ -253,6 +255,7 @@ class AgentFactory:
 
     @classmethod
     def get_agent(cls, agent_type: str) -> BaseAgent:
+        """按类型获取（必要时创建并缓存）单例 Agent 实例。"""
         if agent_type not in cls._agents:
             cls._agents[agent_type] = SimpleAgent(agent_type)
         return cls._agents[agent_type]
@@ -373,15 +376,18 @@ class AgentFactory:
 
 
 class AgentService:
-    """Agent 对话服务"""
+    """Agent 对话服务：管理会话历史并对外提供同步/流式对话入口。"""
 
     def __init__(self):
+        # 会话历史表：session_id → 消息列表（内存，保留最近 20 条）
         self.sessions: dict[str, list[dict]] = {}
 
     def generate_msg_id(self) -> str:
+        """生成全局唯一消息 ID。"""
         return f"msg_{uuid.uuid4().hex[:16]}"
 
     def generate_session_id(self) -> str:
+        """生成全局唯一会话 ID。"""
         return f"sess_{uuid.uuid4().hex[:16]}"
 
     async def chat(
@@ -438,14 +444,17 @@ class AgentService:
             self.sessions[session_id] = self.sessions[session_id][-20:]
 
     def get_session_messages(self, session_id: str) -> list[dict]:
+        """返回指定会话的历史消息列表（不存在则空列表）。"""
         return self.sessions.get(session_id, [])
 
     def create_session(self) -> str:
+        """创建空会话并返回 session_id。"""
         session_id = self.generate_session_id()
         self.sessions[session_id] = []
         return session_id
 
     def delete_session(self, session_id: str) -> bool:
+        """删除会话，返回是否删除成功。"""
         if session_id in self.sessions:
             del self.sessions[session_id]
             return True

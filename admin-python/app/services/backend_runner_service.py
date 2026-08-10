@@ -30,7 +30,9 @@ class BackendRunnerService:
     """每个 pipeline_id 对应一个本地 Java 进程 + 动态端口。"""
 
     def __init__(self) -> None:
+        # 每个 pipeline_id → 后端进程句柄/端口/就绪状态等元数据
         self._processes: Dict[str, Dict[str, Any]] = {}
+        # 已预留端口（start 中已分配但进程尚未登记），避免并发抢占同一端口
         self._reserved_ports: set[int] = set()
         self._lock = asyncio.Lock()
         # 后端构建（mvn）重，限并发
@@ -39,6 +41,7 @@ class BackendRunnerService:
     # ---------------- 端口分配 ----------------
 
     def _allocate_port(self) -> int:
+        """在配置端口区间内找一个可绑定端口并预留，找不到抛 RuntimeError。"""
         used = {int(e["port"]) for e in self._processes.values() if e.get("port")} | self._reserved_ports
         for port in range(settings.pipeline_backend_port_start, settings.pipeline_backend_port_end + 1):
             if port in used:
@@ -57,6 +60,7 @@ class BackendRunnerService:
     # ---------------- 查询 ----------------
 
     def is_running(self, pipeline_id: str) -> bool:
+        """后端沙箱进程是否在运行（进程句柄未结束）。"""
         entry = self._processes.get(pipeline_id)
         return bool(entry and entry["handle"].returncode is None)
 
@@ -86,6 +90,7 @@ class BackendRunnerService:
     # ---------------- 构建 ----------------
 
     def _find_jar(self, root: Path) -> Optional[Path]:
+        """在 target/ 下找到可执行 jar（优先非 -plain 的 spring-boot 产物）。"""
         target = root / "target"
         if not target.exists():
             return None
@@ -94,6 +99,7 @@ class BackendRunnerService:
         return jars[0] if jars else None
 
     async def _run(self, args: list[str], cwd: Path, timeout: int = 900) -> Tuple[int, str]:
+        """以安全原语运行子进程（剔除 admin 凭据 + 降权），超时返回 124。"""
         # 安全：mvn 执行生成工程的 pom.xml（可能含恶意构建插件/依赖）——走统一安全原语
         # （剔除 admin 凭据 + 非 root 降权），超时返回 124。
         from app.services.sandbox_security import run_sandboxed
@@ -103,6 +109,7 @@ class BackendRunnerService:
             return 124, "构建超时"
 
     async def _wait_tcp_ready(self, host: str, port: int, timeout: int = 90) -> None:
+        """轮询 TCP 端口直到可连（服务就绪），超时抛 RuntimeError。"""
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
@@ -122,6 +129,7 @@ class BackendRunnerService:
     # ---------------- 生命周期 ----------------
 
     async def start(self, pipeline_id: str, workspace_path: str) -> Dict[str, Any]:
+        """构建并启动后端沙箱：建库→mvn 打包→起 jar→等端口就绪，返回直连地址。"""
         if not shutil.which("java") or not shutil.which("mvn"):
             raise RuntimeError(
                 "admin-python 容器未安装 JDK/maven（需 rebuild 含 openjdk-18 + maven 的镜像后生效）"
@@ -209,6 +217,7 @@ class BackendRunnerService:
         return self._response(pipeline_id, entry)
 
     def _response(self, pipeline_id: str, entry: Dict[str, Any]) -> Dict[str, Any]:
+        """组装对外返回的沙箱状态（含直连 backend_url）。"""
         return {
             "pipeline_id": pipeline_id,
             "status": "running",
@@ -217,6 +226,7 @@ class BackendRunnerService:
         }
 
     async def _teardown(self, pipeline_id: str, entry: Dict[str, Any]) -> None:
+        """回收进程句柄并从进程表中摘除。"""
         handle = entry.get("handle")
         if handle:
             await handle.acleanup(timeout=5)
@@ -225,6 +235,7 @@ class BackendRunnerService:
                 self._processes.pop(pipeline_id, None)
 
     async def stop(self, pipeline_id: str) -> bool:
+        """停止后端沙箱进程，返回是否实际停止（未在运行返回 False）。"""
         async with self._lock:
             entry = self._processes.get(pipeline_id)
             if not entry or entry["handle"].returncode is not None:

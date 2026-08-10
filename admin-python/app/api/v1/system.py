@@ -1,4 +1,4 @@
-"""系统管理API"""
+"""系统管理 API：管理员/角色/菜单/租户/LLM/Git 配置的 CRUD，含租户隔离与权限缓存失效。"""
 import time
 from typing import Any, Dict, List, Optional
 
@@ -38,6 +38,7 @@ async def invalidate_permission_cache(admin_ids: List[int]) -> None:
 
 
 async def invalidate_group_permission_cache(db: AsyncSession, group_id: int) -> None:
+    """角色权限变更后，失效该角色下所有管理员的网关权限缓存。"""
     result = await db.execute(
         select(SysAdmin.id).where(SysAdmin.admin_group_id == group_id, SysAdmin.is_deleted == 0)
     )
@@ -64,6 +65,7 @@ async def get_accessible_tenant_ids(db: AsyncSession, user: dict) -> List[int]:
 
 
 def normalize_tenant_ids(tenant_ids: Optional[List[int]], default_tenant_id: int, allowed_tenant_ids: List[int], is_super: bool) -> List[int]:
+    """归一化租户 ID 列表：合并默认租户、过滤无权租户（非超管）、去重排序。"""
     values = [int(item) for item in (tenant_ids or []) if int(item) > 0]
     if default_tenant_id and default_tenant_id not in values:
         values.insert(0, int(default_tenant_id))
@@ -81,6 +83,7 @@ async def replace_admin_tenants(
     tenant_ids: List[int],
     default_tenant_id: int,
 ) -> None:
+    """全量替换某管理员可管理的租户集合（先删后插），并标记默认租户。"""
     now = int(time.time() * 1000)
     await db.execute(delete(SysAdminTenant).where(SysAdminTenant.admin_id == admin_id))
     for tenant_id in tenant_ids:

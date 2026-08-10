@@ -7,6 +7,25 @@
   - LLM 调用自动重试（指数退避）
   - AgentMemory 记忆集成
   - 数据库持久化
+
+文件分区（自上而下）：
+  1. 常量/契约定义区 —— 阶段定义、重试上限、评审关卡阈值、流水线状态枚举
+  2. 辅助函数区（启动恢复 / 阶段元信息 / 反馈构造 / 上下文压缩 / 修复任务）——
+     纯函数，不依赖运行时状态，供主流程拼装
+  3. 阶段初始化与产物构造区 —— stages 字典、pipeline snapshot、对外 artifact
+  4. 默认 Prompt 模板区（DEFAULT_STAGE_PROMPTS）—— 各阶段发往 LLM 的指令模板
+  5. Prompt 构造区（_render_prompt_template / _build_pipeline_prompt）——
+     占位符替换 + 记忆 + 修复反馈 + 全局契约拼接
+  6. 输出解析区（_parse_agent_output 及大量 _validate_* / 辅助判定）——
+     解析 LLM 流式输出，抽取结构化字段、代码文件、质量评分
+  7. 自动修复 / 校验区（_auto_fix_* / _patch_*）——
+     对 LLM 生成的代码做确定性兜底改写，不依赖 LLM
+  8. LLM 调用区（带重试 + 流式 + 超时 + 上下文裁剪）—— _call_agent_with_retry(_stream)
+  9. 项目上下文加载区（git clone / 关键文件筛选 / 缓存）——
+     从 Git 拉项目代码作 prompt 上下文
+ 10. DevPipelineManager 类（核心执行引擎）——
+     create / execute / confirm / resume / query，含 fix-loop、eval 门控、
+     fan-out 并行、escalate_to_human 等关键分支
 """
 import json
 import uuid
@@ -76,6 +95,8 @@ class PipelineStatus(str, Enum):
     NEEDS_HUMAN = "needs_human"
 
 
+# ==================== 启动恢复 / 阶段元信息 ====================
+
 async def recover_stale_running_pipelines() -> int:
     """Mark running pipelines from a previous process as failed on startup."""
     from sqlalchemy import text
@@ -118,6 +139,7 @@ async def recover_stale_running_pipelines() -> int:
         return result.rowcount or 0
 
 
+# ==================== 阶段定义 / 流水线模式 ====================
 STAGE_DEFINITIONS = [
     # 产品设计流程
     {"key": "requirement",    "name": "需求分析",   "agent": "PM",  "need_confirm": True},
@@ -151,6 +173,7 @@ PIPELINE_MODE_STAGES = {
 
 
 def _get_stage_agent(stage_key: str) -> str:
+    """根据阶段 key 取对应的 agent 类型（PM/FE/BE/QA/PJM/RPT）。"""
     for s in STAGE_DEFINITIONS:
         if s["key"] == stage_key:
             return s["agent"]
@@ -158,6 +181,7 @@ def _get_stage_agent(stage_key: str) -> str:
 
 
 def _stage_needs_confirm(stage_key: str) -> bool:
+    """判断某阶段是否需要用户确认后才推进。"""
     for s in STAGE_DEFINITIONS:
         if s["key"] == stage_key:
             return s["need_confirm"]
@@ -252,6 +276,11 @@ def _build_eval_fix_feedback(eval_struct: Dict[str, Any]) -> Tuple[List[str], st
 
 
 def _should_pause_for_stage(stage_key: str, auto_review_fix_active: bool = False) -> bool:
+    """判断某阶段执行完是否应暂停等用户确认。
+
+    Code-review 自修复闭环里，重生成产物要直接进下一次 review，不能再暂停等确认，
+    否则流水线会看起来卡住。
+    """
     if not _stage_needs_confirm(stage_key):
         return False
     # Code-review self-repair is an internal loop. After a failed review, the
@@ -263,10 +292,12 @@ def _should_pause_for_stage(stage_key: str, auto_review_fix_active: bool = False
 
 
 def _stage_keys_for_mode(pipeline_mode: str = "full") -> List[str]:
+    """根据流水线模式取该模式下的阶段顺序（full / frontend_contract_review）。"""
     return PIPELINE_MODE_STAGES.get(pipeline_mode or "full", STAGE_KEYS)
 
 
 def _fix_loop_stage_for_mode(stage_keys: List[str]) -> str:
+    """确定 fix-loop 回退的目标阶段：优先 frontend_dev，其次 prototype，最后首阶段。"""
     if "frontend_dev" in stage_keys:
         return "frontend_dev"
     if "prototype" in stage_keys:
@@ -279,10 +310,12 @@ def _has_code_review_fix_loop(stage_keys: List[str]) -> bool:
 
 
 def _is_product_preview_code_stage(stage_key: str, pipe_config: Dict[str, Any]) -> bool:
+    """判断是否为 frontend_contract_review 模式下的 prototype 阶段。"""
     return stage_key == "prototype" and pipe_config.get("pipeline_mode") == "frontend_contract_review"
 
 
 def _is_product_pm_design_stage(stage_key: str, pipe_config: Dict[str, Any]) -> bool:
+    """判断是否为 frontend_contract_review 模式下的 page_design 阶段。"""
     return stage_key == "page_design" and pipe_config.get("pipeline_mode") == "frontend_contract_review"
 
 
@@ -303,6 +336,7 @@ def _is_antd_vue_project(pipe_config: Dict[str, Any], pipe: "DevPipeline") -> bo
 
 
 def _compact_context(text: str, limit: int = 4000) -> str:
+    """通用上下文裁剪：超长则截断并附标记，防止 prompt 超窗口。"""
     text = (text or "").strip()
     if len(text) <= limit:
         return text
@@ -310,6 +344,7 @@ def _compact_context(text: str, limit: int = 4000) -> str:
 
 
 def _compact_fix_feedback(text: str, limit: int = 1800) -> str:
+    """压缩修复反馈：优先保留关键诊断行（critical/major/字段差异/路径），避免重复粘贴历史全量。"""
     text = re.sub(r"\n{3,}", "\n\n", (text or "").strip())
     if len(text) <= limit:
         return text
@@ -374,6 +409,8 @@ def _build_auto_repair_summary(
 _PIPELINE_TEMP_DIR = ".pipeline-temp"
 _REPAIR_TEMP_DIR = f"{_PIPELINE_TEMP_DIR}/repairs"
 
+
+# ==================== 修复任务拆分（供前端展示 + 反馈拼装） ====================
 
 def _split_repair_values(text: str) -> List[str]:
     values = []
@@ -474,6 +511,7 @@ _REPAIR_CATEGORY_LABELS = {
 
 
 def _build_repair_task_feedback(tasks: List[Dict[str, Any]], issues: List[str]) -> str:
+    """把修复任务清单拼成 LLM 重生成指令，约束只改清单内问题、保留现有页面/接口。"""
     if not tasks:
         return "\n".join(f"- {issue}" for issue in issues[:12])
 
@@ -500,6 +538,7 @@ def _build_repair_task_feedback(tasks: List[Dict[str, Any]], issues: List[str]) 
 
 
 def _build_preview_failure_message(tasks: List[Dict[str, Any]], issues: List[str]) -> str:
+    """重试耗尽时构造交人工的简明失败摘要（分类计数 + 优先任务）。"""
     if not tasks:
         return "前端预览仍未通过检查，请重新生成当前阶段。"
     grouped: Dict[str, int] = {}
@@ -534,6 +573,7 @@ async def _record_repair_attempt_temp_file(
     feedback: str,
     source_stage: str = "",
 ) -> List[Dict[str, Any]]:
+    """把每次修复尝试的 issue/任务/反馈写到 .pipeline-temp/repairs/ 供前端展示与审计。"""
     tasks = _build_repair_tasks_from_issues(issues)
     payload = {
         "pipeline_id": pipeline_id,
@@ -563,6 +603,7 @@ async def _record_repair_attempt_temp_file(
 
 
 async def _cleanup_pipeline_temp_files(pipeline_id: str) -> None:
+    """流水线终态时清理 .pipeline-temp/ 临时文件。"""
     try:
         await skill_registry.execute(
             "file_cleaner",
@@ -590,7 +631,10 @@ async def _cleanup_temp_path(path: str) -> None:
         logger.warning("Failed to cleanup temp path %s: %s", path, exc)
 
 
+# ==================== 阶段初始化 / 产物快照 ====================
+
 def _init_stages_for_mode(pipeline_mode: str = "full") -> Dict[str, Any]:
+    """按 pipeline_mode 初始化各阶段的状态容器（status=pending，空 output/code_files）。"""
     allowed = set(_stage_keys_for_mode(pipeline_mode))
     return {
         s["key"]: {
@@ -615,6 +659,7 @@ def _init_stages() -> Dict[str, Any]:
 
 
 def _validate_project_skill_ready(project_skill: Dict[str, Any]) -> None:
+    """校验 Project Skill 已确认（创建流水线前的前置条件）。"""
     status = str(project_skill.get("skill_status") or "").lower()
     content = str(project_skill.get("skill_content") or "").strip()
     if status != "confirmed" or not content:
@@ -622,6 +667,7 @@ def _validate_project_skill_ready(project_skill: Dict[str, Any]) -> None:
 
 
 def _build_pipeline_skill_snapshot(project_skill: Dict[str, Any]) -> Dict[str, Any]:
+    """从 Project Skill 抽取不可变快照存入 pipeline 配置（防止后续 skill 变更影响在跑流水线）。"""
     return {
         "project_id": str(project_skill.get("project_id") or ""),
         "project_name": project_skill.get("project_name") or "",
@@ -636,6 +682,7 @@ def _build_pipeline_skill_snapshot(project_skill: Dict[str, Any]) -> Dict[str, A
 
 
 def _build_pipeline_artifact(stages: Dict[str, Any]) -> Dict[str, Any]:
+    """从 stages 抽取对外暴露的产物视图（预览/契约/前端文件/审查结果/报告）。"""
     preview_stage = stages.get("prototype", {}) or stages.get("ui_preview", {})
     delivery_stage = stages.get("delivery", {})
     frontend_stage = stages.get("frontend_dev", {})
@@ -660,8 +707,10 @@ def _build_pipeline_artifact(stages: Dict[str, Any]) -> Dict[str, Any]:
 
 # ==================== 默认 Prompt 模板 ====================
 # 可通过 API /flow/prompts/defaults 读取，支持项目级自定义覆盖
+# 占位符如 {{user_request}} / {{requirement_output}} 由 _render_prompt_template 替换
 
 def _knowledge_to_project_skill_dict(project_skill: ProjectKnowledge) -> Dict[str, Any]:
+    """把 ORM 对象 ProjectKnowledge 转字典（供 _build_pipeline_skill_snapshot 消费）。"""
     return {
         "project_id": project_skill.project_id,
         "project_name": project_skill.project_name,
@@ -1425,6 +1474,10 @@ def _stage_code_files_for_prompt(
     fallback: str = "",
     workspace_path: str = "",
 ) -> str:
+    """把 code_files 转成「路径+行数+关键符号」清单，避免粘贴完整文件正文（省 token）。
+
+    审查阶段必须通过文件搜索/读取 skill 自行查正文，不允许根据流式截断猜测缺失逻辑。
+    """
     code_files = stage.get("code_files") if isinstance(stage, dict) else None
     if not isinstance(code_files, dict) or not code_files:
         return (fallback or "未提供")[:3000]
@@ -1537,9 +1590,15 @@ Return FAIL with actionable feedback when any of these three checks is incomplet
     return memory_section + fix_section + PIPELINE_GLOBAL_PROMPT_CONTRACT + prompt
 
 
-# ==================== 输出解析 ====================
+# ==================== 输出解析 / 校验 ====================
+# 该区域包含：
+#   - 用户需求意图分类（现有功能改造 / 全新页面 / 新增筛选）
+#   - 页面设计文档抽取主页面与组件路径
+#   - 前端代码文件的确定性校验（路径、API 契约、字段对齐、STable 分页、mock 边界）
+#   - LLM 输出的 JSON/Markdown 代码文件解析
 
 def _has_new_page_structure_signal(text: str) -> bool:
+    """检测需求文本是否含新页面结构信号（路由/菜单/落点等）且未提及「现有」。"""
     new_page_signal_markers = (
         "页面位置建议",
         "页面位置",
@@ -1555,6 +1614,11 @@ def _has_new_page_structure_signal(text: str) -> bool:
 
 
 def _is_existing_feature_change_request(user_request: str) -> bool:
+    """启发式判定：需求是改造现有页面/功能（而非全新页面）。
+
+    驱动 prototype 校验：现有功能改造必须改原页面路径、保留原接口/查询/表格列，
+    不得另起 mock 或新建替代页面。
+    """
     text = (user_request or "").strip()
     if not text:
         return False
@@ -1590,6 +1654,7 @@ def _is_existing_feature_change_request(user_request: str) -> bool:
 
 
 def _is_new_feature_page_request(user_request: str) -> bool:
+    """启发式判定：需求是新建页面/功能（驱动 mock 范围校验，全新页必须有 mock 兜底）。"""
     text = (user_request or "").strip()
     if not text or _is_existing_feature_change_request(text):
         return False
@@ -1599,6 +1664,7 @@ def _is_new_feature_page_request(user_request: str) -> bool:
 
 
 def _is_frontend_page_path(path: str) -> bool:
+    """判断路径是否为可预览的前端页面文件（views/pages 下 + vue/tsx/jsx/wxml）。"""
     return (
         path.startswith(("src/views/", "src/pages/", "pages/"))
         and path.endswith((".vue", ".tsx", ".jsx", ".wxml"))
@@ -1652,6 +1718,7 @@ def _page_name_tokens(name: str) -> List[str]:
 
 
 def _expected_prototype_pages_from_page_design(page_design_stage: Dict[str, Any]) -> List[str]:
+    """从页面设计阶段产物抽取期望的主页面清单（供 prototype 校验覆盖完整性）。"""
     if not isinstance(page_design_stage, dict):
         return []
     structured = page_design_stage.get("structured_output")
@@ -1675,6 +1742,7 @@ def _expected_prototype_pages_from_page_design(page_design_stage: Dict[str, Any]
 
 
 def _extract_primary_pages_from_page_design_document(document: str) -> List[str]:
+    """从 markdown 设计文档抽取主页面名（优先读表格，fallback 解析标题/表格首列）。"""
     if not document:
         return []
     table_pages = _primary_pages_from_page_design_table(document)
@@ -1716,6 +1784,7 @@ def _extract_primary_pages_from_page_design_document(document: str) -> List[str]
 
 
 def _markdown_table_rows(document: str) -> List[Dict[str, str]]:
+    """把 markdown 表格解析成 dict 行列表（按表头做 key）。"""
     rows: List[Dict[str, str]] = []
     headers: List[str] = []
     for line in (document or "").splitlines():
@@ -1784,6 +1853,7 @@ def _primary_pages_from_page_design_table(document: str) -> List[str]:
 
 
 def _expected_page_paths_from_page_design_document(document: str) -> Dict[str, List[str]]:
+    """从设计文档表格抽取「主页面 → 组件路径」映射（路径锁定用于校验生成文件）。"""
     if not document:
         return {}
     page_paths: Dict[str, List[str]] = {}
@@ -1808,6 +1878,7 @@ def _expected_page_paths_from_page_design_document(document: str) -> Dict[str, L
 
 
 def _normalize_frontend_component_path(path: str) -> str:
+    """归一化前端组件路径：去 @/ 前缀、补 src/、统一正斜杠。"""
     normalized = str(path or "").replace("\\", "/").strip().strip("`").lstrip("/")
     if normalized.startswith("@/"):
         normalized = normalized[2:]
@@ -1842,6 +1913,7 @@ def _declared_frontend_paths_from_page_design_stage(page_design_stage: Optional[
 
 
 def _is_additive_filter_request(user_request: str = "") -> bool:
+    """判定是否为「新增筛选项」需求（驱动 queryParam 字段保留 + 新字段校验）。"""
     text = user_request or ""
     if not re.search(r"(筛选|查询|搜索|检索|过滤)", text):
         return False
@@ -1851,6 +1923,7 @@ def _is_additive_filter_request(user_request: str = "") -> bool:
 
 
 def _requested_filter_label(user_request: str = "") -> str:
+    """从「新增 XX 筛选」类需求里抽出筛选项的中文 label。"""
     text = re.sub(r"\s+", "", user_request or "")
     match = re.search(r"(?:新增|增加|添加|补充|加一个|加上|加个)(?:一个|一项|个|项)?(.{1,24}?)(?:的)?(?:筛选项|筛选|查询项|查询|搜索项|搜索|检索项|检索|过滤项|过滤)", text)
     if not match:
@@ -1862,6 +1935,7 @@ def _requested_filter_label(user_request: str = "") -> str:
 
 
 def _query_filter_bindings(content: str) -> List[Tuple[str, str]]:
+    """从 .vue 文件抽取 (label, queryParam.field) 绑定，用于「保留原筛选 + 新增字段」校验。"""
     if not isinstance(content, str):
         return []
     bindings: List[Tuple[str, str]] = []
@@ -1880,6 +1954,7 @@ def _validate_existing_feature_paths(
     user_request: str = "",
     existing_frontend_paths: Optional[List[str]] = None,
 ) -> List[str]:
+    """现有功能改造校验：生成文件路径必须命中已确认存在的页面路径，禁止新建替代页。"""
     if not _is_existing_feature_change_request(user_request):
         return []
 
@@ -1914,6 +1989,7 @@ def _validate_existing_feature_paths(
 
 
 def _validate_existing_feature_mock_scope(files: Dict[str, str], user_request: str = "") -> List[str]:
+    """现有功能改造校验：禁止为已存在页面生成新 mock 列表/Promise（应复用现有接口）。"""
     if not _is_existing_feature_change_request(user_request):
         return []
 
@@ -1938,6 +2014,7 @@ def _validate_existing_feature_mock_scope(files: Dict[str, str], user_request: s
 
 
 def _validate_new_feature_mock_scope(files: Dict[str, str], user_request: str = "") -> List[str]:
+    """全新页面校验：API 模块只调真实 request 时必须有 mock 兜底，否则首屏会崩。"""
     if not _is_new_feature_page_request(user_request):
         return []
     normalized_paths = [str(path).replace("\\", "/").lstrip("/") for path in files]
@@ -1971,6 +2048,7 @@ def _validate_new_feature_mock_scope(files: Dict[str, str], user_request: str = 
 
 
 def _project_skill_requires_nested_api_result(pipe_config: Optional[Dict[str, Any]] = None) -> bool:
+    """从后端 Skill Snapshot 判断是否要求嵌套 ApiResult（message 是对象，含 code/traceId/data）。"""
     if not isinstance(pipe_config, dict):
         return False
     snapshots = []
@@ -1995,6 +2073,7 @@ def _validate_api_response_envelope(
     files: Dict[str, str],
     pipe_config: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
+    """校验 API 模块响应包装格式是否符合 Project Skill 的 ApiResult 契约。"""
     if not _project_skill_requires_nested_api_result(pipe_config):
         return []
     issues: List[str] = []
@@ -2053,6 +2132,7 @@ def _generated_pages_look_auth_only(files: Dict[str, str]) -> bool:
 
 
 def _api_endpoint_requirements_from_design(document: str) -> List[str]:
+    """从设计文档抽 API 接口路径（在 API 契约章节、行内代码、HTTP 方法行中扫）。"""
     if not document:
         return []
     endpoints: List[str] = []
@@ -2083,6 +2163,7 @@ def _api_endpoint_requirements_from_design(document: str) -> List[str]:
 
 
 def _endpoint_is_covered_by_api_module(endpoint: str, combined_api: str) -> bool:
+    """判断某接口是否被 API 模块代码覆盖（容忍 /api 前缀差和路径参数）。"""
     if not endpoint:
         return True
     normalized = endpoint.strip()
@@ -2105,6 +2186,7 @@ def _endpoint_is_covered_by_api_module(endpoint: str, combined_api: str) -> bool
 
 
 def _component_requirements_from_design(document: str) -> List[str]:
+    """从设计文档抽取项目组件要求（JDictSelectTag/STable/SForm 等），供页面覆盖校验。"""
     if not document:
         return []
     candidates: List[str] = []
@@ -2149,6 +2231,7 @@ def _component_requirements_from_design(document: str) -> List[str]:
 
 
 def _action_requirements_from_design(document: str) -> List[str]:
+    """从设计文档抽「新增/创建」类按钮动作要求，供页面入口覆盖校验。"""
     if not document:
         return []
     actions: List[str] = []
@@ -2230,6 +2313,7 @@ def _validate_page_design_frontend_coverage(
     files: Dict[str, str],
     page_design_stage: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
+    """综合校验：页面设计声明的接口/组件/按钮/权限 key 是否在前端代码中真正落地。"""
     if not isinstance(page_design_stage, dict):
         return []
     document = str(page_design_stage.get("page_design_document") or page_design_stage.get("output") or "")
@@ -2314,12 +2398,17 @@ def _validate_page_design_frontend_coverage(
 
 
 def _collect_api_endpoints(content: str) -> List[str]:
+    """从代码内容抽所有 `/api/...` 字符串（去重排序）。"""
     if not isinstance(content, str):
         return []
     return sorted(set(re.findall(r"['\"](/api/[^'\"]+)['\"]", content)))
 
 
 def _validate_undefined_data_return_refs(path: str, content: str) -> List[str]:
+    """校验 .vue 文件 data() 返回对象是否引用了未定义的运行期变量（result/res/parameter）。
+
+    会导致首屏渲染报错；只在 data() return 块内、运行时函数外检测。
+    """
     if not isinstance(content, str) or not path.endswith((".vue", ".js", ".ts", ".tsx", ".jsx")):
         return []
     safe_path = str(path).replace("\\", "/").lstrip("/")
@@ -2358,6 +2447,7 @@ def _validate_undefined_data_return_refs(path: str, content: str) -> List[str]:
 
 
 def _validate_mock_pagination_interaction(path: str, content: str) -> List[str]:
+    """校验 src/api/ 下的 mock 是否真正按 pageNo/pageSize 切换数据（避免每页显示同一批）。"""
     if not isinstance(content, str):
         return []
     safe_path = str(path).replace("\\", "/").lstrip("/")
@@ -2386,6 +2476,11 @@ def _validate_existing_feature_preservation(
     existing_frontend_paths: Optional[List[str]] = None,
     existing_frontend_files: Optional[Dict[str, str]] = None,
 ) -> List[str]:
+    """现有功能改造的最小变更约束：保留原页面的 mixins/STable/queryParam/接口/字段。
+
+    现有功能改造只能增量改用户要求的部分；新增筛选项必须用独立 queryParam 字段，
+    不得把旧字段改名冒充新增。
+    """
     if not _is_existing_feature_change_request(user_request):
         return []
     existing_files = {
@@ -2537,6 +2632,11 @@ def _validate_frontend_preview_code_files(
     page_design_stage: Optional[Dict[str, Any]] = None,
     pipe_config: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
+    """prototype 阶段生成的代码文件的总校验入口。
+
+    串联现有/新功能 mock 范围、API 响应包装、页面覆盖、文件路径合法性、STable 分页、
+    小程序 wxml/js 配对、HTML 完整性等多项确定性校验，输出 issue 列表驱动重试或交人工。
+    """
     issues: List[str] = []
     if not files:
         return ["没有生成前端代码文件"]
@@ -2801,6 +2901,15 @@ def _validate_frontend_preview_code_files(
     return issues
 
 
+# ==================== 自动修复 / 兜底改写 ====================
+# 对 LLM 生成的代码做确定性兜底改写（不依赖 LLM）：
+#   - STable 分页字段补齐（page/count/list）
+#   - 重复导出函数裁剪
+#   - ApiResult 包装格式统一
+#   - 缺失的 API 接口/组件/页面文件补齐
+#   - 时间范围字段拆分（startTime/endTime）
+# 目的：让产物始终可预览、首屏不报错。
+
 def _patch_stable_table_contract_content(content: str) -> str:
     """Normalize common STable loadData return shapes before validation/writing."""
     if "<s-table" not in (content or "").lower():
@@ -2917,10 +3026,12 @@ def _patch_stable_table_contract_content(content: str) -> str:
 
 
 def _exported_function_names(content: str) -> List[str]:
+    """抽 JS/TS 文件里所有 `export function` 的函数名。"""
     return re.findall(r"(?m)^\s*export\s+function\s+([A-Za-z_$][\w$]*)\s*\(", content or "")
 
 
 def _duplicate_exported_function_names(content: str) -> List[str]:
+    """找重复 export 的函数名（会导致 Babel 编译失败）。"""
     seen = set()
     duplicates: List[str] = []
     for name in _exported_function_names(content):
@@ -2931,6 +3042,7 @@ def _duplicate_exported_function_names(content: str) -> List[str]:
 
 
 def _export_function_block_end(lines: List[str], start: int) -> int:
+    """从 export function 声明行起，按花括号配对找到函数块结束行（含）。"""
     balance = 0
     saw_open = False
     for index in range(start, len(lines)):
@@ -2945,6 +3057,7 @@ def _export_function_block_end(lines: List[str], start: int) -> int:
 
 
 def _patch_duplicate_exported_functions(content: str) -> Tuple[str, List[str]]:
+    """移除重复 export 的函数体（保留最后一次实现），返回改写后的内容与重复名清单。"""
     if not content:
         return content, []
 
@@ -2989,6 +3102,7 @@ def _api_result_success_payload(data_expr: str = "{ list: [], page: 1, count: 0 
 
 
 def _patch_api_result_envelope_content(content: str) -> str:
+    """把扁平 code/msg/message 响应改写为 ApiResult 嵌套包装（符合后端 Skill 契约）。"""
     if not isinstance(content, str):
         return content
     patched = content
@@ -3015,12 +3129,14 @@ def _patch_api_result_envelope_content(content: str) -> str:
 
 
 def _function_name_for_endpoint(endpoint: str, index: int) -> str:
+    """根据接口路径生成稳定的 mock 函数名（preview + 末段 PascalCase + 索引）。"""
     parts = re.findall(r"[A-Za-z0-9]+", endpoint or "")
     suffix = "".join(part[:1].upper() + part[1:] for part in parts[-4:]) or f"Endpoint{index}"
     return f"preview{suffix}{index}"
 
 
 def _append_missing_api_endpoint_mocks(files: Dict[str, str], page_design_stage: Optional[Dict[str, Any]]) -> Tuple[Dict[str, str], List[str]]:
+    """设计文档声明的接口若 API 模块未覆盖 → 自动追加 Promise.resolve mock 实现到 api 文件。"""
     expected_paths = _expected_page_paths_from_page_design_stage(page_design_stage)
     document = ""
     if isinstance(page_design_stage, dict):
@@ -3076,6 +3192,7 @@ def _append_missing_api_endpoint_mocks(files: Dict[str, str], page_design_stage:
 
 
 def _append_missing_component_references(files: Dict[str, str], page_design_stage: Optional[Dict[str, Any]]) -> Tuple[Dict[str, str], List[str]]:
+    """设计文档要求的项目组件（JDictSelectTag/Modal 等）页面未使用 → 在首个页面注入隐藏引用占位。"""
     document = ""
     if isinstance(page_design_stage, dict):
         document = str(page_design_stage.get("page_design_document") or page_design_stage.get("output") or "")
@@ -3127,6 +3244,7 @@ def _append_missing_component_references(files: Dict[str, str], page_design_stag
 
 
 def _default_vue_page_content(page_name: str) -> str:
+    """构造缺页时的占位 .vue 内容（仅含 alert，真实组件由 prototype agent 重新生成）。"""
     safe_title = page_name or "预览页面"
     return f"""<template>
   <div class="preview-generated-page">
@@ -3151,6 +3269,7 @@ export default {{
 
 
 def _append_missing_declared_pages(files: Dict[str, str], page_design_stage: Optional[Dict[str, Any]]) -> Tuple[Dict[str, str], List[str]]:
+    """设计声明的页面文件若未生成 → 返回 issue（不直接造空壳，需 LLM 重新生成真实组件）。"""
     page_paths = _expected_page_paths_from_page_design_stage(page_design_stage)
     if not page_paths:
         return files, []
@@ -3172,6 +3291,7 @@ def _append_missing_declared_pages(files: Dict[str, str], page_design_stage: Opt
 
 
 def _normalize_generated_frontend_paths(files: Dict[str, str]) -> Tuple[Dict[str, str], List[str]]:
+    """统一前端文件路径（@/ 去前缀、补 src/），合并重复路径（保留更长内容）。"""
     fixed: Dict[str, str] = {}
     moved = []
     for path, content in files.items():
@@ -3186,6 +3306,7 @@ def _normalize_generated_frontend_paths(files: Dict[str, str]) -> Tuple[Dict[str
 
 
 def _is_frontend_component_file(path: str) -> bool:
+    """判断归一化后的路径是否为前端页面/组件文件（views/pages/components 下 + vue/tsx 等）。"""
     normalized = _normalize_frontend_component_path(path)
     return normalized.startswith(("src/views/", "src/pages/", "src/components/", "pages/")) and normalized.endswith((
         ".vue", ".tsx", ".jsx", ".wxml",
@@ -3196,6 +3317,7 @@ def _enforce_declared_frontend_paths(
     files: Dict[str, str],
     page_design_stage: Optional[Dict[str, Any]],
 ) -> Tuple[Dict[str, str], List[str]]:
+    """锁定前端文件名为设计声明路径：丢弃未声明的随机页面文件，防止 LLM 改名绕过校验。"""
     declared_paths = [
         path
         for path in _declared_frontend_paths_from_page_design_stage(page_design_stage)
@@ -3228,6 +3350,7 @@ def _enforce_declared_frontend_paths(
 
 
 def _patch_preview_only_names(content: str) -> str:
+    """把 Standalone/SandboxPreview/PreviewOnly 等命名改成 Business（避免 LLM 写死预览专用组件）。"""
     if not isinstance(content, str):
         return content
     return re.sub(
@@ -3238,6 +3361,7 @@ def _patch_preview_only_names(content: str) -> str:
 
 
 def _patch_runtime_guard_markers(content: str) -> str:
+    """访问数组前若缺少 Array.isArray/|| [] 兜底 → 注入占位注释（防首屏 length/map 报错）。"""
     if not isinstance(content, str):
         return content
     patched = content
@@ -3249,6 +3373,7 @@ def _patch_runtime_guard_markers(content: str) -> str:
 
 
 def _patch_time_range_split_markers(content: str) -> str:
+    """时间范围控件相关：把 startDate/endDate 改成 startTime/endTime，并在缺拆分时注入拆分桩。"""
     if not isinstance(content, str):
         return content
     patched = content
@@ -3279,6 +3404,10 @@ def _auto_fix_frontend_preview_code_files(
     page_design_stage: Optional[Dict[str, Any]] = None,
     pipe_config: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Dict[str, str], List[str]]:
+    """prototype/frontend_dev 阶段的总自动修复入口：路径规范化 + 兜底改写 + 缺失补齐。
+
+    返回 (修复后的 files, 修复说明列表)；修复说明用于 emit 给前端展示。
+    """
     files, path_fixes = _normalize_generated_frontend_paths(files)
     files, locked_path_fixes = _enforce_declared_frontend_paths(files, page_design_stage)
     fixed: Dict[str, str] = {}
@@ -3320,6 +3449,7 @@ def _auto_fix_frontend_preview_code_files(
 
 
 def _infer_new_filter_field(label: str, existing_fields: Optional[set] = None) -> str:
+    """根据中文 label 启发式推断 queryParam 字段名（id/name/status/type/keyword），重名时加数字后缀。"""
     existing_fields = existing_fields or set()
     normalized = label or ""
     if re.search(r"ID|id|Id|编号|编码", normalized):
@@ -3341,10 +3471,12 @@ def _infer_new_filter_field(label: str, existing_fields: Optional[set] = None) -
 
 
 def _is_identifier_filter_label(label: str = "") -> bool:
+    """判定 label 是否为 ID/编号类（这类筛选项需要格式校验 + 重置逻辑）。"""
     return bool(re.search(r"(?:ID|id|Id|编号|编码)", label or ""))
 
 
 def _ensure_query_param_field(content: str, field: str) -> str:
+    """确保 .vue 文件 data() 的 queryParam 对象里声明了某字段（默认 undefined）。"""
     if not field:
         return content
     match = re.search(r"(?P<indent>\s*)queryParam\s*:\s*\{(?P<body>[^{}]*)\}", content)
@@ -3372,6 +3504,7 @@ def _ensure_query_param_field(content: str, field: str) -> str:
 
 
 def _ensure_data_return_field(content: str, field: str, value: str) -> str:
+    """确保 data() 返回对象里有某字段（如 productIdValidateStatus），缺则注入。"""
     if not field or re.search(rf"\b{re.escape(field)}\s*:", content):
         return content
     match = re.search(r"(?P<indent>\s*)queryParam\s*:", content)
@@ -3388,6 +3521,7 @@ def _ensure_data_return_field(content: str, field: str, value: str) -> str:
 
 
 def _ensure_identifier_filter_template_contract(content: str, label: str, field: str) -> str:
+    """为 ID 类筛选 <a-form-item> 补 :validate-status / :help，<a-input> 补 :maxLength。"""
     if not _is_identifier_filter_label(label):
         return content
 
@@ -3435,6 +3569,7 @@ def _identifier_filter_methods(field: str) -> str:
 
 
 def _ensure_identifier_filter_methods(content: str, label: str, field: str) -> str:
+    """为 ID 类筛选补 searchQuery/searchReset 方法 + productIdValidateStatus/Help 状态字段。"""
     if not _is_identifier_filter_label(label):
         return content
     if "productIdValidateStatus" in content and "productIdHelp" in content and re.search(r"\bsearchQuery\s*\(", content) and re.search(r"\bsearchReset\s*\(", content):
@@ -3462,6 +3597,7 @@ def _ensure_identifier_filter_methods(content: str, label: str, field: str) -> s
 
 
 def _insert_requested_filter(content: str, label: str) -> str:
+    """在原页面的筛选表单里插入新增筛选项（含字段绑定 + 校验/重置方法 + 默认值）。"""
     if not isinstance(content, str) or not label:
         return content
     existing_fields = {field for _label, field in _query_filter_bindings(content)}
@@ -3503,6 +3639,11 @@ def _auto_fix_existing_feature_from_original(
     existing_frontend_paths: Optional[List[str]] = None,
     existing_frontend_files: Optional[Dict[str, str]] = None,
 ) -> Tuple[Dict[str, str], List[str]]:
+    """现有功能改造的强力兜底：当 LLM 整页重写时，直接回退到原页面 + 注入新筛选项。
+
+    用于「新增商品ID筛选」类需求——LLM 容易把 productCode 改成 productId 整页重写，
+    这里保留原页面所有逻辑，只插入新筛选控件。
+    """
     if not _is_existing_feature_change_request(user_request):
         return files, []
 
@@ -3557,6 +3698,7 @@ def _pick_existing_frontend_files(
     source_files: Dict[str, str],
     existing_paths: Optional[List[str]],
 ) -> Dict[str, str]:
+    """从源代码文件字典中按指定路径挑出对应文件，供改造对比。"""
     normalized_source = {
         str(path).replace("\\", "/").lstrip("/"): content
         for path, content in (source_files or {}).items()
@@ -3575,6 +3717,7 @@ def _resolve_existing_page_paths_for_preview(
     parsed: Dict[str, Any],
     pipe_config: Dict[str, Any],
 ) -> List[str]:
+    """汇总本次预览要修改的现有页面路径：用户选择 + parsed._frontend_existing_paths + code_files 中的页面路径。"""
     paths: List[str] = []
     selected_path = str(pipe_config.get("selected_frontend_page_path") or "").strip()
     if selected_path:
@@ -3602,6 +3745,7 @@ async def _load_existing_preview_page_files(
     pipe_project_id: str,
     parsed: Dict[str, Any],
 ) -> Tuple[List[str], Dict[str, str]]:
+    """加载本次预览要修改的现有页面源代码（供 _auto_fix_existing_feature_from_original 用）。"""
     existing_paths = _resolve_existing_page_paths_for_preview(parsed, pipe_config)
     frontend_project_id = str(pipe_config.get("frontend_project_id") or pipe_project_id or "").strip()
     existing_frontend_files: Dict[str, str] = {}
@@ -3633,6 +3777,8 @@ def _try_parse_page_spec(raw_output: str) -> Optional[Dict[str, Any]]:
             continue
     return None
 
+
+# ==================== LLM 输出解析（JSON / Markdown / Spec） ====================
 
 def _try_parse_json_code_files(raw_output: str) -> Dict[str, str]:
     """尝试从 LLM 输出中提取 JSON 格式的代码文件映射。
@@ -3778,6 +3924,7 @@ def _remove_quality_json_blocks(raw_output: str) -> str:
 
 
 def _coerce_string_list(value: Any, fallback: Optional[List[str]] = None) -> List[str]:
+    """把 LLM 输出的字符串/列表/null 统一规整成字符串列表（处理中英文分号/换行）。"""
     """Normalize LLM quality fields that may arrive as strings, lists, or nulls."""
     if value is None:
         return fallback or []
@@ -3837,6 +3984,7 @@ def _prototype_focus_from_page_design(page_design_stage: Dict[str, Any]) -> str:
 
 
 def _coerce_quality_score(value: Any, fallback: int) -> int:
+    """把任意 LLM 质量分值规整为 0-100 整数。"""
     try:
         score = int(float(value))
     except (TypeError, ValueError):
@@ -3845,6 +3993,7 @@ def _coerce_quality_score(value: Any, fallback: int) -> int:
 
 
 def _coerce_bool(value: Any, fallback: bool) -> bool:
+    """把字符串/布尔/null 规整成布尔（处理 true/yes/1/ready 等多种写法）。"""
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
@@ -3859,6 +4008,7 @@ def _coerce_bool(value: Any, fallback: bool) -> bool:
 
 
 def _normalized_contract_field_name(value: Any) -> str:
+    """归一化契约字段名：去 queryParam./params. 等前缀和引号，便于跨端比对。"""
     field = str(value or "").strip()
     field = re.sub(r"^(?:this\.)?(?:queryParam|params|parameter|query|request|body|payload|form)\.", "", field)
     field = re.sub(r"^(?:query|body|request|param|params|payload)[\s:：=]+", "", field, flags=re.I)
@@ -3866,6 +4016,7 @@ def _normalized_contract_field_name(value: Any) -> str:
 
 
 def _first_review_field_value(item: Dict[str, Any], keys: List[str]) -> Any:
+    """从 review item 中按多 key 候选取首个非空值（LLM 输出 key 命名不稳定）。"""
     for key in keys:
         if item.get(key):
             return item.get(key)
@@ -3873,6 +4024,7 @@ def _first_review_field_value(item: Dict[str, Any], keys: List[str]) -> Any:
 
 
 def _review_field_mismatch_is_equivalent(item: Any) -> bool:
+    """判断 field_mismatch 是否其实是「等价字段」（queryParam.id 与契约 id 是同一字段）。"""
     if not isinstance(item, dict):
         return False
     frontend_field = _normalized_contract_field_name(_first_review_field_value(item, [
@@ -3896,6 +4048,7 @@ def _review_field_mismatch_is_equivalent(item: Any) -> bool:
 
 
 def _review_suggestions_only_field_related(value: Any) -> bool:
+    """判断审查建议是否只跟字段相关（用于过滤掉等价字段差异后清空 fix_suggestions）。"""
     text = str(value or "").strip()
     if not text:
         return True
@@ -3925,6 +4078,7 @@ def _review_suggestions_only_field_related(value: Any) -> bool:
 
 
 def _normalize_code_review_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    """规整 code_review 结果：过滤等价字段差异；若全部差异等价则判 PASS。"""
     mismatches = result.get("field_mismatches")
     if not isinstance(mismatches, list):
         return result
@@ -4174,7 +4328,11 @@ PM_PAGE_DESIGN_MARKERS: List[Tuple[str, str, List[str]]] = [
 
 
 def _parse_agent_output(stage_key: str, raw_output: str) -> Dict[str, Any]:
-    """解析 Agent 输出，提取结构化数据"""
+    """按阶段解析 LLM 流式输出，抽取 preview_html / code_files / quality / endpoints 等结构化字段。
+
+    分支：ui_preview+prototype 抽 HTML；development/prototype 抽 JSON 代码文件（或 Spec→模板渲染）；
+    requirement/page_design 抽 markdown 文档 + quality JSON；code_review/testing 抽结构化判定。
+    """
     result = {"output": raw_output}
 
     if stage_key in ("ui_preview", "prototype"):
@@ -4309,7 +4467,7 @@ def _parse_agent_output(stage_key: str, raw_output: str) -> Dict[str, Any]:
     return result
 
 
-# ==================== LLM 调用（带重试） ====================
+# ==================== LLM 调用（带重试 + 流式 + 超时 + 上下文裁剪） ====================
 
 def _is_retriable_error(e: Exception) -> bool:
     """判断是否为可重试的错误"""
@@ -4347,7 +4505,11 @@ async def _call_agent_with_retry(agent_service: AgentService, session_id: str,
                                   thinking_override: Optional[Dict[str, Any]] = None,
                                   response_format_override: Optional[dict] = None,
                                   attachments: list = None) -> str:
-    """调用 Agent，自动重试可恢复的错误"""
+    """调用 Agent，自动重试可恢复的错误。
+
+    上下文超长错误 → 截断 message（保尾部核心）后重试，避免直接失败；
+    其他可重试错误（timeout/rate limit/5xx）→ 指数退避重试 MAX_LLM_RETRIES 次。
+    """
     last_error = None
     original_max_tokens = None
     original_thinking = None
@@ -4611,13 +4773,14 @@ async def _call_agent_with_retry_stream(
                 llm.response_format = original_response_format
 
 
-# ==================== 项目上下文加载 ====================
+# ==================== 项目上下文加载（git clone + 关键文件筛选 + 缓存） ====================
 
 # 项目文件缓存（进程级，避免重复克隆）
 _project_cache: Dict[str, Dict[str, str]] = {}
 
 
 async def _load_project_files_cached(project_id: str, project_type: str) -> Dict[str, str]:
+    """进程级缓存：避免同一 project_id 多阶段重复克隆 git 仓库。"""
     if not project_id:
         return {}
     cache_key = f"{project_id}:{project_type}"
@@ -4627,6 +4790,7 @@ async def _load_project_files_cached(project_id: str, project_type: str) -> Dict
 
 
 def _requirement_match_terms(requirement: str) -> List[str]:
+    """从需求文本提取匹配用关键词（英文 token + 中文 2-4 字片段），剔除停用词。"""
     terms = set(re.findall(r"[A-Za-z0-9_]{2,}", (requirement or "").lower()))
     cjk_chunks = re.findall(r"[\u4e00-\u9fff]+", requirement or "")
     for chunk in cjk_chunks:
@@ -4641,6 +4805,7 @@ def _requirement_match_terms(requirement: str) -> List[str]:
 
 
 def _business_synonyms_for_terms(terms: List[str]) -> List[str]:
+    """为业务词扩展同义词（商品→product/goods/sku/spu 等），提高代码文件检索召回率。"""
     synonyms = set(terms)
     mapping = {
         "商品": ["product", "goods", "commodity", "commdity", "sku", "spu"],
@@ -4660,6 +4825,7 @@ def _business_synonyms_for_terms(terms: List[str]) -> List[str]:
 
 
 def _requirement_strong_business_terms(requirement: str) -> List[str]:
+    """提取需求中的强业务词（剔除通用词如「管理/平台/列表」），并扩展同义词。"""
     terms = _requirement_match_terms(requirement)
     generic = {
         "管理", "平台", "系统", "列表", "筛选", "查询", "搜索", "字段", "id",
@@ -4678,6 +4844,7 @@ def _requirement_strong_business_terms(requirement: str) -> List[str]:
 
 
 def _select_relevant_project_files(files: Dict[str, str], requirement: str, limit: int = 8) -> List[Tuple[str, str]]:
+    """按需求关键词对项目代码文件打分，挑出 top-N 相关文件作 prompt 上下文。"""
     terms = _requirement_match_terms(requirement)
     if not terms:
         return []
@@ -4702,6 +4869,7 @@ def _select_relevant_project_files(files: Dict[str, str], requirement: str, limi
 
 
 def _frontend_existing_page_paths(files: Dict[str, str]) -> List[str]:
+    """列出项目里所有可预览的前端页面路径（排序去重）。"""
     return sorted(
         str(path).replace("\\", "/").lstrip("/")
         for path in files
@@ -4710,10 +4878,12 @@ def _frontend_existing_page_paths(files: Dict[str, str]) -> List[str]:
 
 
 def _frontend_relevant_existing_page_paths(files: Dict[str, str], requirement: str, limit: int = 12) -> List[str]:
+    """挑出与需求强相关的现有前端页面路径（供 prototype 改造时锁定目标文件）。"""
     return [item["path"] for item in _frontend_existing_page_candidates(files, requirement, limit)]
 
 
 def _requirement_anchor_groups(requirement: str) -> List[List[str]]:
+    """从需求抽取业务锚点组（零售/商品/活动），用于过滤无关页面候选。"""
     requirement_text = requirement or ""
     anchor_groups: List[List[str]] = []
     if "零售" in requirement_text:
@@ -4726,11 +4896,13 @@ def _requirement_anchor_groups(requirement: str) -> List[List[str]]:
 
 
 def _is_product_pool_context(path: str, content: str) -> bool:
+    """判定页面是否为商品池/池相关（与「商品列表」需求区分，避免误选池管理页）。"""
     text = f"{path}\n{content or ''}".lower()
     return "pool" in text or "商品池" in (content or "") or "池" in path
 
 
 def _is_primary_product_list_context(path: str, content: str) -> bool:
+    """判定页面是否为「主商品列表」上下文（排除商品池、订单列表、详情、操作页）。"""
     normalized = str(path).replace("\\", "/").lstrip("/")
     lower_path = normalized.lower()
     text = f"{lower_path}\n{content or ''}".lower()
@@ -4750,6 +4922,7 @@ def _is_primary_product_list_context(path: str, content: str) -> bool:
 
 
 def _matches_requirement_anchor_groups(path: str, content: str, requirement: str) -> bool:
+    """判定页面是否覆盖需求里所有业务锚点（缺任何一个锚点都不算相关）。"""
     anchor_groups = _requirement_anchor_groups(requirement)
     if not anchor_groups:
         return True
@@ -4769,6 +4942,7 @@ def _matches_requirement_anchor_groups(path: str, content: str, requirement: str
 
 
 def _humanize_frontend_page_path(path: str, content: str = "") -> Dict[str, str]:
+    """把代码路径转成人类可读的展示名/菜单提示/路由提示，给前端候选页选择器用。"""
     normalized = str(path).replace("\\", "/").lstrip("/")
     text = f"{normalized}\n{content or ''}".lower()
     name_parts: List[str] = []
@@ -4818,6 +4992,7 @@ def _humanize_frontend_page_path(path: str, content: str = "") -> Dict[str, str]
 
 
 def _frontend_existing_page_candidates(files: Dict[str, str], requirement: str, limit: int = 12) -> List[Dict[str, Any]]:
+    """强业务词匹配：从项目前端文件挑出与需求高置信度相关的候选页面（含展示名/置信度/命中词）。"""
     strong_terms = _requirement_strong_business_terms(requirement)
     if not strong_terms:
         return []
@@ -4870,6 +5045,7 @@ def _frontend_existing_page_candidates(files: Dict[str, str], requirement: str, 
 
 
 def _frontend_fallback_page_candidates(files: Dict[str, str], requirement: str, limit: int = 8) -> List[Dict[str, Any]]:
+    """低置信候选：强业务词没匹配上时，用同义词+宽松打分，标记 uncertain 供人工确认。"""
     terms = _business_synonyms_for_terms(_requirement_match_terms(requirement))
     scored = []
     for path, content in files.items():
@@ -4902,6 +5078,7 @@ def _frontend_fallback_page_candidates(files: Dict[str, str], requirement: str, 
 
 
 async def get_frontend_page_candidates_for_requirement(project_id: str, requirement: str) -> Dict[str, Any]:
+    """对外暴露：根据需求返回现有前端页面候选（含 requires_selection/uncertain 标记）。"""
     files = await _load_project_files_cached(project_id, "frontend")
     candidates = _frontend_existing_page_candidates(files, requirement)
     fallback_candidates: List[Dict[str, Any]] = []
@@ -4959,6 +5136,7 @@ async def _load_project_context(project_id: str, project_type: str, requirement:
 
 
 def _get_key_file_patterns(project_type: str) -> list:
+    """根据项目类型返回关键文件模式（前端：package.json/router/main.vue 等；后端：pom.xml/application.yml 等）。"""
     """根据项目类型返回关键文件模式"""
     if project_type == "frontend":
         return [
@@ -4982,6 +5160,7 @@ def _get_key_file_patterns(project_type: str) -> list:
 
 
 def _project_file_read_limit(path: str) -> int:
+    """按路径类型返回读取字节上限（业务页面给 30k，其余 5k）。"""
     normalized = str(path).replace("\\", "/").lstrip("/")
     if normalized.startswith(("src/views/", "src/pages/", "pages/")) and normalized.endswith((
         ".vue", ".tsx", ".jsx", ".js", ".ts", ".wxml"
@@ -4991,6 +5170,10 @@ def _project_file_read_limit(path: str) -> int:
 
 
 async def _fetch_project_files_from_git(project_id: str) -> Dict[str, str]:
+    """从 Generator 获取 Git 地址 → 浅克隆到工作区临时目录 → 用 file_reader skill 读文件。
+
+    克隆走沙箱安全原语（剔除 admin 凭据 + 非 root 降权 / 容器隔离），失败返回 {}。
+    """
     """从 Generator 获取项目 Git 地址，浅克隆并读取关键文件"""
     import httpx
     import tempfile
@@ -5169,6 +5352,12 @@ async def _get_git_token_for_project(project_id: str) -> str:
 
 
 # ==================== 流水线管理器 ====================
+# DevPipelineManager：流水线的核心执行引擎
+#   - create_pipeline：创建流水线（含 frontend_contract_review 模式的 Skill 校验）
+#   - execute_stage：迭代执行各阶段（含 fan-out 并行 / fix-loop / eval 门控 / escalate_to_human）
+#   - execute_stage_stream：流式版本（emit chunk/waiting_confirm/completed 等事件给前端）
+#   - confirm_stage / resume_from_human：用户确认 / 人工介入恢复
+#   - get_* / list_* / rollback / git_commit_pipeline 等查询和管理方法
 
 class DevPipelineManager:
     """完整开发流水线管理器（数据库持久化 + 自修复 + 记忆）"""
@@ -5185,6 +5374,12 @@ class DevPipelineManager:
                               backend_project_ids: List[str] = None,
                               pipeline_mode: str = "full",
                               attachments: list = None) -> str:
+        """创建流水线：生成 pipeline_id，初始化 stages，持久化快照配置。
+
+        frontend_contract_review 模式必须先确认前端 Project Skill；可选附带多个后端
+        Skill 快照。所有运行时配置（技术栈/项目 ID/skill snapshot）以快照方式存进
+        skill_config 字段，确保在跑流水线不受后续 Skill 变更影响。
+        """
         pipeline_id = f"pipe_{uuid.uuid4().hex[:12]}"
         now = int(time.time() * 1000)
         pipeline_mode = pipeline_mode or "full"
@@ -5275,6 +5470,7 @@ class DevPipelineManager:
         return pipeline_id
 
     async def _load_pipeline(self, session: AsyncSession, pipeline_id: str) -> DevPipeline:
+        """按 pipeline_id 加载未软删的流水线 ORM 对象，不存在抛 ValueError。"""
         result = await session.execute(
             select(DevPipeline).where(
                 DevPipeline.pipeline_id == pipeline_id,
@@ -5287,11 +5483,13 @@ class DevPipelineManager:
         return pipe
 
     def _parse_stages(self, pipe: DevPipeline) -> Dict[str, Any]:
+        """把 pipe.stages_data JSON 反序列化成 dict；缺失则回退初始化。"""
         if pipe.stages_data:
             return json.loads(pipe.stages_data)
         return _init_stages()
 
     def _to_status_dict(self, pipe: DevPipeline) -> Dict[str, Any]:
+        """把 pipe ORM 对象转成对外暴露的状态字典（含 skill snapshot 概要）。"""
         stages = self._parse_stages(pipe)
         pipe_config = json.loads(pipe.skill_config or "{}")
         skill_snapshot = pipe_config.get("project_skill_snapshot") or {}
@@ -5336,7 +5534,9 @@ class DevPipelineManager:
             "updated_at": str(pipe.update_time),
         }
 
-    # ==================== 记忆集成 ====================
+    # ==================== 记忆集成 / 知识沉淀 ====================
+    # 阶段执行后保存长期记忆，便于后续流水线从历史经验学习；
+    # 流水线完成时沉淀用户进化和交付知识（写入知识库 + 图谱）。
 
     async def _save_stage_memory(self, pipeline_id: str, stage_key: str,
                                   agent_type: str, output: str,
@@ -5464,7 +5664,14 @@ class DevPipelineManager:
         except Exception as e:
             logger.warning(f"Failed to record delivery knowledge: {e}")
 
-    # ==================== Skill 执行 ====================
+    # ==================== Skill 执行（把 LLM 输出落地为真实操作） ====================
+    # _execute_stage_skill 是阶段产物落地的总入口，按阶段分发到不同 skill：
+    #   - prototype/frontend_dev/backend_dev/testing → code_writer 写文件
+    #   - backend_dev → backend_scaffolder 补 Java 脚手架 + dockerfile_generator
+    #   - testing → test_runner 真实执行测试
+    #   - commit → git_commit 推送
+    #   - deploy → deployer 触发部署
+    #   - code_review → contract_prober 活契约探针（4c，仅 full 模式有 pom.xml）
 
     async def _execute_stage_skill(
         self, pipeline_id: str, pipe: DevPipeline,
@@ -5664,6 +5871,16 @@ class DevPipelineManager:
                 logger.warning("contract_prober failed (non-fatal): %s", exc)
 
     # ==================== 核心执行引擎 ====================
+    # execute_stage 主循环（迭代式，非递归）：
+    #   1. eval 阶段：自评（judge + 幻觉 + 视觉 + E2E），低分→回生成阶段重修→升级人工
+    #   2. frontend_dev + backend_dev：fan-out 并行执行（gather），任一失败则整条 failed
+    #   3. prototype：重试 MAX_PREVIEW_GENERATION_ATTEMPTS 次，校验+自动修复+E2E，耗尽→人工
+    #   4. 单阶段顺序执行：跑 LLM → 解析 → 自动修复 → Skill 落地 → 状态机分支
+    #      分支 0: code_review FAIL → fix-loop 回生成阶段（重试 MAX_FIX_ITERATIONS 次）
+    #      分支 0b: testing FAIL → fix-loop 回生成阶段
+    #      评审关卡: requirement/delivery 不过则带意见重生成（重试 MAX_FIX_ITERATIONS 次）
+    #      分支 1: need_confirm 阶段 → 暂停等用户确认
+    #      正常推进到下一阶段；末阶段 → _complete_pipeline
 
     async def _run_single_stage(
         self, pipeline_id: str, stage_key: str, stages: Dict[str, Any],
@@ -5960,11 +6177,10 @@ class DevPipelineManager:
 
     @staticmethod
     def _compute_overall_score(stages: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
-        """Aggregate per-stage quality signals into an overall 0-100 score.
+        """按权重把各阶段质量分汇总成 0-100 总分。
 
-        Weighting (normalized over available dimensions):
-        pm 0.15 / design 0.15 / preview 0.30 / review 0.20 / testing 0.20.
-        review_passed/tests_passed gate signals mapped to score (100/40, 100/30).
+        权重（按可用维度归一化）：pm 0.15 / design 0.15 / preview 0.30 /
+        review 0.20 / testing 0.20。review/tests 的 passed 信号映射为 100/40、100/30。
         """
         def _num(stage_key: str, *path: str) -> Optional[int]:
             so = (stages.get(stage_key) or {}).get("structured_output") or {}
@@ -6397,7 +6613,12 @@ class DevPipelineManager:
         user_input: str = "",
         stream_callback: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
-        """执行流水线（迭代循环，带自修复分支和并行 Fan-out）"""
+        """执行流水线（迭代循环，带自修复分支和并行 Fan-out）。
+
+        每次调用推进到下一个暂停点（need_confirm / needs_human / failed / completed）。
+        自修复闭环（code_review/test/eval 失败 → fix-loop）在循环内连续推进，
+        不需要用户多次点击；只有需要确认或交人工时才会 return。
+        """
         # Ensure LLM config is loaded from DB before executing
         from app.ai.agents import AgentFactory
         async with async_session_maker() as cfg_session:
@@ -6495,6 +6716,8 @@ class DevPipelineManager:
                     continue
 
                 # ====== Fan-out: frontend_dev + backend_dev 并行执行 ======
+                # 用 asyncio.gather 并发跑前后端生成（每个分支独立 AsyncSession，避免并发查询冲突）。
+                # 任一分支抛错 → 整条流水线 FAILED；都成功 → 推进到 code_review。
                 if current_stage == "frontend_dev" and "backend_dev" in stages \
                         and stages.get("backend_dev", {}).get("status") == "pending":
                     stages["frontend_dev"]["status"] = "running"
@@ -7298,7 +7521,7 @@ class DevPipelineManager:
                         "error": str(e),
                     }
 
-    # ==================== 用户确认 ====================
+    # ==================== 用户确认 / 人工介入恢复 ====================
 
     async def execute_stage_stream(
         self, pipeline_id: str, user_input: str = ""
@@ -7346,6 +7569,11 @@ class DevPipelineManager:
 
     async def confirm_stage(self, pipeline_id: str, confirmed: bool,
                             feedback: str = "") -> Dict[str, Any]:
+        """用户对当前 waiting_confirm 阶段确认 / 拒绝。
+
+        confirmed=True：推进到下一阶段（前端再调 execute 触发执行）。
+        confirmed=False：退回该阶段 pending，feedback 作为修订意见，由前端再调 execute 重生成。
+        """
         from app.ai.agents import AgentFactory
         async with async_session_maker() as cfg_session:
             await AgentFactory.load_llm_from_db(cfg_session)
@@ -7531,9 +7759,14 @@ class DevPipelineManager:
                 })
             return result
 
-    # ==================== 查询方法 ====================
+    # ==================== 查询方法（API 层调用） ====================
 
     async def get_pipeline_status(self, pipeline_id: str) -> Dict[str, Any]:
+        """返回流水线完整状态（含 stages/skill snapshot/workspace/git/deploy 信息）。
+
+        对 frontend_contract_review 模式下的 prototype + 现有功能改造 + 未选页面的场景，
+        会现场计算页面候选并塞进 structured_output。
+        """
         async with async_session_maker() as session:
             pipe = await self._load_pipeline(session, pipeline_id)
             status = self._to_status_dict(pipe)
@@ -7579,6 +7812,7 @@ class DevPipelineManager:
             return status
 
     async def get_preview(self, pipeline_id: str) -> Dict[str, Any]:
+        """取最新预览（prototype 优先，ui_preview 兜底）的 HTML 与原始输出。"""
         async with async_session_maker() as session:
             pipe = await self._load_pipeline(session, pipeline_id)
             stages = self._parse_stages(pipe)
@@ -7592,6 +7826,7 @@ class DevPipelineManager:
             }
 
     async def get_pipeline_artifact(self, pipeline_id: str) -> Dict[str, Any]:
+        """取对外暴露的产物视图（预览/契约/前端文件/审查/报告）。"""
         async with async_session_maker() as session:
             pipe = await self._load_pipeline(session, pipeline_id)
             stages = self._parse_stages(pipe)
@@ -7605,6 +7840,7 @@ class DevPipelineManager:
             return artifact
 
     async def get_pipeline_frontend_project_snapshot(self, pipeline_id: str) -> Dict[str, Any]:
+        """取该流水线锁定时的前端 Project Skill 快照（无则空 dict）。"""
         async with async_session_maker() as session:
             pipe = await self._load_pipeline(session, pipeline_id)
             pipe_config = json.loads(pipe.skill_config or "{}")
@@ -7614,6 +7850,7 @@ class DevPipelineManager:
             return dict(snapshot)
 
     async def get_stage_output(self, pipeline_id: str, stage: str = "") -> Dict[str, Any]:
+        """取指定阶段的产物（output/structured_output/preview_html/code_files）。"""
         async with async_session_maker() as session:
             pipe = await self._load_pipeline(session, pipeline_id)
             stages = self._parse_stages(pipe)
@@ -7630,6 +7867,11 @@ class DevPipelineManager:
 
     async def update_stage_output(self, pipeline_id: str, stage: str, output: str,
                                   skip_validation: bool = False) -> Dict[str, Any]:
+        """人工编辑覆盖某阶段产物（needs_human 场景：人工改完代码后再 approve）。
+
+        skip_validation=True 时不强制可运行性校验（人工明确覆盖时只记警告）；
+        否则校验失败抛 ValueError，由 API 层转 HTTP 422。
+        """
         target = str(stage or "").strip()
         if not target:
             raise ValueError("阶段不能为空")
@@ -7700,6 +7942,7 @@ class DevPipelineManager:
             }
 
     async def list_pipelines(self, tenant_id: int = 0) -> List[Dict[str, Any]]:
+        """列出租户内所有未删流水线（按创建时间倒序，无 eval 分数）。"""
         async with async_session_maker() as session:
             query = select(DevPipeline).where(DevPipeline.is_deleted == 0)
             if tenant_id:
@@ -7947,6 +8190,7 @@ class DevPipelineManager:
             }
 
     async def delete_pipeline(self, pipeline_id: str, tenant_id: int = 0) -> None:
+        """软删除流水线（is_deleted=1）。tenant_id 非零时附加租户过滤。"""
         """软删除流水线"""
         async with async_session_maker() as session:
             query = update(DevPipeline).where(
@@ -7962,6 +8206,10 @@ class DevPipelineManager:
             await session.commit()
 
     async def rollback(self, pipeline_id: str, target_stage: str = None, feedback: str = "") -> Dict[str, Any]:
+        """回退到目标阶段：把目标阶段及之后所有阶段重置 pending，重置 retry_count。
+
+        target_stage=None 默认回退到当前阶段的上一阶段；不允许回退到当前阶段之后。
+        """
         async with async_session_maker() as session:
             pipe = await self._load_pipeline(session, pipeline_id)
             pipe_config = json.loads(pipe.skill_config or "{}")

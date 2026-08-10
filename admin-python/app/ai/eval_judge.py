@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def _stringify(value: Any) -> str:
+    """把任意值转成字符串：字符串原样返回，其它缩进 JSON 序列化。"""
     if isinstance(value, str):
         return value
     return json.dumps(value, ensure_ascii=False, indent=2)
@@ -46,6 +47,7 @@ def build_judge_prompt(input_spec: Any, output: str, criteria: Any) -> str:
 
 
 def _extract_json(text: str) -> Optional[dict]:
+    """从模型输出抽取 JSON：先整体解析，失败再用正则抓首个 {...} 块；都失败返回 None。"""
     try:
         return json.loads(text)
     except Exception:

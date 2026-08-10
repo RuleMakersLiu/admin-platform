@@ -1,4 +1,13 @@
-"""Run generated frontend artifacts in an isolated local dev server."""
+"""在隔离的本地开发服务器中运行生成的前端产物。
+
+本模块把流水线生成的前端代码跑起来，供预览、评测、E2E 使用。主要分区：
+- 进程注册表与令牌：维护 pipeline_id → 预览进程 entry，签发/校验一次性预览 token
+- 端口分配：在配置区间内探测可用端口并绑定预览进程
+- 文件写入与补丁：安全写入生成文件、修正 Vue/JS 常见错误、注入路由/权限/桩模块
+- 脚手架宿主：无项目快照时从生成代码搭最小 vite 宿主（Vue3/Vue2/React）
+- 项目克隆与依赖安装：克隆真实前端仓库、选包管理器、装依赖、起 dev server
+- 预览生命周期：start/proxy/stop/reap_idle，含就绪探测与返回 HTML 改写
+"""
 import asyncio
 import hashlib
 import json
@@ -24,15 +33,23 @@ logger = logging.getLogger(__name__)
 
 class SandboxPreviewService:
     def __init__(self) -> None:
+        # 预览进程注册表：pipeline_id → entry（含 handle/port/root/tokens 等）
         self._processes: Dict[str, Dict[str, Any]] = {}
+        # 已占用端口（含分配中尚未注册的），避免并发 start 撞端口
         self._reserved_ports: set[int] = set()
+        # 注册表全局锁；保证端口分配/entry 增删原子
         self._process_lock = asyncio.Lock()
+        # 每个 pipeline 一把锁，串行化同一 pipeline 的 start/stop
         self._pipeline_locks: Dict[str, asyncio.Lock] = {}
+        # 同时启动预览的并发上限（npm install/dev 是重操作）
         self._start_semaphore = asyncio.Semaphore(3)
+        # 预览 token 有效期：8 小时
         self._token_ttl_seconds = 8 * 60 * 60
+        # 单 pipeline 累计 token 上限，超过按到期时间淘汰旧 token
         self._max_tokens_per_pipeline = 80
 
     async def _pipeline_lock(self, pipeline_id: str) -> asyncio.Lock:
+        """获取（按需创建）该 pipeline 专属的串行锁。"""
         async with self._process_lock:
             lock = self._pipeline_locks.get(pipeline_id)
             if lock is None:
@@ -41,6 +58,7 @@ class SandboxPreviewService:
             return lock
 
     def _prune_tokens(self, entry: Dict[str, Any]) -> None:
+        """清理过期 token；若仍超上限，按到期时间再淘汰最旧的。"""
         tokens = entry.setdefault("tokens", {})
         now = time.time()
         for token, expires_at in list(tokens.items()):
@@ -52,6 +70,7 @@ class SandboxPreviewService:
             tokens.pop(token, None)
 
     def _issue_token(self, entry: Dict[str, Any]) -> str:
+        """签发一个新的预览 token，并刷新 entry 的 started_at/last_active。"""
         self._prune_tokens(entry)
         token = secrets.token_urlsafe(32)
         entry.setdefault("tokens", {})[token] = time.time() + self._token_ttl_seconds
@@ -61,13 +80,17 @@ class SandboxPreviewService:
         return token
 
     def _preview_root(self, pipeline_id: str) -> Path:
+        """该 pipeline 预览项目的工作目录（workspace/<pid>/real-frontend-preview）。"""
         return Path(settings.pipeline_workspace_root) / pipeline_id / "real-frontend-preview"
 
     async def _allocate_port(self) -> int:
+        """在配置区间内分配一个可用端口（线程安全）。"""
         async with self._process_lock:
             return self._allocate_port_locked()
 
     def _allocate_port_locked(self) -> int:
+        """在配置区间内逐个 bind 探测可用端口（调用方须持 _process_lock）。"""
+        # 已占用端口 = 已注册进程端口 ∪ 预留端口
         used = {int(item["port"]) for item in self._processes.values() if item.get("port")} | self._reserved_ports
         for port in range(settings.pipeline_preview_port_start, settings.pipeline_preview_port_end + 1):
             if port in used:
@@ -76,6 +99,7 @@ class SandboxPreviewService:
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 try:
                     sock.bind((settings.pipeline_preview_host, port))
+                # bind 失败说明端口被占用，跳过
                 except OSError:
                     continue
                 self._reserved_ports.add(port)
@@ -83,6 +107,7 @@ class SandboxPreviewService:
         raise RuntimeError("没有可用的预览端口")
 
     def _safe_write_files(self, root: Path, files: Dict[str, str], skip_patches: bool = False) -> None:
+        """把生成文件安全写入 root：禁止路径穿越，按类型打补丁修正常见错误。"""
         root.mkdir(parents=True, exist_ok=True)
         root_resolved = root.resolve()
         for raw_path, content in files.items():
@@ -106,6 +131,7 @@ class SandboxPreviewService:
             target.write_text(text_content, encoding="utf-8")
 
     def _patch_generated_script_content(self, content: str) -> str:
+        """修补 JS/TS：HTML 注释转 JS 注释、@hc-agent/http 替换为 sandbox mock。"""
         patched = re.sub(r"<!--\s*(.*?)\s*-->", lambda match: f"// {match.group(1).strip()}", content, flags=re.S)
         patched = re.sub(
             r"^\s*import\s+\{\s*http\s*\}\s+from\s+['\"]@hc-agent/http['\"]\s*;?\s*$",
@@ -121,6 +147,7 @@ class SandboxPreviewService:
         return patched
 
     def _patch_generated_vue_content(self, content: str) -> str:
+        """修补 Vue 文件：稳定表格契约、修非法尺寸绑定、补 moment/权限/字典组件导入。"""
         patched = self._patch_stable_contract(content)
         patched = self._patch_invalid_vue_dimension_bindings(patched)
         patched = self._patch_missing_moment_instance(patched)
@@ -178,6 +205,7 @@ class SandboxPreviewService:
         return _patch_stable_table_contract_content(content)
 
     def _generated_vue_route_specs(self, frontend_files: Dict[str, str]) -> list[Dict[str, str]]:
+        """从生成的 src/views/**/*.vue 推导路由规格（path/name/是否导航项），并排序。"""
         specs: list[Dict[str, str]] = []
 
         for raw_path in sorted(frontend_files):
@@ -208,6 +236,7 @@ class SandboxPreviewService:
         return sorted(specs, key=route_rank)
 
     def _install_generated_vue_routes(self, root: Path, frontend_files: Dict[str, str]) -> str:
+        """把生成页注入路由配置（静态路由表 + 动态菜单 + 权限白名单），返回默认入口路径。"""
         specs = self._generated_vue_route_specs(frontend_files)
         if not specs:
             return ""
@@ -338,10 +367,12 @@ class SandboxPreviewService:
         permission_file.write_text(content, encoding="utf-8")
 
     def _files_hash(self, frontend_files: Dict[str, str]) -> str:
+        """计算生成文件集合的 SHA-256，用于判断内容是否变化（决定是否复用预览）。"""
         payload = json.dumps(frontend_files, ensure_ascii=False, sort_keys=True)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def _miniapp_html_preview_content(self, frontend_files: Dict[str, str]) -> Optional[str]:
+        """检测生成文件是否含小程序页面 + 预置 HTML 预览页；有则返回该 HTML 内容。"""
         normalized_paths = [str(path).replace("\\", "/").lstrip("/") for path in frontend_files]
         has_miniapp_page = any(
             (
@@ -370,11 +401,13 @@ class SandboxPreviewService:
         return None
 
     def _redact_sensitive_output(self, output: str) -> str:
+        """脱敏命令输出中的内联凭据（oauth2:token@ / 密码@），避免落到日志/错误信息。"""
         redacted = re.sub(r"(https?://[^:/@\s]+:)[^@\s]+@", r"\1***@", output or "")
         redacted = re.sub(r"(oauth2:)[^@\s]+@", r"\1***@", redacted)
         return redacted
 
     def _install_miniapp_html_preview(self, root: Path, frontend_files: Dict[str, str]) -> Optional[str]:
+        """把小程序 HTML 预览页落到 root/public，返回文件名（无则返回 None）。"""
         content = self._miniapp_html_preview_content(frontend_files)
         if not content:
             return None
@@ -385,6 +418,7 @@ class SandboxPreviewService:
         return preview_name
 
     def _install_uniapp_monorepo_preview_files(self, root: Path, frontend_files: Dict[str, str]) -> str:
+        """把 uniapp monorepo 生成页写入各 app 子包，并登记到 pages.json，返回首页路径。"""
         first_page = ""
         pages_by_app: Dict[str, list[str]] = {}
 
@@ -518,6 +552,7 @@ server.listen(port, host, () => {
         return preview_name
 
     def _generated_api_probe_specs(self, frontend_files: Dict[str, str]) -> list[Dict[str, Any]]:
+        """从 src/api/* 抽取生成的 API 路径（list/detail/info/get），用于启动后冒烟预检。"""
         specs: Dict[str, Dict[str, Any]] = {}
 
         def strip_js_comments(content: str) -> str:
@@ -576,6 +611,7 @@ server.listen(port, host, () => {
         return [specs[path] for path in sorted(specs)]
 
     async def _smoke_test_generated_apis(self, pipeline_id: str, frontend_files: Dict[str, str]) -> None:
+        """冒烟预检生成代码引用的 API：取前 5 个路径，校验返回 JSON 结构符合预期。"""
         specs = self._generated_api_probe_specs(frontend_files)
         if not specs:
             return
@@ -946,6 +982,11 @@ server.listen(port, host, () => {
 
 
     async def _wait_ready(self, pipeline_id: str, port: int, timeout: int = 120, preview_path: str = "", connect_host: str = "") -> None:
+        """轮询预览 URL 直到首页可访问，超时抛异常。
+
+        关键：要排除「未编译模板」响应（含 htmlWebpackPlugin.options / <% %> 占位符），
+        那代表 webpack 还在编译中、HTML 尚未渲染——不能视为就绪。
+        """
         deadline = time.time() + timeout
         host = connect_host or settings.pipeline_preview_host
         url = f"http://{host}:{port}{self._preview_base(pipeline_id)}{preview_path}"
@@ -954,11 +995,13 @@ server.listen(port, host, () => {
                 try:
                     response = await client.get(url)
                     body = response.text[:10000] if "text/html" in response.headers.get("content-type", "") else ""
+                    # 未编译模板特征：webpack 还在编译，HTML 模板占位符未替换
                     is_uncompiled_template = (
                         "htmlWebpackPlugin.options" in body
                         or "<%=" in body
                         or "<% for" in body
                     )
+                    # 状态码 <500 且不是未编译模板，才算真正就绪
                     if response.status_code < 500 and not is_uncompiled_template:
                         return
                 except Exception:
@@ -981,8 +1024,11 @@ server.listen(port, host, () => {
         return _on_line
 
     async def _run(self, args: list[str], cwd: Path, timeout: int = 180) -> tuple[int, str]:
-        # 安全：git clone / npm install（postinstall 脚本）/ vite 都执行不可信代码——走统一安全原语
-        # （剔除 admin 凭据 + 非 root 降权）；超时转为带脱敏命令的 RuntimeError。
+        """执行子进程并返回 (退出码, 脱敏输出)；超时转 RuntimeError。
+
+        安全：git clone / npm install（postinstall 脚本）/ vite 都执行不可信代码——走统一安全原语
+        （剔除 admin 凭据 + 非 root 降权）；超时转为带脱敏命令的 RuntimeError。
+        """
         from app.services.sandbox_security import run_sandboxed
         try:
             code, output = await run_sandboxed(args, cwd=str(cwd), timeout=timeout)
@@ -991,12 +1037,14 @@ server.listen(port, host, () => {
         return code, self._redact_sensitive_output(output)
 
     async def _node_version(self) -> str:
+        """获取当前 node 版本号（用于判断 node_modules 是否需重装）。"""
         code, output = await self._run(["node", "-v"], Path("/tmp"), timeout=10)
         if code != 0:
             return ""
         return output.strip()
 
     def _load_env_file(self, root: Path, filename: str) -> Dict[str, str]:
+        """解析项目根下的 .env 文件为 dict（跳过注释/空行，去引号）。"""
         env_path = root / filename
         values: Dict[str, str] = {}
         if not env_path.exists():
@@ -1010,6 +1058,7 @@ server.listen(port, host, () => {
         return values
 
     async def _project_git_info(self, project_id: str, fallback_repo_url: str = "") -> Dict[str, Any]:
+        """查库拿到项目的仓库地址/分支/克隆 token，拼出带凭据的 clone_url。"""
         repo_url = fallback_repo_url or ""
         branch = "main"
         git_config_id = None
@@ -1070,12 +1119,14 @@ server.listen(port, host, () => {
         }
 
     def _canonical_git_url(self, url: str) -> str:
+        """归一化 git URL（去凭据、去 .git、去尾斜杠），用于比较是否同一仓库。"""
         url = (url or "").strip()
         url = re.sub(r"^(https?://)[^/@]+@", r"\1", url)
         url = url.removesuffix(".git").rstrip("/")
         return url
 
     async def _clone_project(self, root: Path, project_info: Dict[str, Any]) -> None:
+        """浅克隆项目仓库到 root：优先指定分支，失败再退默认分支；写项目标识 marker。"""
         git_info = await self._project_git_info(
             str(project_info.get("project_id") or ""),
             str(project_info.get("repo_url") or ""),
@@ -1136,27 +1187,36 @@ server.listen(port, host, () => {
         return f"克隆前端项目失败: {raw_output}"
 
     async def _prepare_project_root(self, root: Path, project_info: Dict[str, Any]) -> None:
+        """准备预览项目根目录：复用已克隆仓库或全新克隆。
+
+        复用条件：root 已是 git 仓库且 remote 指向同一仓库；否则删掉重克隆。
+        复用时做 git reset --hard + clean（保留 node_modules）保证干净基线。
+        """
         if not project_info.get("project_id") and not project_info.get("repo_url"):
             raise RuntimeError("流水线没有匹配到前端项目快照，无法启动真实前端项目预览")
         git_info = await self._project_git_info(
             str(project_info.get("project_id") or ""),
             str(project_info.get("repo_url") or ""),
         )
+        # 已有 git 仓库 + package.json：判断能否复用
         if root.exists() and (root / ".git").exists() and (root / "package.json").exists():
             code, remote_output = await self._run(["git", "remote", "get-url", "origin"], root, timeout=20)
             current_repo = remote_output.strip() if code == 0 else ""
             expected_repo = git_info.get("repo_url") or project_info.get("repo_url") or ""
+            # remote 指向不同仓库 → 旧目录属于别的项目，删掉重克隆
             if expected_repo and self._canonical_git_url(current_repo) != self._canonical_git_url(expected_repo):
                 shutil.rmtree(root)
                 root.parent.mkdir(parents=True, exist_ok=True)
                 await self._clone_project(root, project_info)
                 return
+            # 同一仓库：硬重置 + 清理未跟踪文件（保留 node_modules 省重装）
             code, output = await self._run(["git", "reset", "--hard", "HEAD"], root, timeout=60)
             if code != 0:
                 raise RuntimeError(f"重置前端项目失败: {output[-500:]}")
             code, output = await self._run(["git", "clean", "-fd", "-e", "node_modules"], root, timeout=60)
             if code != 0:
                 raise RuntimeError(f"清理前端项目失败: {output[-500:]}")
+            # 项目标识 marker：校验目录是否归属当前 pipeline 的项目，不一致则重克隆
             marker = root / ".sandbox-preview-project.json"
             if marker.exists():
                 try:
@@ -1181,12 +1241,14 @@ server.listen(port, host, () => {
                 )
             return
 
+        # 无既有仓库：清掉残留后全新克隆
         if root.exists():
             shutil.rmtree(root)
         root.parent.mkdir(parents=True, exist_ok=True)
         await self._clone_project(root, project_info)
 
     def _package_manager(self, root: Path) -> str:
+        """探测项目用的包管理器：优先 lockfile/packageManager 字段，默认 npm。"""
         package_json = root / "package.json"
         package: Dict[str, Any] = {}
         if package_json.exists():
@@ -1202,8 +1264,14 @@ server.listen(port, host, () => {
         return "npm"
 
     def _install_command(self, root: Path) -> list[str]:
+        """按包管理器构造依赖安装命令：统一走 npmmirror 镜像 + 本地缓存加速。
+
+        pnpm/yarn/npm 各自的缓存目录都指向 workspace 下的专用目录，
+        使跨 pipeline 的依赖缓存可复用，显著减少重复下载。
+        """
         package_manager = self._package_manager(root)
         cache_root = Path(settings.pipeline_workspace_root)
+        # pnpm：用 store-dir 共享内容寻址存储
         if package_manager == "pnpm":
             return [
                 "pnpm",
@@ -1213,6 +1281,7 @@ server.listen(port, host, () => {
                 "--store-dir",
                 str(cache_root / ".pnpm-store"),
             ]
+        # yarn：用 cache-folder 共享缓存
         if package_manager == "yarn":
             return [
                 "yarn",
@@ -1221,6 +1290,7 @@ server.listen(port, host, () => {
                 "--cache-folder",
                 str(cache_root / ".yarn-cache"),
             ]
+        # npm：关闭审计/赞助、放宽 peer 依赖、共享 cache
         return [
             "npm",
             "install",
@@ -1243,6 +1313,7 @@ server.listen(port, host, () => {
         return sorted(apps)
 
     def _select_dev_script(self, scripts: Dict[str, Any], frontend_files: Optional[Dict[str, str]] = None) -> str:
+        """从 package.json scripts 选 dev 启动脚本：优先 monorepo 子 app 的 h5 脚本，再退 serve/dev/start/preview。"""
         app_names = self._generated_apps(frontend_files or {})
         for app in app_names:
             candidates = [
@@ -1262,6 +1333,12 @@ server.listen(port, host, () => {
         raise RuntimeError("前端项目没有 dev/serve/start/preview 启动脚本")
 
     def _dev_command(self, root: Path, port: int, frontend_files: Optional[Dict[str, str]] = None, bind_host: str = "") -> list[str]:
+        """构造 dev server 启动命令：选脚本 + 注入 host/port/base。
+
+        base 必须设为 sandbox-preview 前缀路径，让生成页的资源/路由都落在
+        /api/flow/pipeline/<pid>/sandbox-preview/ 下，便于 admin-python 反代。
+        vite 项目额外加 --strictPort 防端口漂移。
+        """
         package_json = root / "package.json"
         if not package_json.exists():
             raise RuntimeError("匹配到的前端项目没有 package.json，无法启动真实项目预览")
@@ -1272,12 +1349,15 @@ server.listen(port, host, () => {
         package_manager = self._package_manager(root)
         script_command = str(scripts.get(script, ""))
         host = bind_host or settings.pipeline_preview_host
+        # --host/--port 透传给 vite/vue-cli dev server
         args = [package_manager, "run", script, "--", "--host", host, "--port", str(port)]
+        # vite 项目：固定端口 + 设 base 为 sandbox-preview 前缀，资源路径对齐反代
         if (root / "vite.config.js").exists() or "vite" in script_command:
             args.extend(["--strictPort", "--base", f"/api/flow/pipeline/{root.parent.name}/sandbox-preview/"])
         return args
 
     def _preview_base(self, pipeline_id: str) -> str:
+        """该 pipeline 预览的反代 URL 前缀（/api/flow/pipeline/<pid>/sandbox-preview/）。"""
         return f"/api/flow/pipeline/{pipeline_id}/sandbox-preview/"
 
     def _patch_vue_cli_preview_base(self, root: Path) -> None:
@@ -1445,6 +1525,7 @@ server.listen(port, host, () => {
                 config_file.write_text(patched, encoding="utf-8")
 
     def _clear_preview_vite_cache(self, root: Path, frontend_files: Dict[str, str]) -> None:
+        """清掉 vite 预构建缓存，避免上次构建的陈旧依赖干扰本次生成代码。"""
         candidates = [root / "node_modules" / ".vite"]
         for app_name in self._generated_apps(frontend_files):
             candidates.append(root / "apps" / app_name / "node_modules" / ".vite")
@@ -1453,6 +1534,7 @@ server.listen(port, host, () => {
                 shutil.rmtree(cache_dir, ignore_errors=True)
 
     def _api_base_url_for_preview(self, root: Path, project_env: Dict[str, str], pipeline_id: str) -> str:
+        """决定前端 API base URL：项目代码引用 /api 时改写到 sandbox-preview 前缀，否则沿用配置。"""
         configured = project_env.get("VUE_APP_API_BASE_URL") or ""
         if configured.rstrip("/") != "/api":
             return configured
@@ -1470,6 +1552,7 @@ server.listen(port, host, () => {
         return configured
 
     def _preview_proxy_targets(self, project_env: Dict[str, str]) -> Dict[str, str]:
+        """解析前端 dev server 反代目标（api/java/log），缺省抛错——无目标无法跑通真实接口。"""
         test_proxy = (settings.pipeline_preview_api_proxy or project_env.get("VUE_APP_PROXY") or "").rstrip("/")
         if not test_proxy:
             raise RuntimeError("前端项目缺少 VUE_APP_PROXY，且系统未配置 PIPELINE_PREVIEW_API_PROXY，无法确定真实 API 测试域名")
@@ -1480,6 +1563,7 @@ server.listen(port, host, () => {
         }
 
     async def start(self, pipeline_id: str, frontend_files: Dict[str, str], project_info: Dict[str, Any]) -> Dict[str, Any]:
+        """启动（或复用）该流水线的真实前端预览：准备项目→写文件→装依赖→起 dev→等就绪→签发 token。"""
         if not frontend_files:
             raise RuntimeError("当前流水线还没有生成前端代码，无法启动真实预览")
         if not shutil.which("npm"):
@@ -1635,6 +1719,7 @@ server.listen(port, host, () => {
             return self._response(pipeline_id, entry)
 
     def _response(self, pipeline_id: str, entry: Dict[str, Any]) -> Dict[str, Any]:
+        """组装返回给调用方的预览信息（URL/token/项目元数据/代理目标）。"""
         project_info = entry.get("project_info") or {}
         marker_info: Dict[str, Any] = {}
         marker = Path(str(entry.get("root") or "")) / ".sandbox-preview-project.json"
@@ -1662,6 +1747,7 @@ server.listen(port, host, () => {
         }
 
     def validate_token(self, pipeline_id: str, token: str) -> bool:
+        """校验预览 token 是否有效（恒定时间比较，防时序探测）。"""
         entry = self._processes.get(pipeline_id)
         if not entry or not token:
             return False
@@ -1669,6 +1755,7 @@ server.listen(port, host, () => {
         return any(secrets.compare_digest(issued, token) for issued in entry.get("tokens", {}))
 
     def is_running(self, pipeline_id: str) -> bool:
+        """该流水线的预览进程是否仍在运行。"""
         entry = self._processes.get(pipeline_id)
         return bool(entry and entry["handle"].returncode is None)
 
@@ -1716,6 +1803,7 @@ server.listen(port, host, () => {
         return len(stale)
 
     def generated_preview_path(self, pipeline_id: str) -> str:
+        """获取该流水线生成页的默认预览路由（去前导斜杠）。"""
         entry = self._processes.get(pipeline_id) or {}
         return str(entry.get("generated_preview_path") or "").lstrip("/")
 
@@ -1728,11 +1816,19 @@ server.listen(port, host, () => {
         method: str = "GET",
         body: bytes = b"",
     ) -> httpx.Response:
+        """把对预览的请求反代到对应 vite/dev server，并对返回 HTML 注入运行时改写脚本。
+
+        - 按 path 前缀分流：sockjs/webpack dev server/业务 API/页面各走各的 base 路径
+        - 页面 404 兜底回首页（SPA history mode）
+        - HTML 响应注入 JS，把页面内 fetch/XHR/beacon 的 API 调用改写到 sandbox 前缀
+        """
         entry = self._processes.get(pipeline_id)
         if not entry or entry["handle"].returncode is not None:
             raise RuntimeError("真实预览服务未启动")
         host = entry["connect_host"]
+        # 记录最近访问时间，供 reap_idle 判定空闲回收
         entry["last_active"] = time.time()
+        # 按路径前缀分流到不同的 target base
         if path.startswith("sockjs-node/"):
             target = f"http://{host}:{entry['port']}{self._preview_base(pipeline_id)}{path}"
         elif path.startswith("__webpack_dev_server__/"):
@@ -1740,6 +1836,7 @@ server.listen(port, host, () => {
         elif path.startswith(("api/", "javaApi/", "logApi/", "socket.io/")):
             target = f"http://{host}:{entry['port']}/{path}"
         else:
+            # 页面请求：未指定 path 时落到生成页/HTML 预览默认入口
             generated_path = entry.get("generated_preview_path") if not path else ""
             is_uniapp_page = str(generated_path or "").lstrip("/").startswith("pages/")
             preview_path = entry.get("html_preview_path") if not path and not is_uniapp_page else ""
@@ -1751,6 +1848,7 @@ server.listen(port, host, () => {
         headers = {k: v for k, v in request_headers.items() if k.lower() not in {"host", "connection", "content-length"}}
         async with httpx.AsyncClient(follow_redirects=False, timeout=30.0) as client:
             response = await client.request(method, target, headers=headers, content=body)
+            # SPA history mode 兜底：GET 页面 404（且非静态资源）回退到首页
             if (
                 method == "GET"
                 and response.status_code == 404
@@ -1766,6 +1864,7 @@ server.listen(port, host, () => {
                 response = await client.request("GET", fallback_target, headers=headers)
         content_type = response.headers.get("content-type", "")
         if "text/html" in content_type:
+            # 注入运行时改写：把页面内 API 调用重定向到 sandbox-preview 前缀
             prefix = f"/api/flow/pipeline/{pipeline_id}/sandbox-preview/"
             text_body = response.text
             runtime_proxy_script = (
