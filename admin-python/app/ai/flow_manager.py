@@ -17,6 +17,8 @@
   - pipeline_page_design.py      页面设计解析（期望页面路径 / 组件 / API 端点需求）
   - pipeline_output_parse.py     LLM 输出解析 + 代码审查结果归一化
   - pipeline_preview_validation.py  前端预览代码覆盖校验 + 确定性补丁
+  - pipeline_eval_mixin.py       DevPipelineManager 的 eval 子域 mixin（评分/judge/质量门）
+  - pipeline_queries_mixin.py    DevPipelineManager 的查询子域 mixin（状态/列表/统计）
 
 本文件内（自上而下）：
   1. 常量/契约定义 —— 阶段定义、重试上限、评审关卡阈值、流水线状态枚举

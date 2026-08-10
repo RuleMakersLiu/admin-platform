@@ -267,6 +267,8 @@ admin-platform/
 │       │   ├── pipeline_page_design.py      # 页面设计解析（期望路径/组件/API 端点需求）
 │       │   ├── pipeline_output_parse.py     # LLM 输出解析 + 代码审查结果归一化
 │       │   ├── pipeline_preview_validation.py  # 前端预览代码覆盖校验 + 确定性补丁
+│       │   ├── pipeline_eval_mixin.py          # DevPipelineManager eval 子域 mixin
+│       │   ├── pipeline_queries_mixin.py       # DevPipelineManager 查询子域 mixin
 │       │   ├── agents.py         # Agent 工厂
 │       │   ├── skills.py         # 技能注册表
 │       │   └── mcp_server.py     # MCP 协议
