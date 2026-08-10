@@ -606,7 +606,7 @@ def _build_repair_tasks_from_issues(issues: List[str]) -> List[Dict[str, Any]]:
                 add_task("component_usage", f"补齐项目组件 {component}", text, component)
             continue
 
-        page_match = re.search(r'主页面["\'](.+?)["\']没有对应的前端页面文件', text)
+        page_match = re.search(r'主页面["“”‘’「」](.+?)["“”‘’「」]没有对应的前端页面文件', text)
         if page_match:
             page_name = page_match.group(1)
             add_task("page_file", f"补齐页面文件：{page_name}", text, page_name)
