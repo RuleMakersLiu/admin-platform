@@ -368,6 +368,7 @@ export default function ProductPortal() {
   const [gitMergeStrategy, setGitMergeStrategy] = useState('merge')
   const [gitSubmitting, setGitSubmitting] = useState(false)
   const [running, setRunning] = useState(false)
+  const [needsHumanDismissed, setNeedsHumanDismissed] = useState(false)
   const [pipelineId, setPipelineId] = useState('')
   const [status, setStatus] = useState<PipelineStatus | null>(null)
   const [artifact, setArtifact] = useState<PipelineArtifact | null>(null)
@@ -1519,8 +1520,8 @@ export default function ProductPortal() {
             )}
             {status?.status === 'needs_human' && (
               <NeedsHumanDialog
-                open={!!pipelineId}
-                onClose={() => {}}
+                open={!!pipelineId && !needsHumanDismissed}
+                onClose={() => setNeedsHumanDismissed(true)}
                 pipelineId={pipelineId}
                 stageName={stageLabel[activeStage] || activeStage}
                 reason={humanReview?.reason || `自动重试耗尽${humanReview?.retry_count ? `（已重试 ${humanReview.retry_count} 次）` : ''}`}
