@@ -1,7 +1,8 @@
 """消息模块数据模式"""
 import time
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic.alias_generators import to_camel
 from enum import Enum
 
 
@@ -91,7 +92,8 @@ class SendMessageRequest(BaseModel):
     channel_id: str
     content: str
     recipient: Optional[str] = None
-    message_type: Optional[MessageType] = None
+    # 未指定类型时默认文本——绝大多数主动发送的消息都是文本
+    message_type: MessageType = MessageType.TEXT
     attachments: Optional[List[UnifiedAttachment]] = None
     metadata: Optional[Dict[str, Any]] = None
     reply_to: Optional[str] = None
@@ -114,7 +116,13 @@ class AdapterConfig(BaseModel):
 
 
 class UnifiedMessage(BaseModel):
-    """统一消息格式"""
+    """统一消息格式。
+
+    序列化支持 camelCase 别名（model_dump(by_alias=True) → messageId/channelType…），
+    构造仍用 snake_case 字段名（populate_by_name）。
+    """
+    model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
+
     message_id: str
     channel_type: ChannelType
     channel_id: str
@@ -126,13 +134,15 @@ class UnifiedMessage(BaseModel):
     sender_name: Optional[str] = None
     sender_avatar: Optional[str] = None
     sender_type: Optional[str] = None
-    message_type: Optional[MessageType] = None
+    # 未指定类型时默认文本（带附件的消息应显式传 IMAGE/FILE 等）
+    message_type: Optional[MessageType] = MessageType.TEXT
     raw_content: Optional[Dict[str, Any]] = None
     attachments: Optional[List[UnifiedAttachment]] = None
     location: Optional[UnifiedLocation] = None
     contact: Optional[UnifiedContact] = None
     reply_to: Optional[str] = None
-    status: Optional[MessageStatus] = None
+    # 新建消息默认待发送
+    status: Optional[MessageStatus] = MessageStatus.PENDING
     metadata: Optional[Dict[str, Any]] = None
     tenant_id: Optional[int] = None
 

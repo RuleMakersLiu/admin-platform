@@ -1,7 +1,4 @@
 """多渠道消息模块测试"""
-import pytest
-from datetime import datetime
-
 from app.messaging.schemas import (
     UnifiedMessage,
     UnifiedAttachment,
@@ -175,7 +172,3 @@ class TestChannelType:
         assert ChannelType.SLACK.value == "slack"
         assert ChannelType.FEISHU.value == "feishu"
         assert ChannelType.WEBSOCKET.value == "websocket"
-
-
-# pytest markers
-pytestmark = pytest.mark.asyncio
