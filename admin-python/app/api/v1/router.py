@@ -13,6 +13,7 @@ from app.api.chat import router as chat_router
 from app.api.eval_golden import router as eval_golden_router
 from app.api.eval_golden import metrics_router as eval_metrics_router
 from app.messaging.api import router as messaging_router
+from app.api.metrics import router as metrics_router
 
 api_router = APIRouter()
 
@@ -33,3 +34,4 @@ api_router.include_router(skills_router)  # Skills技能系统路由
 api_router.include_router(chat_router)  # 流式聊天路由
 api_router.include_router(eval_golden_router)  # 评测 Golden cases 路由
 api_router.include_router(eval_metrics_router)  # AI 评测指标 路由
+api_router.include_router(metrics_router)  # 生产监控路由
