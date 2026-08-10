@@ -13,7 +13,6 @@ import {
   PlayCircleOutlined,
   ReloadOutlined,
   RocketOutlined,
-  UploadOutlined,
 } from '@ant-design/icons'
 import { pipelineApi, type FrontendPageCandidate, type FrontendPageCandidates, type PipelineArtifact, type PipelineListItem, type PipelineStatus, type ProjectSkillMatch } from '@/services/pipeline'
 import CodeEditor from '@/components/CodeEditor'
