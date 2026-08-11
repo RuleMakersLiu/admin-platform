@@ -156,11 +156,11 @@ export default function AiMetricsPage() {
                 <Col span={12}>
                   <Card title="模型延迟对比（P50 / P95）" size="small">
                     <ReactECharts
-                      style={{ height: 260 }}
+                      style={{ height: 290 }}
                       option={{
                         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-                        legend: { bottom: 0, data: ['P50', 'P95'] },
-                        grid: { left: 50, right: 16, top: 12, bottom: 36 },
+                        legend: { top: 0, data: ['P50', 'P95'] },
+                        grid: { left: 50, right: 16, top: 32, bottom: 48 },
                         xAxis: { type: 'category', data: data.speed.by_model.map(m => m.model), axisLabel: { fontSize: 10, rotate: 20 } },
                         yAxis: { type: 'value', name: 'ms', splitLine: { lineStyle: { type: 'dashed', color: '#e5eaf3' } } },
                         series: [
@@ -174,11 +174,11 @@ export default function AiMetricsPage() {
                 <Col span={12}>
                   <Card title="模型 Token 消耗（入 / 出）" size="small">
                     <ReactECharts
-                      style={{ height: 260 }}
+                      style={{ height: 290 }}
                       option={{
                         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-                        legend: { bottom: 0, data: ['输入', '输出'] },
-                        grid: { left: 55, right: 16, top: 12, bottom: 36 },
+                        legend: { top: 0, data: ['输入', '输出'] },
+                        grid: { left: 55, right: 16, top: 32, bottom: 48 },
                         xAxis: { type: 'category', data: data.speed.by_model.map(m => m.model), axisLabel: { fontSize: 10, rotate: 20 } },
                         yAxis: { type: 'value', name: 'tokens', splitLine: { lineStyle: { type: 'dashed', color: '#e5eaf3' } } },
                         series: [
@@ -226,11 +226,11 @@ export default function AiMetricsPage() {
             {data.speed.by_stage.length > 0 && (
               <Card title="阶段延迟对比（均延迟 / P95）" size="small" style={{ marginTop: 16 }}>
                 <ReactECharts
-                  style={{ height: 240 }}
+                  style={{ height: 270 }}
                   option={{
                     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-                    legend: { bottom: 0, data: ['均延迟', 'P95'] },
-                    grid: { left: 55, right: 16, top: 12, bottom: 36 },
+                    legend: { top: 0, data: ['均延迟', 'P95'] },
+                    grid: { left: 55, right: 16, top: 32, bottom: 48 },
                     xAxis: { type: 'category', data: data.speed.by_stage.map(s => s.stage), axisLabel: { fontSize: 10, rotate: 20 } },
                     yAxis: { type: 'value', name: 'ms', splitLine: { lineStyle: { type: 'dashed', color: '#e5eaf3' } } },
                     series: [
