@@ -8,6 +8,7 @@ import {
   BugOutlined,
   CodeOutlined,
   FolderOutlined,
+  ExperimentOutlined,
   GithubOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
@@ -85,6 +86,18 @@ const menuItems: MenuItem[] = [
     label: '技能市场',
     permission: 'skills:market:list',
   },
+  {
+    key: '/evaluation',
+    icon: <ExperimentOutlined />,
+    label: 'Agent 测评',
+    children: [
+      { key: '/evaluation/agents', label: 'Agent 接入', permission: 'eval:agent:list' },
+      { key: '/evaluation/datasets', label: '数据集工厂', permission: 'eval:dataset:list' },
+      { key: '/evaluation/experiments', label: '实验与 A/B', permission: 'eval:experiment:view' },
+      { key: '/evaluation/reviews', label: '人工审核', permission: 'eval:review:score' },
+      { key: '/evaluation/security', label: '安全与审计', permission: 'eval:security:approve' },
+    ],
+  },
 ]
 
 function ImportIcon() {
@@ -111,6 +124,7 @@ const iconMap: Record<string, React.ReactNode> = {
   AppstoreOutlined: <AppstoreOutlined />,
   RocketOutlined: <RocketOutlined />,
   ThunderboltOutlined: <ThunderboltOutlined />,
+  ExperimentOutlined: <ExperimentOutlined />,
 }
 
 const hiddenServerMenuPaths = new Set(['/portal-select', '/developer', '/product'])

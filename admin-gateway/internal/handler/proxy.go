@@ -27,6 +27,13 @@ func ProxyToPython(c *gin.Context) {
 	proxyRequestWithStrip(c, target, prefix, "/api")
 }
 
+// ProxyToEval forwards authenticated requests to the evaluation control plane.
+func ProxyToEval(c *gin.Context) {
+	target := viper.GetString("services.eval.host") + ":" + viper.GetString("services.eval.port")
+	prefix := viper.GetString("services.eval.prefix")
+	proxyRequestWithOptions(c, target, prefix, "/api/eval", viper.GetString("services.eval.internal_token"))
+}
+
 // ProxyToGenerator 代理到代码生成服务
 func ProxyToGenerator(c *gin.Context) {
 	target := viper.GetString("services.generator.host") + ":" + viper.GetString("services.generator.port")
@@ -62,6 +69,10 @@ func proxyRequest(c *gin.Context, target string, prefix string) {
 
 // proxyRequestWithStrip 代理请求（自定义前缀剥离）
 func proxyRequestWithStrip(c *gin.Context, target string, prefix string, stripPrefix string) {
+	proxyRequestWithOptions(c, target, prefix, stripPrefix, "")
+}
+
+func proxyRequestWithOptions(c *gin.Context, target string, prefix string, stripPrefix string, internalToken string) {
 	remote, err := url.Parse("http://" + target)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -87,6 +98,12 @@ func proxyRequestWithStrip(c *gin.Context, target string, prefix string, stripPr
 		}
 		req.URL.Path = path
 
+		// Never trust caller-supplied identity or internal service headers.
+		req.Header.Del("X-Admin-Id")
+		req.Header.Del("X-Tenant-Id")
+		req.Header.Del("X-Username")
+		req.Header.Del("X-Internal-Service-Token")
+
 		log.Printf("[DEBUG] 转发到: %s%s", req.URL.Host, req.URL.Path)
 
 		// 传递用户信息到后端
@@ -98,6 +115,9 @@ func proxyRequestWithStrip(c *gin.Context, target string, prefix string, stripPr
 		}
 		if tenantID, exists := c.Get("tenantId"); exists {
 			req.Header.Set("X-Tenant-Id", toString(tenantID))
+		}
+		if internalToken != "" {
+			req.Header.Set("X-Internal-Service-Token", internalToken)
 		}
 
 		// 传递原始Authorization头

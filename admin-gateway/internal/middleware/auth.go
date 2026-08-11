@@ -229,7 +229,7 @@ func buildPermissionCandidates(path, method string) []string {
 			action = "list"
 		case "detail", "info":
 			action = "view"
-		case "create", "update", "edit", "delete", "remove", "save", "test", "execute", "confirm", "rollback", "default", "regenerate", "cancel":
+		case "create", "update", "edit", "delete", "remove", "save", "test", "execute", "run", "confirm", "rollback", "default", "regenerate", "cancel", "approve", "publish", "score", "arbitrate", "download":
 			action = last
 		default:
 			if method == "GET" {

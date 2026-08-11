@@ -36,6 +36,7 @@ const PipelineEval = lazy(() => import('@/pages/pipeline-eval'))
 const EvalGolden = lazy(() => import('@/pages/eval-golden'))
 const AiMetrics = lazy(() => import('@/pages/ai-metrics'))
 const PipelineIntervention = lazy(() => import('@/pages/pipeline-intervention'))
+const EvaluationPage = lazy(() => import('@/pages/evaluation'))
 
 class ErrorBoundary extends Component<{ children: React.ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null }
@@ -182,6 +183,14 @@ function App() {
 
             <Route path="skills">
               <Route path="market" element={withPermission('skills:market:list', <SkillMarketPage />)} />
+            </Route>
+
+            <Route path="evaluation">
+              <Route path="agents" element={withPermission('eval:agent:list', <EvaluationPage />)} />
+              <Route path="datasets" element={withPermission('eval:dataset:list', <EvaluationPage />)} />
+              <Route path="experiments" element={withPermission('eval:experiment:view', <EvaluationPage />)} />
+              <Route path="reviews" element={withPermission('eval:review:score', <EvaluationPage />)} />
+              <Route path="security" element={withPermission('eval:security:approve', <EvaluationPage />)} />
             </Route>
 
             <Route path="" element={<IndexRedirect />} />

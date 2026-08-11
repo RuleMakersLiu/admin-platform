@@ -67,6 +67,43 @@ Admin Platform 面向“把业务需求落到真实项目代码”的场景。�
 
 完成的项目分析、图谱复核和流水线交付会沉淀到知识库中，供后续需求匹配、上下文注入和图谱维护使用。
 
+## Agent 测评系统（安全控制面第一阶段）
+
+项目新增面向外部通用 Agent 的离线测评控制面：
+
+| 服务 | 技术 | 端口 | 责任边界 |
+|------|------|------|----------|
+| `admin-eval` | Python + FastAPI | 8091 | 数据集、实验、评分、统计、人工审核和成本元数据 |
+| `admin-sandbox-controller` | Go | 8092 | 校验签名后的 Trial 规格并生成固定 Kata 沙箱资源 |
+| `admin-egress-gateway` | Go | 8093 | 模型、工具和远程 Agent 代理，执行 SSRF、Scope、预算和凭证控制 |
+
+现有 Go Gateway 继续提供 JWT、租户和 RBAC 入口，React 管理台新增 Agent 接入、数据集工厂、实验与 A/B、人工审核、安全与审计页面。测评元数据使用 PostgreSQL，运行事实与成本使用 ClickHouse，任务总线使用 Kafka，Artifact 规划使用 MinIO，Trace 使用 OpenTelemetry。
+
+安全默认值：
+
+- `EVAL_EXECUTION_ENABLED=false`
+- `SANDBOX_EXECUTION_ENABLED=false`
+- `EGRESS_EXECUTION_ENABLED=false`
+- Remote HTTP/SSE Agent 必须标记为 `RUNNER_ONLY`
+- 禁止生产写工具、任意公网访问、宿主挂载和长期凭证进入 Agent 沙箱
+- G0/G1 未审批前，沙箱 Controller 只生成固定 Kata 清单，不会创建 Kubernetes 工作负载
+
+本地基础设施配置只用于联调，不构成 G1 安全边界：
+
+```bash
+docker compose -f docker/docker-compose.eval.yml config
+```
+
+详细说明：
+
+- [开发与安全启动说明](docs/evaluation/README.md)
+- [当前实现状态和未完成门禁](docs/evaluation/implementation-status.md)
+- [威胁模型](docs/security/eval-threat-model.md)
+- [安全验收清单](docs/security/eval-security-acceptance.md)
+- [PostgreSQL迁移](database/migrations/006_agent_evaluation_platform.up.sql)
+
+> 当前交付是经过测试的安全控制面基础，不是已经通过 G1/G2 的生产级不可信代码执行平台。真实 Kubernetes 变更、Artifact 代理、Kill Switch 集群联动和安全攻击验收仍必须在独立安全集群完成。
+
 ## 架构概览
 
 ```

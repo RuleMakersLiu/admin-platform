@@ -302,6 +302,7 @@ func TestSkipPermissionCheck(t *testing.T) {
 		{"auth menus", "/api/auth/menus", true},
 		{"auth tenants", "/api/auth/tenants", true},
 		{"tracking prefix", "/api/tracking/events", true},
+		{"evaluation is never skipped", "/api/eval/agent/list", false},
 		{"doc.html", "/doc.html", true},
 		{"swagger", "/swagger/index.html", true},
 		{"health", "/health", true},
@@ -376,6 +377,12 @@ func TestBuildPermissionIdentifier(t *testing.T) {
 			path:       "/api/flow/pipeline/:id/sandbox-preview/start",
 			method:     "POST",
 			wantPrefix: "flow:pipeline:preview",
+		},
+		{
+			name:       "evaluation experiment run",
+			path:       "/api/eval/experiment/11111111-1111-1111-1111-111111111111/run",
+			method:     "POST",
+			wantPrefix: "eval:experiment:run",
 		},
 	}
 

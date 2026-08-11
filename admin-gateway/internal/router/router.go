@@ -56,6 +56,9 @@ func Setup(r *gin.Engine) {
 			protected := authGroup.Group("")
 			protected.Use(middleware.Permission())
 			{
+				// Agent evaluation control plane; never add this route to permission skips.
+				protected.Any("/eval/*action", handler.ProxyToEval)
+
 				// 系统管理 -> Python后端
 				protected.Any("/system/*action", handler.ProxyToPython)
 

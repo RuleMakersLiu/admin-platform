@@ -17,6 +17,12 @@ redis:
 
 # 后端服务配置
 services:
+  eval:
+    host: 127.0.0.1
+    port: 8091
+    prefix: /api/eval
+    # Production must provide EVAL_INTERNAL_SERVICE_TOKEN.
+    internal_token: ""
   python:
     host: admin-python
     port: 8081

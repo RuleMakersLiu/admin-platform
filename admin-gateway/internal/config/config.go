@@ -29,6 +29,9 @@ func Load() error {
 	viper.BindEnv("redis.host", "REDIS_HOST")
 	viper.BindEnv("redis.password", "REDIS_PASSWORD")
 	viper.BindEnv("server.mode", "GIN_MODE")
+	viper.BindEnv("services.eval.internal_token", "EVAL_INTERNAL_SERVICE_TOKEN")
+	viper.BindEnv("services.eval.host", "EVAL_SERVICE_HOST")
+	viper.BindEnv("services.eval.port", "EVAL_SERVICE_PORT")
 
 	return viper.ReadInConfig()
 }
