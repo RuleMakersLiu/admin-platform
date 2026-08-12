@@ -1,6 +1,6 @@
 # Agent Evaluation Implementation Status
 
-Updated: 2026-08-11
+Updated: 2026-08-12
 
 This file prevents a service skeleton from being mistaken for a completed security boundary.
 
@@ -8,12 +8,14 @@ This file prevents a service skeleton from being mistaken for a completed securi
 
 - Security threat model, boundary ADR, G0/G1 acceptance checklist, permission matrix, and hard prohibitions.
 - PostgreSQL control-plane schema with tenant RLS, immutable started experiments, append-only human reviews, dual approval constraints, idempotency keys, and soft-archive fields.
-- `admin-eval` authenticated control API for Agent, dataset, and experiment metadata.
-- Gateway RBAC route and trusted-header reconstruction; caller-supplied tenant/admin/internal headers are removed.
+- `admin-eval` authenticated control API for Agent, versioned dataset and experiment metadata.
+- Dataset JSON/JSONL import, bounded Case validation, PII/credential scanning, exact duplicate rejection, source-family split leakage prevention, legacy Pipeline Golden conversion, DRAFT-only editing, append-only two-person review, immutable publish and published-version cloning.
+- HIDDEN Case redaction on ordinary list APIs; full author/reviewer reads use separate permission paths and generate audit records. Hidden-set download remains unavailable.
+- Gateway RBAC route and trusted-header reconstruction; caller-supplied tenant/admin/internal headers are removed. A single explicit dispatcher preserves legacy Pipeline Golden/metrics routes while allowlisting Agent control-plane paths.
 - Fixed Kata Job, ConfigMap, and NetworkPolicy generation with digest/registry/resource/tool-scope validation.
 - Registered-destination egress proxy with Trial-token audience/scope/expiry checks, DNS and connect-time IP validation, redirect denial, body limits, and Redis atomic budgets.
 - Deterministic score ordering, security hard gate, cost missing-value semantics, Wilson interval, exact paired McNemar, stratified bootstrap, Holm adjustment, Pareto frontier, paired randomized scheduling, and blind A/B order proof.
-- React pages for Agent intake, dataset drafts, experiments, review boundary, and security boundary.
+- React pages for Agent intake, dataset Case import/edit, legacy Golden import, review/publish/version workflow, experiments, review boundary, and security boundary.
 - Local-only Kafka, ClickHouse, MinIO, OTel, and Vault integration configuration.
 
 ## Deliberately fail-closed
@@ -34,7 +36,7 @@ This file prevents a service skeleton from being mistaken for a completed securi
 
 ## Required before G2/G3
 
-- Kafka workers, ClickHouse writer/replay, scoring workers, judge namespace, dataset import/review/publish workflow, human-review assignment/arbitration, and evidence drill-down.
+- Kafka workers, ClickHouse writer/replay, scoring workers, judge namespace, human-review assignment/arbitration, and Trial evidence drill-down.
 - Vault production auth and rotation; provider usage reconciliation.
 - Full fault-injection, 500-sandbox concurrency, 100k-Trial/day load, cancel/kill-switch SLO tests.
 - Security operations runbook, alert routing, on-call training, and signed G0/G1/G2/G3 approvals.

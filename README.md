@@ -77,7 +77,7 @@ Admin Platform 面向“把业务需求落到真实项目代码”的场景。�
 | `admin-sandbox-controller` | Go | 8092 | 校验签名后的 Trial 规格并生成固定 Kata 沙箱资源 |
 | `admin-egress-gateway` | Go | 8093 | 模型、工具和远程 Agent 代理，执行 SSRF、Scope、预算和凭证控制 |
 
-现有 Go Gateway 继续提供 JWT、租户和 RBAC 入口，React 管理台新增 Agent 接入、数据集工厂、实验与 A/B、人工审核、安全与审计页面。测评元数据使用 PostgreSQL，运行事实与成本使用 ClickHouse，任务总线使用 Kafka，Artifact 规划使用 MinIO，Trace 使用 OpenTelemetry。
+现有 Go Gateway 继续提供 JWT、租户和 RBAC 入口，React 管理台新增 Agent 接入、数据集工厂、实验与 A/B、人工审核、安全与审计页面。数据集工厂现已支持 JSON/JSONL Case 导入、脱敏与预算校验、草稿编辑、旧 Pipeline Golden 导入、双人审核、发布冻结和版本复制；普通列表会隐藏 HIDDEN Case 的输入、答案、Rubric 和确定性检查。测评元数据使用 PostgreSQL，运行事实与成本使用 ClickHouse，任务总线使用 Kafka，Artifact 规划使用 MinIO，Trace 使用 OpenTelemetry。
 
 安全默认值：
 
@@ -98,9 +98,11 @@ docker compose -f docker/docker-compose.eval.yml config
 
 - [开发与安全启动说明](docs/evaluation/README.md)
 - [当前实现状态和未完成门禁](docs/evaluation/implementation-status.md)
+- [数据集 JSONL 示例](docs/evaluation/dataset-case-template.jsonl)
 - [威胁模型](docs/security/eval-threat-model.md)
 - [安全验收清单](docs/security/eval-security-acceptance.md)
 - [PostgreSQL迁移](database/migrations/006_agent_evaluation_platform.up.sql)
+- [数据集工作流迁移](database/migrations/018_agent_eval_dataset_workflow.up.sql)
 
 > 当前交付是经过测试的安全控制面基础，不是已经通过 G1/G2 的生产级不可信代码执行平台。真实 Kubernetes 变更、Artifact 代理、Kill Switch 集群联动和安全攻击验收仍必须在独立安全集群完成。
 

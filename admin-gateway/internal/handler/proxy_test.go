@@ -58,3 +58,22 @@ func TestProxyToEvalRebuildsIdentityHeaders(t *testing.T) {
 		t.Fatalf("status=%d", response.StatusCode)
 	}
 }
+
+func TestAgentEvalDispatchDoesNotCaptureLegacyPipelineEval(t *testing.T) {
+	tests := []struct {
+		path    string
+		control bool
+	}{
+		{"/api/eval/dataset/list", true},
+		{"/api/eval/dataset/00000000-0000-4000-8000-000000000001/cases/import", true},
+		{"/api/eval/experiment/00000000-0000-4000-8000-000000000001/run", true},
+		{"/api/eval/golden-cases", false},
+		{"/api/eval/golden-cases/run-all", false},
+		{"/api/eval/metrics", false},
+	}
+	for _, test := range tests {
+		if got := isAgentEvalControlPath(test.path); got != test.control {
+			t.Errorf("isAgentEvalControlPath(%q)=%v, want %v", test.path, got, test.control)
+		}
+	}
+}

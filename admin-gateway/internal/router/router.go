@@ -56,8 +56,9 @@ func Setup(r *gin.Engine) {
 			protected := authGroup.Group("")
 			protected.Use(middleware.Permission())
 			{
-				// Agent evaluation control plane; never add this route to permission skips.
-				protected.Any("/eval/*action", handler.ProxyToEval)
+				// Pipeline eval and Agent eval share the public prefix and are safely
+				// dispatched to separate Python services by an explicit allowlist.
+				protected.Any("/eval/*action", handler.ProxyEvalDispatch)
 
 				// 系统管理 -> Python后端
 				protected.Any("/system/*action", handler.ProxyToPython)
@@ -76,9 +77,6 @@ func Setup(r *gin.Engine) {
 
 				// AI 聊天（多模态：图片/文档/语音） -> Python后端
 				protected.Any("/chat/*action", handler.ProxyToPython)
-
-				// 评测 Golden Cases -> Python后端
-				protected.Any("/eval/*action", handler.ProxyToPython)
 
 				// 智能体状态 -> Python后端
 				protected.Any("/agents/*action", handler.ProxyToPython)

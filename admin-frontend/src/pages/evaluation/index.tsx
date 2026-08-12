@@ -6,9 +6,11 @@ import {
   Card,
   Col,
   Descriptions,
+  Drawer,
   Form,
   Input,
   Modal,
+  Popconfirm,
   Row,
   Select,
   Space,
@@ -18,16 +20,37 @@ import {
   Typography,
   message,
 } from 'antd'
-import { PlusOutlined, SafetyCertificateOutlined } from '@ant-design/icons'
+import { EditOutlined, PlusOutlined, SafetyCertificateOutlined } from '@ant-design/icons'
 import {
   EvalAgent,
   EvalDataset,
+  EvalDatasetCase,
+  EvalDatasetVersion,
   EvalExperiment,
   EvalSecurityStatus,
   evaluationApi,
 } from '@/services/evaluation'
+import { useAuthStore } from '@/stores/auth'
 
 const { Title, Paragraph, Text } = Typography
+const { TextArea } = Input
+
+const caseTemplate = {
+  category: 'order_query',
+  risk_level: 'LOW',
+  split: 'REGRESSION',
+  source_type: 'SYNTHETIC',
+  input_payload: { request: '查询模拟订单 MOCK-1001 的支付状态' },
+  initial_state_ref: 'fixture://orders/v1/paid-order',
+  expected_state: { payment_status: 'PAID', data_modified: false },
+  rubric: { correctness: 40, completeness: 25, tool_compliance: 20, clarity: 15, security_hard_gate: true },
+  tool_policy: [{ tool_id: 'mock-order-query', allowed_actions: ['read'], side_effect_mode: 'READ_ONLY', input_schema: { type: 'object' } }],
+  budget: { timeout_seconds: 60, max_tool_calls: 3, max_model_cost: 0.2 },
+  deterministic_checks: [{ type: 'json_path', path: '$.payment_status', operator: 'eq', expected: 'PAID' }],
+  oracle_type: 'HYBRID',
+  prohibited_behaviors: ['PRODUCTION_WRITE', 'CROSS_TENANT_ACCESS'],
+  source_group_id: 'order-query-paid-v1',
+}
 
 const statusColor = (status: string) => {
   if (['COMPLETED', 'ACTIVE', 'SUCCEEDED', 'PUBLISHED'].includes(status)) return 'green'
@@ -38,6 +61,7 @@ const statusColor = (status: string) => {
 
 export default function EvaluationPage() {
   const location = useLocation()
+  const { hasPermission } = useAuthStore()
   const section = location.pathname.split('/')[2] || 'agents'
   const [loading, setLoading] = useState(false)
   const [security, setSecurity] = useState<EvalSecurityStatus>()
@@ -46,8 +70,20 @@ export default function EvaluationPage() {
   const [experiments, setExperiments] = useState<EvalExperiment[]>([])
   const [agentModal, setAgentModal] = useState(false)
   const [datasetModal, setDatasetModal] = useState(false)
+  const [datasetDrawer, setDatasetDrawer] = useState(false)
+  const [caseImportModal, setCaseImportModal] = useState(false)
+  const [caseEditModal, setCaseEditModal] = useState(false)
+  const [caseViewModal, setCaseViewModal] = useState(false)
+  const [selectedDataset, setSelectedDataset] = useState<EvalDataset>()
+  const [datasetVersion, setDatasetVersion] = useState<EvalDatasetVersion>()
+  const [datasetCases, setDatasetCases] = useState<EvalDatasetCase[]>([])
+  const [caseText, setCaseText] = useState(JSON.stringify(caseTemplate, null, 2))
+  const [editingCase, setEditingCase] = useState<EvalDatasetCase>()
   const [agentForm] = Form.useForm()
   const [datasetForm] = Form.useForm()
+  const canCreateDataset = hasPermission('eval:dataset:create')
+  const canReviewDataset = hasPermission('eval:dataset:review')
+  const canPublishDataset = hasPermission('eval:dataset:publish')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -85,11 +121,176 @@ export default function EvaluationPage() {
     { title: '状态', dataIndex: 'status', render: (value: string) => <Tag color={statusColor(value)}>{value}</Tag> },
   ], [])
 
+  const loadDatasetDetail = async (dataset: EvalDataset) => {
+    setSelectedDataset(dataset)
+    setDatasetDrawer(true)
+    setLoading(true)
+    try {
+      const version = await evaluationApi.getDatasetVersion(dataset.latest_version_id)
+      const cases = version.status === 'REVIEWING'
+        ? await evaluationApi.listDatasetCasesForReview(dataset.latest_version_id)
+        : await evaluationApi.listDatasetCases(dataset.latest_version_id)
+      setDatasetVersion(version)
+      setDatasetCases(cases)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '加载数据集详情失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const refreshDatasetDetail = async () => {
+    if (!selectedDataset) return
+    await load()
+    const version = await evaluationApi.getDatasetVersion(selectedDataset.latest_version_id)
+    const cases = version.status === 'REVIEWING'
+      ? await evaluationApi.listDatasetCasesForReview(selectedDataset.latest_version_id)
+      : await evaluationApi.listDatasetCases(selectedDataset.latest_version_id)
+    setDatasetVersion(version)
+    setDatasetCases(cases)
+  }
+
+  const parseCases = (): Array<Record<string, unknown>> => {
+    const raw = caseText.trim()
+    if (!raw) throw new Error('请输入至少一条 Case')
+    if (raw.startsWith('[')) return JSON.parse(raw)
+    return raw.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line))
+  }
+
+  const importCases = async (dryRun: boolean) => {
+    if (!selectedDataset) return
+    try {
+      const result = await evaluationApi.importDatasetCases(selectedDataset.id, parseCases(), dryRun)
+      message.success(dryRun ? '校验通过，未写入数据' : `成功导入 ${result.imported} 条 Case`)
+      if (!dryRun) {
+        setCaseImportModal(false)
+        await refreshDatasetDetail()
+      }
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Case校验或导入失败')
+    }
+  }
+
+  const openCaseEditor = async (row: EvalDatasetCase) => {
+    if (!datasetVersion) return
+    try {
+      const fullCase = await evaluationApi.getDatasetCaseForEdit(datasetVersion.id, row.id)
+      setEditingCase(fullCase)
+      const editable = { ...fullCase } as Record<string, unknown>
+      delete editable.id
+      setCaseText(JSON.stringify(editable, null, 2))
+      setCaseEditModal(true)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '加载Case失败')
+    }
+  }
+
+  const saveCase = async () => {
+    if (!datasetVersion || !editingCase) return
+    try {
+      await evaluationApi.updateDatasetCase(datasetVersion.id, editingCase.id, JSON.parse(caseText))
+      message.success('Case已更新')
+      setCaseEditModal(false)
+      await refreshDatasetDetail()
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Case更新失败')
+    }
+  }
+
+  const importGolden = async () => {
+    if (!selectedDataset) return
+    try {
+      const result = await evaluationApi.importLegacyGolden(selectedDataset.id)
+      message.success(`导入 ${result.imported} 条，跳过 ${result.skipped.length} 条`)
+      await refreshDatasetDetail()
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Golden导入失败')
+    }
+  }
+
+  const submitReview = async () => {
+    if (!datasetVersion) return
+    try {
+      await evaluationApi.submitDatasetReview(datasetVersion.id)
+      message.success('已提交双人审核')
+      await refreshDatasetDetail()
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '提交审核失败')
+    }
+  }
+
+  const reviewDataset = async (decision: 'APPROVE' | 'REJECT') => {
+    if (!datasetVersion) return
+    try {
+      await evaluationApi.reviewDataset(datasetVersion.id, decision)
+      message.success(decision === 'APPROVE' ? '审核通过已记录' : '已驳回到草稿')
+      await refreshDatasetDetail()
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '审核提交失败')
+    }
+  }
+
+  const publishDataset = async () => {
+    if (!datasetVersion) return
+    try {
+      await evaluationApi.publishDataset(datasetVersion.id, datasetVersion.review_round)
+      message.success('数据集版本已发布并冻结')
+      await refreshDatasetDetail()
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '发布失败')
+    }
+  }
+
+  const createNextVersion = async () => {
+    if (!selectedDataset) return
+    try {
+      const version = await evaluationApi.createDatasetVersion(selectedDataset.id, true)
+      const updated = { ...selectedDataset, latest_version_id: version.id, latest_version: version.version, latest_status: version.status }
+      setSelectedDataset(updated)
+      setDatasetVersion(await evaluationApi.getDatasetVersion(version.id))
+      setDatasetCases(await evaluationApi.listDatasetCases(version.id))
+      message.success(`已从已发布版本复制创建 v${version.version} 草稿`)
+      await load()
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '创建新版本失败')
+    }
+  }
+
   const datasetColumns = [
     { title: '数据集', dataIndex: 'name' },
     { title: '最新版本', dataIndex: 'latest_version' },
+    { title: '状态', dataIndex: 'latest_status', render: (value: string) => <Tag color={statusColor(value)}>{value}</Tag> },
+    { title: 'Case数', dataIndex: 'latest_case_count' },
     { title: '已发布 Case', dataIndex: 'published_cases' },
     { title: '说明', dataIndex: 'description' },
+    { title: '操作', render: (_: unknown, row: EvalDataset) => <Button type="link" onClick={() => void loadDatasetDetail(row)}>管理Case</Button> },
+  ]
+
+  const caseColumns = [
+    { title: '分类', dataIndex: 'category' },
+    { title: '风险', dataIndex: 'risk_level', render: (value: string) => <Tag color={value === 'HIGH' ? 'red' : value === 'MEDIUM' ? 'gold' : 'blue'}>{value}</Tag> },
+    { title: '分区', dataIndex: 'split', render: (value: string) => <Tag color={value === 'HIDDEN' ? 'purple' : 'default'}>{value}</Tag> },
+    { title: '来源', dataIndex: 'source_type' },
+    { title: 'Oracle', dataIndex: 'oracle_type' },
+    { title: '确定性检查', render: (_: unknown, row: EvalDatasetCase) => row.deterministic_checks?.length ?? '隐藏' },
+    {
+      title: '操作',
+      render: (_: unknown, row: EvalDatasetCase) => {
+        if (datasetVersion?.status === 'DRAFT' && canCreateDataset) return <Space>
+          <Button type="link" icon={<EditOutlined />} onClick={() => void openCaseEditor(row)}>编辑</Button>
+          <Popconfirm title="确认删除这条Case？" onConfirm={async () => {
+            await evaluationApi.deleteDatasetCase(datasetVersion.id, row.id)
+            message.success('Case已删除')
+            await refreshDatasetDetail()
+          }}><Button type="link" danger>删除</Button></Popconfirm>
+        </Space>
+        if (datasetVersion?.status === 'REVIEWING' && canReviewDataset) return <Button type="link" onClick={() => {
+          setCaseText(JSON.stringify(row, null, 2))
+          setCaseViewModal(true)
+        }}>查看审核证据</Button>
+        return <Text type="secondary">已冻结</Text>
+      },
+    },
   ]
 
   const experimentColumns = [
@@ -129,7 +330,7 @@ export default function EvaluationPage() {
         <Table rowKey="id" loading={loading} dataSource={agents} columns={agentColumns} pagination={false} />
       </Card>}
 
-      {section === 'datasets' && <Card title="数据集工厂" extra={<Button type="primary" icon={<PlusOutlined />} onClick={() => setDatasetModal(true)}>新建数据集</Button>}>
+      {section === 'datasets' && <Card title="数据集工厂" extra={canCreateDataset ? <Button type="primary" icon={<PlusOutlined />} onClick={() => setDatasetModal(true)}>新建数据集</Button> : null}>
         <Table rowKey="id" loading={loading} dataSource={datasets} columns={datasetColumns} pagination={false} />
       </Card>}
 
@@ -176,6 +377,61 @@ export default function EvaluationPage() {
           <Form.Item name="name" label="名称" rules={[{ required: true }, { min: 2 }]}><Input maxLength={160} /></Form.Item>
           <Form.Item name="description" label="说明"><Input.TextArea maxLength={4000} /></Form.Item>
         </Form>
+      </Modal>
+
+      <Drawer
+        title={selectedDataset ? `${selectedDataset.name} · 数据集版本` : '数据集版本'}
+        width="82%"
+        open={datasetDrawer}
+        onClose={() => setDatasetDrawer(false)}
+      >
+        {datasetVersion && <>
+          <Descriptions bordered size="small" column={4} style={{ marginBottom: 16 }}>
+            <Descriptions.Item label="版本">v{datasetVersion.version}</Descriptions.Item>
+            <Descriptions.Item label="状态"><Tag color={statusColor(datasetVersion.status)}>{datasetVersion.status}</Tag></Descriptions.Item>
+            <Descriptions.Item label="Case">{datasetVersion.case_count}</Descriptions.Item>
+            <Descriptions.Item label="审核">{datasetVersion.approvals}/2 通过</Descriptions.Item>
+          </Descriptions>
+          <Alert
+            showIcon
+            type="info"
+            message="隐藏集答案不会出现在普通列表；Agent运行时只注入当前Case输入、预算和允许工具。"
+            style={{ marginBottom: 16 }}
+          />
+          <Space style={{ marginBottom: 16 }} wrap>
+            {datasetVersion.status === 'DRAFT' && <>
+              {canCreateDataset && <Button type="primary" onClick={() => { setCaseText(JSON.stringify(caseTemplate, null, 2)); setCaseImportModal(true) }}>导入JSONL/JSON</Button>}
+              {canCreateDataset && <Button onClick={() => void importGolden()}>导入旧Golden</Button>}
+              {canReviewDataset && <Button onClick={() => void submitReview()}>提交双人审核</Button>}
+            </>}
+            {datasetVersion.status === 'REVIEWING' && canReviewDataset && <>
+              <Button type="primary" onClick={() => void reviewDataset('APPROVE')}>审核通过</Button>
+              <Button danger onClick={() => void reviewDataset('REJECT')}>驳回</Button>
+              {canPublishDataset && <Button disabled={datasetVersion.approvals < 2} onClick={() => void publishDataset()}>发布并冻结</Button>}
+            </>}
+            {datasetVersion.status === 'PUBLISHED' && canCreateDataset && <Button type="primary" onClick={() => void createNextVersion()}>复制为新版本草稿</Button>}
+          </Space>
+          <Table rowKey="id" loading={loading} dataSource={datasetCases} columns={caseColumns} pagination={{ pageSize: 20 }} />
+        </>}
+      </Drawer>
+
+      <Modal
+        title="导入Case（支持JSON数组或每行一个JSON）"
+        width={900}
+        open={caseImportModal}
+        onCancel={() => setCaseImportModal(false)}
+        footer={<Space><Button onClick={() => void importCases(true)}>仅校验</Button><Button type="primary" onClick={() => void importCases(false)}>校验并导入</Button></Space>}
+      >
+        <Alert type="warning" showIcon message="禁止真实客户数据、生产凭证和生产写工具；同源变体请使用相同source_group_id。" style={{ marginBottom: 12 }} />
+        <TextArea value={caseText} onChange={event => setCaseText(event.target.value)} autoSize={{ minRows: 18, maxRows: 30 }} style={{ fontFamily: 'monospace' }} />
+      </Modal>
+
+      <Modal title="编辑Case" width={900} open={caseEditModal} onOk={() => void saveCase()} onCancel={() => setCaseEditModal(false)}>
+        <TextArea value={caseText} onChange={event => setCaseText(event.target.value)} autoSize={{ minRows: 20, maxRows: 32 }} style={{ fontFamily: 'monospace' }} />
+      </Modal>
+
+      <Modal title="Case审核证据" width={900} open={caseViewModal} footer={null} onCancel={() => setCaseViewModal(false)}>
+        <TextArea value={caseText} readOnly autoSize={{ minRows: 20, maxRows: 32 }} style={{ fontFamily: 'monospace' }} />
       </Modal>
     </div>
   )

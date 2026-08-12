@@ -1,12 +1,14 @@
 from uuid import UUID
 
 import pytest
+from pydantic import ValidationError
 
 from app.domain.scheduling import blind_ab_order, paired_trial_plan
 from app.domain.review import Preference, ReviewCandidate, requires_arbitration, stratified_review_sample, weighted_kappa
-from app.domain.dataset_factory import CaseDraft, SourceType, Split, build_agent_case_payload, validate_case, validate_release
+from app.domain.dataset_factory import CaseDraft, RiskLevel, SourceType, Split, build_agent_case_payload, validate_case, validate_release
 from app.domain.scoring import CostItem, DeterministicCheck, TrialScoreInput, UsageQuality, score_trial, summarize_cost
 from app.domain.statistics import holm_adjust, paired_mcnemar, pareto_frontier, wilson_interval
+from app.schemas import DatasetCaseInput
 
 
 def test_security_violation_overrides_completed_task() -> None:
@@ -84,8 +86,10 @@ def test_blind_order_has_verifiable_proof_without_identity_in_ui() -> None:
 def make_case(identifier: int, split: Split = Split.HIDDEN) -> CaseDraft:
     return CaseDraft(
         external_id=UUID(int=identifier), category="order_query", split=split,
+        risk_level=RiskLevel.LOW,
         source_type=SourceType.SYNTHETIC, input_payload={"order_id": f"mock-{identifier}"},
-        expected_state={"status": "FOUND"}, rubric={"correct": 1}, budget={"max_cost": 1},
+        expected_state={"status": "FOUND"}, rubric={"correct": 1},
+        budget={"timeout_seconds": 60, "max_tool_calls": 3, "max_model_cost": 1},
         deterministic_checks=[{"path": "$.status", "equals": "FOUND"}],
         tool_policy=[{"tool_id": "mock-order", "side_effect_mode": "READ_ONLY", "allowed_actions": ["get"], "input_schema": {}}],
     )
@@ -108,6 +112,24 @@ def test_dataset_release_rejects_pii_duplicates_and_missing_splits() -> None:
     assert any("personal data" in error for error in errors)
     assert any("duplicate" in error for error in errors)
     assert any("regression" in error for error in errors)
+
+
+def test_dataset_release_keeps_source_family_in_one_split() -> None:
+    hidden = make_case(10, Split.HIDDEN)
+    regression = make_case(11, Split.REGRESSION)
+    hidden = CaseDraft(**{**hidden.__dict__, "source_group_id": "same-seed"})
+    regression = CaseDraft(**{**regression.__dict__, "source_group_id": "same-seed"})
+    assert any("crosses dataset splits" in error for error in validate_release([hidden, regression]))
+
+
+def test_dataset_case_schema_rejects_oversized_payload() -> None:
+    with pytest.raises(ValidationError):
+        DatasetCaseInput(
+            category="oversized", split="DEVELOPMENT", source_type="SYNTHETIC",
+            input_payload={"request": "x" * (513 * 1024)}, expected_state={"ok": True},
+            rubric={"correct": 1}, deterministic_checks=[{"operator": "eq"}],
+            budget={"timeout_seconds": 60, "max_tool_calls": 0, "max_model_cost": 0},
+        )
 
 
 def test_review_sampling_always_includes_risk_and_stratifies_remainder() -> None:

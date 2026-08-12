@@ -89,6 +89,25 @@ CREATE TABLE IF NOT EXISTS eval_case (
     UNIQUE (tenant_id, dataset_version_id, source_hash)
 );
 
+-- Cross-tenant foreign keys: make tenant identity part of every referenced key.
+-- PostgreSQL accepts these alongside the primary keys and rejects mismatched tenants.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_eval_dataset_tenant_id ON eval_dataset (tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_eval_dataset_version_tenant_id ON eval_dataset_version (tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_eval_agent_tenant_id ON eval_agent (tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_eval_agent_version_tenant_id ON eval_agent_version (tenant_id, id);
+ALTER TABLE eval_dataset_version DROP CONSTRAINT IF EXISTS eval_dataset_version_dataset_id_fkey;
+ALTER TABLE eval_dataset_version DROP CONSTRAINT IF EXISTS eval_dataset_version_dataset_tenant_fkey;
+ALTER TABLE eval_dataset_version ADD CONSTRAINT eval_dataset_version_dataset_tenant_fkey
+    FOREIGN KEY (tenant_id, dataset_id) REFERENCES eval_dataset(tenant_id, id);
+ALTER TABLE eval_case DROP CONSTRAINT IF EXISTS eval_case_dataset_version_id_fkey;
+ALTER TABLE eval_case DROP CONSTRAINT IF EXISTS eval_case_dataset_version_tenant_fkey;
+ALTER TABLE eval_case ADD CONSTRAINT eval_case_dataset_version_tenant_fkey
+    FOREIGN KEY (tenant_id, dataset_version_id) REFERENCES eval_dataset_version(tenant_id, id);
+ALTER TABLE eval_agent_version DROP CONSTRAINT IF EXISTS eval_agent_version_agent_id_fkey;
+ALTER TABLE eval_agent_version DROP CONSTRAINT IF EXISTS eval_agent_version_agent_tenant_fkey;
+ALTER TABLE eval_agent_version ADD CONSTRAINT eval_agent_version_agent_tenant_fkey
+    FOREIGN KEY (tenant_id, agent_id) REFERENCES eval_agent(tenant_id, id);
+
 CREATE TABLE IF NOT EXISTS eval_evaluator (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id BIGINT NOT NULL,
@@ -452,7 +471,7 @@ DECLARE
 BEGIN
     SELECT id INTO root_id FROM sys_menu WHERE path = '/evaluation' AND parent_id = 0 LIMIT 1;
     IF root_id IS NULL THEN
-        INSERT INTO sys_menu (parent_id, name, path, component, permission, icon, type, visible, sort, status, tenant_id, create_time, update_time)
+        INSERT INTO sys_menu (parent_id, name, path, component, permission, icon, menu_type, visible, sort, status, tenant_id, create_time, update_time)
         VALUES (0, 'Agent测评', '/evaluation', 'Layout', NULL, 'ExperimentOutlined', 1, 1, 40, 1, 1, now_ms, now_ms)
         RETURNING id INTO root_id;
     END IF;
@@ -464,7 +483,7 @@ BEGIN
         ('人工审核', '/evaluation/reviews', 'evaluation/index', 'eval:review:score', 3),
         ('安全与审计', '/evaluation/security', 'evaluation/index', 'eval:security:approve', 4)
     ) AS v(name, path, component, permission, sort) LOOP
-        INSERT INTO sys_menu (parent_id, name, path, component, permission, icon, type, visible, sort, status, tenant_id, create_time, update_time)
+        INSERT INTO sys_menu (parent_id, name, path, component, permission, icon, menu_type, visible, sort, status, tenant_id, create_time, update_time)
         SELECT root_id, item.name, item.path, item.component, item.permission, 'ExperimentOutlined', 2, 1, item.sort, 1, 1, now_ms, now_ms
         WHERE NOT EXISTS (SELECT 1 FROM sys_menu WHERE permission = item.permission);
     END LOOP;
@@ -475,7 +494,7 @@ BEGIN
         ('eval:experiment:create'), ('eval:experiment:run'), ('eval:experiment:cancel'),
         ('eval:review:arbitrate'), ('eval:artifact:view'), ('eval:artifact:download'), ('eval:cost:view')
     ) AS v(permission) LOOP
-        INSERT INTO sys_menu (parent_id, name, permission, type, visible, sort, status, tenant_id, create_time, update_time)
+        INSERT INTO sys_menu (parent_id, name, permission, menu_type, visible, sort, status, tenant_id, create_time, update_time)
         SELECT root_id, item.permission, item.permission, 3, 0, 100, 1, 1, now_ms, now_ms
         WHERE NOT EXISTS (SELECT 1 FROM sys_menu WHERE permission = item.permission);
     END LOOP;

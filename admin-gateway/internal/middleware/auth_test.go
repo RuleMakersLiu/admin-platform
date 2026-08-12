@@ -384,6 +384,30 @@ func TestBuildPermissionIdentifier(t *testing.T) {
 			method:     "POST",
 			wantPrefix: "eval:experiment:run",
 		},
+		{
+			name:       "dataset case list",
+			path:       "/api/eval/dataset/version/11111111-1111-1111-1111-111111111111/cases",
+			method:     "GET",
+			wantPrefix: "eval:dataset:list",
+		},
+		{
+			name:       "dataset case import",
+			path:       "/api/eval/dataset/11111111-1111-1111-1111-111111111111/cases/import",
+			method:     "POST",
+			wantPrefix: "eval:dataset:create",
+		},
+		{
+			name:       "dataset review cases",
+			path:       "/api/eval/dataset/version/11111111-1111-1111-1111-111111111111/review-cases",
+			method:     "GET",
+			wantPrefix: "eval:dataset:review",
+		},
+		{
+			name:       "dataset publish",
+			path:       "/api/eval/dataset/version/11111111-1111-1111-1111-111111111111/publish",
+			method:     "POST",
+			wantPrefix: "eval:dataset:publish",
+		},
 	}
 
 	for _, tt := range tests {

@@ -5,6 +5,7 @@ import (
 	"admin-gateway/pkg/cache"
 	"admin-gateway/pkg/response"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -210,8 +211,23 @@ func buildPermissionCandidates(path, method string) []string {
 		resource = "group"
 		action = "list"
 	}
-
-	if module == "flow" {
+	if module == "eval" && resource == "dataset" {
+		last := clean[len(clean)-1]
+		switch last {
+		case "submit-review", "review", "review-cases":
+			action = "review"
+		case "publish":
+			action = "publish"
+		case "create", "import", "import-golden", "edit":
+			action = "create"
+		default:
+			if method == http.MethodGet {
+				action = "list"
+			} else if method == http.MethodPut || method == http.MethodPatch || method == http.MethodDelete {
+				action = "create"
+			}
+		}
+	} else if module == "flow" {
 		resource = "pipeline"
 		if contains(clean, "sandbox-preview") {
 			action = "preview"

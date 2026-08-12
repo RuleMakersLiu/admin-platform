@@ -49,7 +49,8 @@ api.interceptors.response.use(
         useAuthStore.getState().logout()
         window.location.href = '/login'
       }
-      const msg = data?.detail || data?.message || '请求失败'
+      const rawMessage = data?.detail || data?.message || '请求失败'
+      const msg = typeof rawMessage === 'string' ? rawMessage : JSON.stringify(rawMessage)
       const apiError = new Error(msg) as ApiError
       apiError.status = status
       if (data?.code !== undefined) apiError.code = data.code

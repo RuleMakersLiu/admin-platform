@@ -34,6 +34,36 @@ func ProxyToEval(c *gin.Context) {
 	proxyRequestWithOptions(c, target, prefix, "/api/eval", viper.GetString("services.eval.internal_token"))
 }
 
+// ProxyEvalDispatch keeps the legacy pipeline evaluation API and the external
+// Agent evaluation control plane behind one authenticated route without
+// registering conflicting Gin wildcards.
+func ProxyEvalDispatch(c *gin.Context) {
+	path := c.Request.URL.Path
+	if isAgentEvalControlPath(path) {
+		ProxyToEval(c)
+		return
+	}
+	ProxyToPython(c)
+}
+
+func isAgentEvalControlPath(path string) bool {
+	controlPrefixes := []string{
+		"/api/eval/agent/",
+		"/api/eval/dataset/",
+		"/api/eval/experiment/",
+		"/api/eval/review/",
+		"/api/eval/artifact/",
+		"/api/eval/cost/",
+		"/api/eval/security/",
+	}
+	for _, prefix := range controlPrefixes {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // ProxyToGenerator 代理到代码生成服务
 func ProxyToGenerator(c *gin.Context) {
 	target := viper.GetString("services.generator.host") + ":" + viper.GetString("services.generator.port")

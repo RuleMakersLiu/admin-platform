@@ -31,7 +31,22 @@ npm run build
 docker compose -f docker/docker-compose.eval.yml config --quiet
 ```
 
-Apply `database/migrations/006_agent_evaluation_platform.up.sql` using the project's controlled migration process. The application database role must not be a PostgreSQL superuser, otherwise RLS is not an effective tenant boundary.
+Apply `database/migrations/006_agent_evaluation_platform.up.sql` and then `database/migrations/018_agent_eval_dataset_workflow.up.sql` using the project's controlled migration process. Apply `009_eval_golden_case.up.sql` before using legacy Pipeline Golden import. The application database role must not be a PostgreSQL superuser, otherwise RLS is not an effective tenant boundary.
+
+## Dataset and Golden workflow
+
+1. Open `/evaluation/datasets` and create a dataset. Version 1 starts as `DRAFT`.
+2. Open **Manage Cases** and import a JSON array or JSONL. Start from [dataset-case-template.jsonl](./dataset-case-template.jsonl).
+3. Run **Validate only** before importing. PII/credential patterns, prohibited tool side effects, invalid budgets, duplicate content and missing deterministic checks are rejected.
+4. Optionally import enabled legacy Pipeline Golden cases. The converter removes `reference_output` from Agent input and keeps it evaluator-side.
+5. Edit cases while the version is `DRAFT`. Database triggers reject case mutation after review starts.
+6. Submit review. Release validation requires both `REGRESSION` and `HIDDEN` splits and rejects one source family crossing splits.
+7. Two distinct reviewers other than the dataset creator must approve the same review round.
+8. Publish the version. Its content hash and case count are frozen; create the next version by cloning the published version.
+
+Normal case-list responses redact all HIDDEN inputs, fixtures, expected state, rubric, tool policy, budget, deterministic checks and prohibited-behavior details. Full hidden evidence is available only through the dataset-review permission path and every such read is audited. There is no hidden-set download endpoint.
+
+The public `/api/eval/*` route is dispatched by an explicit allowlist: Agent control-plane paths go to `admin-eval`; legacy `/eval/golden-cases` and `/eval/metrics` remain on `admin-python`.
 
 ## Required secrets and gates
 
