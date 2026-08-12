@@ -31,6 +31,19 @@ npm run build
 docker compose -f docker/docker-compose.eval.yml config --quiet
 ```
 
+## Local startup script
+
+`./start.sh all` now starts the local evaluation infrastructure plus `admin-eval`, `admin-sandbox-controller`, and `admin-egress-gateway`. It generates an ephemeral shared internal token for Gateway and `admin-eval`, but always overrides all execution gates to `false`.
+
+Database changes remain explicit:
+
+```text
+./start.sh eval-migrate
+./start.sh all
+```
+
+The migration action applies `006`, legacy Golden table `009`, and dataset workflow `018` with `ON_ERROR_STOP=1`. It does not run automatically during `all`, so startup cannot silently modify a database. Individual service actions are `eval`, `sandbox-controller`, `egress`, and `eval-infra`. A standalone `eval` requires an explicitly supplied `EVAL_INTERNAL_SERVICE_TOKEN` shared with the Gateway.
+
 Apply `database/migrations/006_agent_evaluation_platform.up.sql` and then `database/migrations/018_agent_eval_dataset_workflow.up.sql` using the project's controlled migration process. Apply `009_eval_golden_case.up.sql` before using legacy Pipeline Golden import. The application database role must not be a PostgreSQL superuser, otherwise RLS is not an effective tenant boundary.
 
 ## Dataset and Golden workflow

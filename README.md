@@ -106,6 +106,24 @@ docker compose -f docker/docker-compose.eval.yml config
 
 > 当前交付是经过测试的安全控制面基础，不是已经通过 G1/G2 的生产级不可信代码执行平台。真实 Kubernetes 变更、Artifact 代理、Kill Switch 集群联动和安全攻击验收仍必须在独立安全集群完成。
 
+本地启动脚本已接入测评服务：
+
+```bash
+# 首次或新增迁移后显式执行；启动脚本不会自动修改数据库
+./start.sh eval-migrate
+
+# 启动原系统、测评基础设施和三个测评服务
+./start.sh all
+
+# 也可单独启动
+./start.sh eval-infra
+./start.sh eval
+./start.sh sandbox-controller
+./start.sh egress
+```
+
+`all`会为Gateway与`admin-eval`生成仅当前进程树共享的临时内部令牌。单独启动`gateway`与`eval`时，必须预先设置相同的`EVAL_INTERNAL_SERVICE_TOKEN`。无论哪种启动方式，三个执行门禁都会被强制保持为`false`；脚本不能用于开启外部Agent执行、Kubernetes变更或外部网络代理。
+
 ## 架构概览
 
 ```
