@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: 前端（oxlint + vitest + build）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: admin-frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22 # 与 Dockerfile(node:22-alpine)/.nvmrc 一致
+          cache: npm
+          cache-dependency-path: admin-frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run test:portal
+      - run: npm run build
+
+  python:
+    name: Python（ruff + pytest）
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dir: admin-python
+            # 这 5 个文件是打在线网关(localhost:8080)的集成测试，无服务时必失败，CI 暂不跑
+            pytest-args: >-
+              --ignore=tests/test_activation.py
+              --ignore=tests/test_agent_api.py
+              --ignore=tests/test_agent_status.py
+              --ignore=tests/test_kanban_api.py
+              --ignore=tests/test_websocket.py
+          - dir: admin-eval
+            pytest-args: ""
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: ${{ matrix.dir }}/uv.lock
+      - run: uv sync --extra dev
+      - run: uv run ruff check .
+      - run: uv run pytest -q ${{ matrix.pytest-args }}
+
+  go:
+    name: Go（build + vet + test）
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - admin-gateway
+          - admin-generator
+          - admin-deploy
+          - admin-config
+          - admin-agent
+          - admin-ws
+          - admin-common
+          - admin-sandbox-controller
+          - admin-egress-gateway
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+      - run: go build ./...
+      - run: go vet ./...
+      # TODO: go test 尚未在无基础设施环境验证过（部分用例可能依赖 redis/docker），
+      # 先设 continue-on-error 收集信号，验证通过后改为强制
+      - run: go test ./...
+        continue-on-error: true
+
+# 说明：e2e-tests（Playwright）依赖整套基础设施起容器，暂不入 CI，
+# 后续可用 docker compose 起 pg/redis 后纳入 nightly。
