@@ -225,7 +225,7 @@ describe('useWebSocket Hook', () => {
         return result.current.send('ping', {})
       })
 
-      expect(sendResult).resolves.not.toThrow()
+      await expect(sendResult).resolves.not.toThrow()
     })
 
     it('未连接状态下发送消息应该返回 false', () => {

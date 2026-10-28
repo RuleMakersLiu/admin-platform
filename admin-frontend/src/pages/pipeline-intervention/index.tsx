@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import { Button, Card, Col, Empty, Row, Skeleton, Table, Tag, Tooltip, Typography, message } from 'antd'
 import { ReloadOutlined, ToolOutlined } from '@ant-design/icons'
 import { pipelineApi } from '@/services/pipeline'

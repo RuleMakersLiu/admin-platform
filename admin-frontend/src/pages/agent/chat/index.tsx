@@ -16,6 +16,7 @@ import {
   Tooltip,
   theme,
 } from 'antd'
+import type { TextAreaRef } from 'antd/es/input/TextArea'
 import {
   SendOutlined,
   PlusOutlined,
@@ -320,7 +321,7 @@ const AgentChat: React.FC = () => {
   const [agentType, setAgentType] = useState<AgentType>('PM')
   const [sessionsLoading, setSessionsLoading] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLTextAreaElement>(null)
+  const inputRef = useRef<TextAreaRef>(null)
   const streamingMsgIdRef = useRef<string | null>(null) // 当前流式消息 ID
 
   // 加载会话列表

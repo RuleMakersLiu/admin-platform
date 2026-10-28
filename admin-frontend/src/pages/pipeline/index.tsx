@@ -14,7 +14,7 @@ import {
   UndoOutlined, SettingOutlined, ReloadOutlined,
   EditOutlined, SaveOutlined, ToolOutlined,
 } from '@ant-design/icons'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router'
 import { pipelineApi, type PipelineStatus, type PipelineStreamEvent } from '@/services/pipeline'
 import { generatorApi } from '@/services/api'
 import api from '@/services/api'

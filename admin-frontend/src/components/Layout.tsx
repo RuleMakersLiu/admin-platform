@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { Outlet, useLocation, useNavigate } from 'react-router'
 import { Avatar, Dropdown, Layout as AntLayout, Menu } from 'antd'
 import {
   AppstoreOutlined,

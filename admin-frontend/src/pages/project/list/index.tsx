@@ -5,7 +5,7 @@ import {
   BugOutlined, PlusOutlined, LinkOutlined, BranchesOutlined,
   BulbOutlined, CheckCircleOutlined, LoadingOutlined,
 } from '@ant-design/icons'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import { generatorApi } from '@/services/api'
 import api from '@/services/api'
 

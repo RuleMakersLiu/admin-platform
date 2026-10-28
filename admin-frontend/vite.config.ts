@@ -4,10 +4,6 @@ import path from 'path'
 
 export default defineConfig({
   plugins: [react()],
-  esbuild: {
-    // Strip debug-level console calls in production builds; keep error/warn.
-    pure: ['console.log', 'console.debug', 'console.info', 'console.trace'],
-  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -35,12 +31,26 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
+    // Vite 8（Rolldown）已移除 esbuild.pure；console 剥离改由 terser pure_funcs 等价实现
+    // （仅剥 debug 级调用，保留 console.error/warn）
+    minify: 'terser',
+    terserOptions: {
+      compress: {
+        pure_funcs: ['console.log', 'console.debug', 'console.info', 'console.trace'],
+      },
+    },
     rollupOptions: {
       output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom', 'react-router-dom'],
-          antd: ['antd', '@ant-design/icons'],
-          markdown: ['react-markdown', 'remark-gfm', 'rehype-highlight', 'highlight.js'],
+        // Vite 8 起 manualChunks 不再支持，改用 Rolldown advancedChunks
+        advancedChunks: {
+          groups: [
+            { name: 'vendor', test: /node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler)([\\/]|$)/ },
+            { name: 'antd', test: /node_modules[\\/](antd|@ant-design|rc-[^\\/]+)/ },
+            {
+              name: 'markdown',
+              test: /node_modules[\\/](react-markdown|remark-[\w.-]+|rehype-[\w.-]+|micromark[\w.-]*|mdast-[\w.-]+|unified|unist-[\w.-]+|vfile[\w.-]*|highlight\.js|lowlight|hast-[\w.-]+)/,
+            },
+          ],
         },
       },
     },

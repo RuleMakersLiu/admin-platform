@@ -1,6 +1,6 @@
 import { Button, Space, Typography } from 'antd'
 import { CodeOutlined, RocketOutlined, SwapOutlined } from '@ant-design/icons'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import { canUseDeveloperPortal, canUseProductPortal, saveLastPortalPath, useAuthStore } from '@/stores/auth'
 
 const { Title, Text } = Typography

@@ -5,7 +5,7 @@ import {
   CheckCircleOutlined, CloseCircleOutlined, LoadingOutlined,
   BugOutlined, FileTextOutlined,
 } from '@ant-design/icons'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router'
 import { generatorApi, deployApi } from '@/services/api'
 
 const { Text, Title } = Typography

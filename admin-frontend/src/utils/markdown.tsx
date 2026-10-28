@@ -86,8 +86,12 @@ const extractText = (node: React.ReactNode): string => {
   if (typeof node === 'string') return node
   if (typeof node === 'number') return String(node)
   if (Array.isArray(node)) return node.map(extractText).join('')
-  if (React.isValidElement(node) && node.props.children) {
-    return extractText(node.props.children)
+  if (React.isValidElement(node)) {
+    // React 19 起 isValidElement 收窄为 ReactElement<unknown>，需显式断言 props 形状
+    const props = node.props as { children?: React.ReactNode }
+    if (props.children) {
+      return extractText(props.children)
+    }
   }
   return ''
 }

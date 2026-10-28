@@ -5,7 +5,7 @@ import {
   JavaOutlined, Html5Outlined, CheckCircleOutlined,
   ImportOutlined, BranchesOutlined,
 } from '@ant-design/icons'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import { generatorApi, systemApi } from '@/services/api'
 
 const { Title, Text, Paragraph } = Typography

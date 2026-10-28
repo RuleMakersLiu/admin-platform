@@ -1,5 +1,5 @@
 import { Component, lazy, Suspense } from 'react'
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router'
 import { Result, Spin } from 'antd'
 import {
   DEVELOPER_PORTAL_PERMISSIONS,

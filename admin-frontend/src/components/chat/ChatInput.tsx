@@ -1,5 +1,6 @@
 import React, { memo, useState, useRef, useCallback } from 'react';
 import { Input, Button, Tooltip, Dropdown, Space, Typography, Tag } from 'antd';
+import type { TextAreaRef } from 'antd/es/input/TextArea';
 import {
   SendOutlined,
   SettingOutlined,
@@ -66,7 +67,7 @@ const ChatInput: React.FC<ChatInputProps> = memo(({
   const [message, setMessage] = useState('');
   const [isComposing, setIsComposing] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const textAreaRef = useRef<HTMLTextAreaElement>(null);
+  const textAreaRef = useRef<TextAreaRef>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 发送消息
