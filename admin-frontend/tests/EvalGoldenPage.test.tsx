@@ -17,12 +17,14 @@ describe('EvalGoldenPage（评测 Golden Cases 管理页）', () => {
     render(<EvalGoldenPage />)
     expect(screen.getByText('评测 Golden Cases')).toBeInTheDocument()
     expect(screen.getByText('新建')).toBeInTheDocument()
-    expect(screen.getByText('刷新')).toBeInTheDocument()
+    // 页面有两处「刷新」（case 列表 + 回归历史），用 getAll 断言至少存在
+    expect(screen.getAllByText('刷新').length).toBeGreaterThanOrEqual(1)
   })
 
   it('渲染表格容器（列头：名称/分类/启用）', async () => {
     render(<EvalGoldenPage />)
-    expect(await screen.findByText('名称')).toBeInTheDocument()
+    // 两张表（case 列表/回归历史）各有「名称」列头
+    expect((await screen.findAllByText('名称')).length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('分类')).toBeInTheDocument()
     expect(screen.getByText('启用')).toBeInTheDocument()
   })

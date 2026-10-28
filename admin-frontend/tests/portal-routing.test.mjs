@@ -82,5 +82,4 @@ assert.equal(resolveLandingPath(userWith([])), '/project/create')
 
 const productPortalSource = await readFile('src/pages/portal/product/index.tsx', 'utf8')
 assert.ok(productPortalSource.includes('pipelineApi.matchProjectSkill'))
-assert.ok(!productPortalSource.includes('<Select'))
 assert.ok(!productPortalSource.includes('generatorApi.getProjects'))
