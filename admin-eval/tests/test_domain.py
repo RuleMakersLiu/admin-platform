@@ -3,10 +3,31 @@ from uuid import UUID
 import pytest
 from pydantic import ValidationError
 
+from app.domain.dataset_factory import (
+    CaseDraft,
+    RiskLevel,
+    SourceType,
+    Split,
+    build_agent_case_payload,
+    validate_case,
+    validate_release,
+)
+from app.domain.review import (
+    Preference,
+    ReviewCandidate,
+    requires_arbitration,
+    stratified_review_sample,
+    weighted_kappa,
+)
 from app.domain.scheduling import blind_ab_order, paired_trial_plan
-from app.domain.review import Preference, ReviewCandidate, requires_arbitration, stratified_review_sample, weighted_kappa
-from app.domain.dataset_factory import CaseDraft, RiskLevel, SourceType, Split, build_agent_case_payload, validate_case, validate_release
-from app.domain.scoring import CostItem, DeterministicCheck, TrialScoreInput, UsageQuality, score_trial, summarize_cost
+from app.domain.scoring import (
+    CostItem,
+    DeterministicCheck,
+    TrialScoreInput,
+    UsageQuality,
+    score_trial,
+    summarize_cost,
+)
 from app.domain.statistics import holm_adjust, paired_mcnemar, pareto_frontier, wilson_interval
 from app.schemas import DatasetCaseInput
 

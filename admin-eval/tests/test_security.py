@@ -4,9 +4,9 @@ import pytest
 from fastapi import HTTPException
 from pydantic import SecretStr, ValidationError
 
+from app import security
 from app.config import Settings
 from app.schemas import AdapterType, AgentCreate, RiskLevel
-from app import security
 
 
 def test_execution_requires_switch_and_gate_reference() -> None:
