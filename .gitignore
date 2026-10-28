@@ -89,3 +89,6 @@ test-results.json
 
 # Serena
 .serena/memories/
+
+# ZCode session artifacts
+.zcode/
