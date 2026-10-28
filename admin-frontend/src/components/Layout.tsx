@@ -16,6 +16,7 @@ import {
   PlusCircleOutlined,
   RobotOutlined,
   RocketOutlined,
+  PartitionOutlined,
   SettingOutlined,
   SwapOutlined,
   ThunderboltOutlined,
@@ -64,6 +65,7 @@ const menuItems: MenuItem[] = [
     children: [
       { key: '/pipeline/development', label: '开发流水线', icon: <ThunderboltOutlined />, permission: PIPELINE_PAGE_PERMISSIONS },
       { key: '/pipeline/eval', label: '质量看板', icon: <BarChartOutlined />, permission: PIPELINE_PAGE_PERMISSIONS },
+      { key: '/workflow', label: '工作流编排', icon: <PartitionOutlined /> },
     ],
   },
   {

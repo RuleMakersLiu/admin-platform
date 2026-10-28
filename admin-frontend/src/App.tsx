@@ -26,6 +26,7 @@ const KnowledgeList = lazy(() => import('@/pages/system/knowledge'))
 const WebChatPage = lazy(() => import('@/pages/webchat'))
 const SkillMarketPage = lazy(() => import('@/pages/skills/market'))
 const KanbanPage = lazy(() => import('@/pages/kanban'))
+const WorkflowStudio = lazy(() => import('@/pages/workflow'))
 const ProjectCreate = lazy(() => import('@/pages/project/create'))
 const ProjectList = lazy(() => import('@/pages/project/list'))
 const ProjectTest = lazy(() => import('@/pages/project/test'))
@@ -155,6 +156,8 @@ function App() {
               <Route path="project" element={<AgentProject />} />
               <Route path="bug" element={<AgentBug />} />
             </Route>
+
+            <Route path="workflow" element={<WorkflowStudio />} />
 
             <Route path="project">
               <Route path="access" element={withPermission(DEVELOPER_PORTAL_PERMISSIONS, <DeveloperPortal />)} />

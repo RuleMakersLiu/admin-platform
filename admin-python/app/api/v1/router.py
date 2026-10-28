@@ -13,6 +13,7 @@ from app.api.metrics import router as metrics_router
 from app.api.skills import router as skills_router
 from app.api.tasks import router as tasks_router
 from app.api.v1 import activation, agent, auth, system, tenant
+from app.api.workflows import router as workflows_router
 from app.messaging.api import router as messaging_router
 
 api_router = APIRouter()
@@ -34,4 +35,5 @@ api_router.include_router(skills_router)  # Skills技能系统路由
 api_router.include_router(chat_router)  # 流式聊天路由
 api_router.include_router(eval_golden_router)  # 评测 Golden cases 路由
 api_router.include_router(eval_metrics_router)  # AI 评测指标 路由
+api_router.include_router(workflows_router)  # 工作流编排（Workflow Studio）路由
 api_router.include_router(metrics_router)  # 生产监控路由

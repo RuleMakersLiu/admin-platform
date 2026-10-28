@@ -327,6 +327,70 @@ export const projectApi = {
 // 分身类型
 export type AgentType = 'PM' | 'PJM' | 'BE' | 'FE' | 'QA' | 'RPT'
 
+// 工作流编排（Workflow Studio）接口
+export interface WfNodeFieldSpec {
+  key: string
+  label: string
+  type: 'string' | 'text' | 'select' | 'number'
+  required: boolean
+  default?: unknown
+  options?: { value: string; label: string }[]
+  placeholder?: string
+}
+
+export interface WfNodeType {
+  type: string
+  name: string
+  category: string
+  description?: string
+  fields: WfNodeFieldSpec[]
+  supports_branch: boolean
+  allow_delete: boolean
+}
+
+export interface WfDsl {
+  version: number
+  name?: string
+  nodes: { id: string; type: string; name?: string; config: Record<string, unknown>; position?: { x: number; y: number } }[]
+  edges: { from: string; to: string; when?: string }[]
+}
+
+export interface WfDefinition {
+  workflow_id: string
+  name: string
+  description: string
+  dsl: WfDsl
+  status: 'draft' | 'published'
+  version: number
+}
+
+export interface WfRun {
+  run_id: string
+  workflow_id: string
+  status: 'running' | 'waiting_human' | 'completed' | 'failed'
+  inputs: Record<string, unknown>
+  outputs: Record<string, Record<string, unknown>>
+  error: string
+  waiting_node: string
+  waiting_message: string
+}
+
+export const workflowApi = {
+  listNodeTypes: () => http.get<WfNodeType[]>('/workflows/node-types'),
+  listDefinitions: () => http.get<WfDefinition[]>('/workflows'),
+  createDefinition: (data: { name: string; dsl: WfDsl; description?: string }) =>
+    http.post<WfDefinition>('/workflows', data),
+  getDefinition: (id: string) => http.get<WfDefinition>(`/workflows/${id}`),
+  updateDefinition: (id: string, data: { name?: string; dsl?: WfDsl }) =>
+    http.put<WfDefinition>(`/workflows/${id}`, data),
+  publishDefinition: (id: string) => http.post<WfDefinition>(`/workflows/${id}/publish`),
+  startRun: (id: string, inputs: Record<string, unknown>) =>
+    http.post<{ run_id: string; status: string }>(`/workflows/${id}/runs`, { inputs }),
+  getRun: (id: string, runId: string) => http.get<WfRun>(`/workflows/${id}/runs/${runId}`),
+  resumeRun: (id: string, runId: string, value: unknown) =>
+    http.post<{ run_id: string; status: string }>(`/workflows/${id}/runs/${runId}/resume`, { value }),
+}
+
 // 分身类型名称映射
 export const agentTypeNames: Record<AgentType, string> = {
   PM: '产品经理',
