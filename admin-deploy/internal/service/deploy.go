@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/docker/docker/api/types"
+	dockerbuild "github.com/docker/docker/api/types/build"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
@@ -227,7 +227,7 @@ func (s *DeployService) build(ctx context.Context, task *Task) error {
 	if registryURL != "" {
 		ctx2 := context.Background()
 		imageTag := fmt.Sprintf("%s:%d", project.Image, time.Now().Unix())
-		pushResp, err := s.docker.ImagePush(ctx2, imageTag, types.ImagePushOptions{})
+		pushResp, err := s.docker.ImagePush(ctx2, imageTag, image.PushOptions{})
 		if err == nil {
 			pushResp.Close()
 		}
@@ -294,7 +294,7 @@ func (s *DeployService) rollback(ctx context.Context, task *Task) error {
 	// 查找上一版本镜像
 	s.addRecord(task.ID, "查找上一版本镜像", "")
 	s.updateProgress(task.ID, 60)
-	images, err := s.docker.ImageList(ctx, types.ImageListOptions{})
+	images, err := s.docker.ImageList(ctx, image.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("获取镜像列表失败: %w", err)
 	}
@@ -447,7 +447,7 @@ func (s *DeployService) buildImage(project *Project, taskID int64) error {
 	tw.Close()
 	dockerCtx := bytes.NewReader(buf.Bytes())
 
-	resp, err := s.docker.ImageBuild(ctx, dockerCtx, types.ImageBuildOptions{
+	resp, err := s.docker.ImageBuild(ctx, dockerCtx, dockerbuild.ImageBuildOptions{
 		Dockerfile: "Dockerfile",
 		Tags:       []string{imageTag, project.Image + ":latest"},
 	})
@@ -589,7 +589,7 @@ func (s *DeployService) GetContainerLogs(containerID string) (string, error) {
 }
 
 // ListContainers 获取容器列表
-func (s *DeployService) ListContainers() ([]types.Container, error) {
+func (s *DeployService) ListContainers() ([]container.Summary, error) {
 	ctx := context.Background()
 	return s.docker.ContainerList(ctx, container.ListOptions{All: true})
 }
@@ -597,7 +597,7 @@ func (s *DeployService) ListContainers() ([]types.Container, error) {
 // ListImages 获取镜像列表
 func (s *DeployService) ListImages() ([]image.Summary, error) {
 	ctx := context.Background()
-	return s.docker.ImageList(ctx, types.ImageListOptions{})
+	return s.docker.ImageList(ctx, image.ListOptions{})
 }
 
 // ========== 项目 CRUD ==========
@@ -676,6 +676,6 @@ func (s *DeployService) RemoveContainerByID(containerID string) error {
 // RemoveImageByID 删除镜像
 func (s *DeployService) RemoveImageByID(imageID string) error {
 	ctx := context.Background()
-	_, err := s.docker.ImageRemove(ctx, imageID, types.ImageRemoveOptions{})
+	_, err := s.docker.ImageRemove(ctx, imageID, image.RemoveOptions{})
 	return err
 }

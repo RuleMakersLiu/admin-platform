@@ -14,29 +14,29 @@ import (
 
 // Client WebSocket 客户端
 type Client struct {
-	ID           string            `json:"id"`           // 客户端唯一标识
-	UserID       string            `json:"userId"`       // 用户ID
-	TenantID     string            `json:"tenantId"`     // 租户ID
-	Username     string            `json:"username"`     // 用户名
-	Roles        []string          `json:"roles"`        // 角色列表
-	Permissions  []string          `json:"permissions"`  // 权限列表
-	Metadata     map[string]string `json:"metadata"`     // 元数据
+	ID          string            `json:"id"`          // 客户端唯一标识
+	UserID      string            `json:"userId"`      // 用户ID
+	TenantID    string            `json:"tenantId"`    // 租户ID
+	Username    string            `json:"username"`    // 用户名
+	Roles       []string          `json:"roles"`       // 角色列表
+	Permissions []string          `json:"permissions"` // 权限列表
+	Metadata    map[string]string `json:"metadata"`    // 元数据
 
-	conn         *websocket.Conn   `json:"-"`            // WebSocket 连接
-	hub          HubInterface      `json:"-"`            // Hub 引用
-	send         chan []byte       `json:"-"`            // 发送队列
-	logger       *zap.Logger       `json:"-"`            // 日志
+	conn   *websocket.Conn `json:"-"` // WebSocket 连接
+	hub    HubInterface    `json:"-"` // Hub 引用
+	send   chan []byte     `json:"-"` // 发送队列
+	logger *zap.Logger     `json:"-"` // 日志
 
 	// 状态管理
-	connectedAt  time.Time         `json:"connectedAt"`  // 连接时间
-	lastPingAt   time.Time         `json:"lastPingAt"`   // 最后心跳时间
-	sequence     int64             `json:"-"`            // 消息序列号
-	closed       atomic.Bool       `json:"-"`            // 是否已关闭
+	connectedAt time.Time   // 连接时间（未导出字段，json tag 无效）
+	lastPingAt  time.Time   // 最后心跳时间
+	sequence    int64       `json:"-"` // 消息序列号
+	closed      atomic.Bool `json:"-"` // 是否已关闭
 
 	// 订阅管理
-	channels     map[string]bool   `json:"-"`            // 订阅的频道
-	rooms        map[string]bool   `json:"-"`            // 加入的房间
-	mu           sync.RWMutex      `json:"-"`            // 读写锁
+	channels map[string]bool `json:"-"` // 订阅的频道
+	rooms    map[string]bool `json:"-"` // 加入的房间
+	mu       sync.RWMutex    `json:"-"` // 读写锁
 }
 
 // HubInterface Hub 接口定义
@@ -278,16 +278,16 @@ func (c *Client) GetInfo() *ClientInfo {
 	defer c.mu.RUnlock()
 
 	return &ClientInfo{
-		ID:           c.ID,
-		UserID:       c.UserID,
-		TenantID:     c.TenantID,
-		Username:     c.Username,
-		Roles:        c.Roles,
-		ConnectedAt:  c.connectedAt.UnixMilli(),
-		LastPingAt:   c.lastPingAt.UnixMilli(),
-		Channels:     c.GetChannels(),
-		Rooms:        c.GetRooms(),
-		Metadata:     c.Metadata,
+		ID:          c.ID,
+		UserID:      c.UserID,
+		TenantID:    c.TenantID,
+		Username:    c.Username,
+		Roles:       c.Roles,
+		ConnectedAt: c.connectedAt.UnixMilli(),
+		LastPingAt:  c.lastPingAt.UnixMilli(),
+		Channels:    c.GetChannels(),
+		Rooms:       c.GetRooms(),
+		Metadata:    c.Metadata,
 	}
 }
 
@@ -308,16 +308,16 @@ func (c *Client) GetMetadata(key string) (string, bool) {
 
 // ClientInfo 客户端信息（用于序列化）
 type ClientInfo struct {
-	ID           string            `json:"id"`
-	UserID       string            `json:"userId"`
-	TenantID     string            `json:"tenantId"`
-	Username     string            `json:"username"`
-	Roles        []string          `json:"roles"`
-	ConnectedAt  int64             `json:"connectedAt"`
-	LastPingAt   int64             `json:"lastPingAt"`
-	Channels     []string          `json:"channels"`
-	Rooms        []string          `json:"rooms"`
-	Metadata     map[string]string `json:"metadata"`
+	ID          string            `json:"id"`
+	UserID      string            `json:"userId"`
+	TenantID    string            `json:"tenantId"`
+	Username    string            `json:"username"`
+	Roles       []string          `json:"roles"`
+	ConnectedAt int64             `json:"connectedAt"`
+	LastPingAt  int64             `json:"lastPingAt"`
+	Channels    []string          `json:"channels"`
+	Rooms       []string          `json:"rooms"`
+	Metadata    map[string]string `json:"metadata"`
 }
 
 // MarshalJSON 自定义 JSON 序列化

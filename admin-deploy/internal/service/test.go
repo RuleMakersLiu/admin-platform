@@ -16,8 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	dimage "github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/spf13/viper"
 )
@@ -297,7 +297,7 @@ func (s *TestService) injectGitCredentials(repoURL string) (string, error) {
 }
 
 func (s *TestService) runTestContainer(ctx context.Context, image, projectDir, testCmd string) (string, error) {
-	_, err := s.docker.ImagePull(ctx, image, types.ImagePullOptions{})
+	_, err := s.docker.ImagePull(ctx, image, dimage.PullOptions{})
 	if err != nil {
 		log.Printf("镜像拉取失败(可能已存在): %v", err)
 	}

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	dimage "github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
@@ -26,11 +26,11 @@ type SandboxService struct {
 
 // SandboxConfig 沙箱配置
 type SandboxConfig struct {
-	MemoryLimit    int64  // 内存限制(MB)
-	CPUQuota       int64  // CPU配额(微秒, 100000=1核)
-	Timeout        int    // 超时时间(秒)
-	NetworkDisabled bool  // 是否禁用网络
-	TempDir        string // 临时目录挂载路径
+	MemoryLimit     int64  // 内存限制(MB)
+	CPUQuota        int64  // CPU配额(微秒, 100000=1核)
+	Timeout         int    // 超时时间(秒)
+	NetworkDisabled bool   // 是否禁用网络
+	TempDir         string // 临时目录挂载路径
 }
 
 // ExecuteRequest 代码执行请求
@@ -52,11 +52,11 @@ type ExecuteResult struct {
 // DefaultSandboxConfig 默认沙箱配置
 func DefaultSandboxConfig() *SandboxConfig {
 	return &SandboxConfig{
-		MemoryLimit:     128,  // 128MB
-		CPUQuota:       50000, // 0.5核
-		Timeout:        10,    // 10秒
+		MemoryLimit:     128,   // 128MB
+		CPUQuota:        50000, // 0.5核
+		Timeout:         10,    // 10秒
 		NetworkDisabled: true,
-		TempDir:        "/tmp/sandbox",
+		TempDir:         "/tmp/sandbox",
 	}
 }
 
@@ -151,7 +151,7 @@ func (s *SandboxService) ensureImage(ctx context.Context, image string) error {
 	}
 
 	// 拉取镜像
-	reader, err := s.dockerClient.ImagePull(ctx, image, types.ImagePullOptions{})
+	reader, err := s.dockerClient.ImagePull(ctx, image, dimage.PullOptions{})
 	if err != nil {
 		return fmt.Errorf("拉取镜像失败: %w", err)
 	}
@@ -192,13 +192,13 @@ func (s *SandboxService) createContainer(ctx context.Context, image string, cmd 
 			CPUQuota:   s.config.CPUQuota,                  // CPU配额
 			CPUPeriod:  100000,                             // CPU周期(100ms)
 		},
-		NetworkMode:   "none", // 禁用网络
-		SecurityOpt:   securityOpt,
+		NetworkMode:    "none", // 禁用网络
+		SecurityOpt:    securityOpt,
 		ReadonlyRootfs: true, // 只读文件系统
 		Mounts: []mount.Mount{
 			{
-				Type:     mount.TypeTmpfs,
-				Target:   "/tmp",
+				Type:   mount.TypeTmpfs,
+				Target: "/tmp",
 				TmpfsOptions: &mount.TmpfsOptions{
 					SizeBytes: s.config.MemoryLimit * 1024 * 1024, // /tmp目录大小限制
 				},
@@ -223,14 +223,14 @@ func (s *SandboxService) runContainer(ctx context.Context, containerID, input st
 	defer cancel()
 
 	// 启动容器
-	err := s.dockerClient.ContainerStart(execCtx, containerID, types.ContainerStartOptions{})
+	err := s.dockerClient.ContainerStart(execCtx, containerID, container.StartOptions{})
 	if err != nil {
 		return nil, err
 	}
 
 	// 如果有输入，写入stdin
 	if input != "" {
-		hijacked, err := s.dockerClient.ContainerAttach(execCtx, containerID, types.ContainerAttachOptions{
+		hijacked, err := s.dockerClient.ContainerAttach(execCtx, containerID, container.AttachOptions{
 			Stream: true,
 			Stdin:  true,
 		})
@@ -278,7 +278,7 @@ func (s *SandboxService) runContainer(ctx context.Context, containerID, input st
 
 // getContainerLogs 获取容器日志
 func (s *SandboxService) getContainerLogs(ctx context.Context, containerID string) (stdout, stderr string, err error) {
-	options := types.ContainerLogsOptions{
+	options := container.LogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 	}
@@ -313,7 +313,7 @@ func (s *SandboxService) getContainerStats(ctx context.Context, containerID stri
 	}
 	defer stats.Body.Close()
 
-	var stat types.StatsJSON
+	var stat container.StatsResponse
 	if err := json.NewDecoder(stats.Body).Decode(&stat); err != nil {
 		return nil, err
 	}
@@ -331,7 +331,7 @@ func (s *SandboxService) cleanupContainer(ctx context.Context, containerID strin
 	defer cancel()
 
 	// 移除容器
-	_ = s.dockerClient.ContainerRemove(cleanCtx, containerID, types.ContainerRemoveOptions{
+	_ = s.dockerClient.ContainerRemove(cleanCtx, containerID, container.RemoveOptions{
 		Force:         true,
 		RemoveVolumes: true,
 	})

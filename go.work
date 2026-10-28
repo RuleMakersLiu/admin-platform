@@ -1,0 +1,13 @@
+go 1.26.0
+
+use (
+	./admin-agent
+	./admin-common
+	./admin-config
+	./admin-deploy
+	./admin-egress-gateway
+	./admin-gateway
+	./admin-generator
+	./admin-sandbox-controller
+	./admin-ws
+)
