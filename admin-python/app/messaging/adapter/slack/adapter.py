@@ -13,14 +13,14 @@ import httpx
 
 from app.messaging.adapter.base import MessageAdapter
 from app.messaging.schemas import (
-    ChannelType,
     ChannelConfig,
-    UnifiedMessage,
-    UnifiedAttachment,
-    MessageType,
+    ChannelType,
     MessageStatus,
+    MessageType,
     SendMessageRequest,
     SendMessageResponse,
+    UnifiedAttachment,
+    UnifiedMessage,
     WebhookPayload,
 )
 

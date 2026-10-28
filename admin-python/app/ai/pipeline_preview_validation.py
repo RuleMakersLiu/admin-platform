@@ -24,6 +24,7 @@ from app.ai.pipeline_page_design import (
     _normalize_frontend_component_path,
     _page_name_tokens,
 )
+from app.ai.pipeline_project_context import _load_project_files_cached
 
 logger = logging.getLogger(__name__)
 
@@ -1252,7 +1253,6 @@ def _function_name_for_endpoint(endpoint: str, index: int) -> str:
 
 def _append_missing_api_endpoint_mocks(files: Dict[str, str], page_design_stage: Optional[Dict[str, Any]]) -> Tuple[Dict[str, str], List[str]]:
     """设计文档声明的接口若 API 模块未覆盖 → 自动追加 Promise.resolve mock 实现到 api 文件。"""
-    expected_paths = _expected_page_paths_from_page_design_stage(page_design_stage)
     document = ""
     if isinstance(page_design_stage, dict):
         document = str(page_design_stage.get("page_design_document") or page_design_stage.get("output") or "")

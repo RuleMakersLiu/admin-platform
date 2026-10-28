@@ -3,14 +3,14 @@
 /metrics：流水线计数、活跃沙箱、LLM 用量汇总、DB 连接池状态。
 /health/detail：服务依赖（postgres/redis/glm api）连通性 + 版本信息。
 """
-import time
 import logging
+import time
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select, func, text
+from sqlalchemy import text
 
-from app.core.database import engine, async_session_maker
 from app.core.config import settings
+from app.core.database import async_session_maker, engine
 from app.core.deps import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -45,8 +45,8 @@ async def prometheus_metrics():
             lines.append(f'pipeline_eval_avg_score {avg}')
 
             # 活跃沙箱进程数
-            from app.services.sandbox_preview_service import sandbox_preview_service
             from app.services.backend_runner_service import backend_runner_service
+            from app.services.sandbox_preview_service import sandbox_preview_service
             lines.append(f'sandbox_preview_active {len(sandbox_preview_service._processes)}')
             lines.append(f'sandbox_backend_active {len(backend_runner_service._processes)}')
     except Exception as e:

@@ -6,7 +6,7 @@ Built-in provider (MemoryService) is always first.
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from app.services.memory_provider import MemoryProvider
 

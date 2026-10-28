@@ -3,11 +3,11 @@ from pathlib import Path
 from app.ai.flow_manager import (
     _auto_fix_frontend_preview_code_files,
     _build_code_review_fix_feedback,
-    _build_preview_failure_message,
-    _build_repair_tasks_from_issues,
-    _build_repair_task_feedback,
-    _build_pipeline_prompt,
     _build_deterministic_code_review_result,
+    _build_pipeline_prompt,
+    _build_preview_failure_message,
+    _build_repair_task_feedback,
+    _build_repair_tasks_from_issues,
     _compact_fix_feedback,
     _declared_frontend_paths_from_page_design_stage,
     _expected_prototype_pages_from_page_design,
@@ -15,7 +15,6 @@ from app.ai.flow_manager import (
     _prototype_focus_from_page_design,
     _validate_frontend_preview_code_files,
 )
-
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 GROUP_BUY_PM_DELIVERY = ROOT_DIR / "docs/reports/pm-group-buying-delivery-2026-06-10.md"

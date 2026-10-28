@@ -3,15 +3,14 @@
 在应用启动时自动注册所有可用的渠道适配器。
 """
 import logging
-from typing import Optional
 
 from app.core.config import settings
 from app.messaging.adapter.base import adapter_registry
-from app.messaging.adapter.telegram.adapter import TelegramAdapter
 from app.messaging.adapter.discord.adapter import DiscordAdapter
-from app.messaging.adapter.slack.adapter import SlackAdapter
 from app.messaging.adapter.feishu.adapter import FeishuAdapter
-from app.messaging.schemas import ChannelType, ChannelConfig
+from app.messaging.adapter.slack.adapter import SlackAdapter
+from app.messaging.adapter.telegram.adapter import TelegramAdapter
+from app.messaging.schemas import ChannelConfig, ChannelType
 from app.messaging.service.message_router import get_message_router
 
 logger = logging.getLogger(__name__)
@@ -111,7 +110,7 @@ async def setup_messaging() -> None:
     from app.messaging.service.message_router import init_message_router
 
     # 初始化路由器
-    router = await init_message_router()
+    await init_message_router()
 
     # 初始化已配置的适配器
     await initialize_configured_adapters()

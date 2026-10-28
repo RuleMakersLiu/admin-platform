@@ -2,9 +2,10 @@
 看板 API 测试
 测试任务、项目、看板相关的 API 端点
 """
-import pytest
-import httpx
 from typing import Dict
+
+import httpx
+import pytest
 
 # 测试配置
 BASE_URL = "http://localhost:8081"

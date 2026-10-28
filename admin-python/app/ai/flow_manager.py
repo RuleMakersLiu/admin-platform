@@ -29,177 +29,100 @@
      含 fix-loop、eval 门控、fan-out 并行、escalate_to_human 等关键分支
 """
 
-import json
-import uuid
 import asyncio
+import json
 import logging
-import os
 import re
 import time
+import uuid
 from datetime import datetime
 from enum import Enum
-from typing import Awaitable, Callable, AsyncGenerator, Dict, List, Optional, Any, Tuple
+from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional, Tuple
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai import (
+    backend_scaffold,  # noqa: F401  (注册 backend_scaffolder skill)
+    contract_prober,  # noqa: F401  (注册 contract_prober skill — 4c 活契约探针)
+)
 from app.ai.agents import AgentService
-from app.ai import backend_scaffold  # noqa: F401  (注册 backend_scaffolder skill)
-from app.ai import contract_prober  # noqa: F401  (注册 contract_prober skill — 4c 活契约探针)
-from app.ai.pipeline_skills import ensure_workspace, get_workspace_path
-from app.ai.evaluators import DEFAULT_EVAL_CRITERIA, extract_eval_scores
-from app.prompts import (
-    DEFAULT_STAGE_PROMPTS,
-    PIPELINE_GLOBAL_PROMPT_CONTRACT,
-    PM_REQUIREMENT_REVIEW_CONTRACT,
-    PM_PAGE_DESIGN_REVIEW_CONTRACT,
-    REVIEW_GATE_CRITERIA,
-    REVIEW_GATE_PASS_SCORE,
-)
-from app.ai.skills import SkillStatus, skill_registry
+from app.ai.evaluators import DEFAULT_EVAL_CRITERIA  # noqa: F401  (tests 经本模块引用)
 from app.ai.model_router import pipeline_context
-from app.models.agent_models import DevPipeline, ProjectKnowledge
-from app.services.memory_service import MemoryService, MemoryType
-from app.services.user_evolution_service import UserEvolutionService
-from app.core.database import async_session_maker
-from app.core.config import settings
 from app.ai.pipeline_helpers import (
-    _is_frontend_page_path,
-    _has_new_page_structure_signal,
     _is_existing_feature_change_request,
-    _coerce_string_list,
 )
-from app.ai.pipeline_project_context import (
-    _project_cache,
-    _load_project_files_cached,
-    _requirement_match_terms,
-    _business_synonyms_for_terms,
-    _requirement_strong_business_terms,
-    _select_relevant_project_files,
-    _frontend_existing_page_paths,
-    _frontend_relevant_existing_page_paths,
-    _requirement_anchor_groups,
-    _is_product_pool_context,
-    _is_primary_product_list_context,
-    _matches_requirement_anchor_groups,
-    _humanize_frontend_page_path,
-    _frontend_existing_page_candidates,
-    _frontend_fallback_page_candidates,
-    get_frontend_page_candidates_for_requirement,
-    _load_project_context,
-    _get_key_file_patterns,
-    _project_file_read_limit,
-    _fetch_project_files_from_git,
-    _is_safe_git_url,
-    _clone_project_repo,
-    _inject_git_credentials,
-    _get_git_token_for_repo,
-    _get_git_token_for_project,
-    _cleanup_temp_path,
-)
-from app.ai.pipeline_llm import (
-    MAX_LLM_RETRIES,
-    RETRY_BASE_DELAY,
-    LLM_STREAM_IDLE_TIMEOUT,
-    LLM_FINAL_REPLY_TIMEOUT,
-    _is_retriable_error,
-    _is_context_length_error,
-    _agent_model_name,
+
+# ---------------------------------------------------------------------------
+# 拆分兼容层：flow_manager 拆出 pipeline_llm / page_design / project_context /
+# preview_validation 后，tests/ 与既有调用方仍习惯从本模块 import 这些符号。
+# 它们在 flow_manager 内部无直接使用（ruff 视为未用），删除本块前须先迁移引用方。
+# ---------------------------------------------------------------------------
+from app.ai.pipeline_llm import (  # noqa: F401
     _call_agent_with_retry,
-    _normalize_stream_chunk,
     _call_agent_with_retry_stream,
-)
-from app.ai.pipeline_page_design import (
-    _is_new_feature_page_request,
-    _is_known_support_page_name,
-    _page_name_tokens,
-    _expected_prototype_pages_from_page_design,
-    _extract_primary_pages_from_page_design_document,
-    _markdown_table_rows,
-    _is_support_page_design_row,
-    _is_primary_page_design_row,
-    _primary_pages_from_page_design_table,
-    _expected_page_paths_from_page_design_document,
-    _normalize_frontend_component_path,
-    _expected_page_paths_from_page_design_stage,
-    _declared_frontend_paths_from_page_design_stage,
+    _is_context_length_error,
+    _is_retriable_error,
+    _normalize_stream_chunk,
 )
 from app.ai.pipeline_output_parse import (
-    _try_parse_page_spec,
-    _try_parse_json_code_files,
-    _parse_markdown_code_files,
-    _try_parse_json_block,
     _extract_markdown_fence,
-    _remove_quality_json_blocks,
-    _coerce_quality_score,
-    _coerce_bool,
-    _normalized_contract_field_name,
-    _first_review_field_value,
-    _review_field_mismatch_is_equivalent,
-    _review_suggestions_only_field_related,
-    _normalize_code_review_result,
     _fallback_quality,
     _merge_quality_payload,
-    _validate_preview_html,
+    _normalize_code_review_result,
+    _parse_markdown_code_files,
     _prototype_focus_from_page_design,
+    _remove_quality_json_blocks,
+    _try_parse_json_block,
+    _try_parse_json_code_files,
+    _try_parse_page_spec,
+    _validate_preview_html,
 )
-from app.ai.pipeline_preview_validation import (
-    _is_additive_filter_request,
-    _requested_filter_label,
-    _query_filter_bindings,
-    _validate_existing_feature_paths,
-    _validate_existing_feature_mock_scope,
-    _validate_new_feature_mock_scope,
-    _project_skill_requires_nested_api_result,
-    _validate_api_response_envelope,
-    _permission_keys_from_design,
-    _generated_pages_look_auth_only,
-    _api_endpoint_requirements_from_design,
-    _endpoint_is_covered_by_api_module,
-    _component_requirements_from_design,
+from app.ai.pipeline_page_design import (  # noqa: F401
+    _declared_frontend_paths_from_page_design_stage,
+    _expected_prototype_pages_from_page_design,
+    _is_new_feature_page_request,
+)
+from app.ai.pipeline_preview_validation import (  # noqa: F401
     _action_requirements_from_design,
-    _component_is_used,
-    _action_is_covered,
-    _validate_page_design_frontend_coverage,
-    _collect_api_endpoints,
-    _validate_undefined_data_return_refs,
-    _validate_mock_pagination_interaction,
-    _validate_existing_feature_preservation,
-    _e2e_browser_check_issues,
-    _validate_frontend_preview_code_files,
-    _patch_stable_table_contract_content,
-    _exported_function_names,
-    _duplicate_exported_function_names,
-    _export_function_block_end,
-    _patch_duplicate_exported_functions,
-    _api_result_success_payload,
-    _patch_api_result_envelope_content,
-    _function_name_for_endpoint,
-    _append_missing_api_endpoint_mocks,
-    _append_missing_component_references,
-    _default_vue_page_content,
-    _append_missing_declared_pages,
-    _normalize_generated_frontend_paths,
-    _is_frontend_component_file,
-    _enforce_declared_frontend_paths,
-    _patch_preview_only_names,
-    _patch_runtime_guard_markers,
-    _patch_time_range_split_markers,
-    _auto_fix_frontend_preview_code_files,
-    _infer_new_filter_field,
-    _is_identifier_filter_label,
-    _ensure_query_param_field,
-    _ensure_data_return_field,
-    _ensure_identifier_filter_template_contract,
-    _identifier_filter_methods,
-    _ensure_identifier_filter_methods,
-    _insert_requested_filter,
     _auto_fix_existing_feature_from_original,
+    _auto_fix_frontend_preview_code_files,
+    _build_deterministic_code_review_result,
+    _collect_api_endpoints,
+    _e2e_browser_check_issues,
+    _generated_pages_look_auth_only,
+    _load_existing_preview_page_files,
+    _patch_stable_table_contract_content,
+    _patch_time_range_split_markers,
+    _permission_keys_from_design,
     _pick_existing_frontend_files,
     _resolve_existing_page_paths_for_preview,
-    _load_existing_preview_page_files,
-    _build_deterministic_code_review_result,
+    _validate_frontend_preview_code_files,
+    _validate_page_design_frontend_coverage,
 )
+from app.ai.pipeline_project_context import (  # noqa: F401
+    _fetch_project_files_from_git,
+    _frontend_existing_page_candidates,
+    _frontend_existing_page_paths,
+    _frontend_fallback_page_candidates,
+    _frontend_relevant_existing_page_paths,
+    _is_safe_git_url,
+    _load_project_context,
+    _load_project_files_cached,
+    _project_file_read_limit,
+    get_frontend_page_candidates_for_requirement,
+)
+from app.ai.pipeline_skills import ensure_workspace, get_workspace_path
+from app.ai.skills import skill_registry
+from app.core.database import async_session_maker
+from app.models.agent_models import DevPipeline, ProjectKnowledge
+from app.prompts import (
+    PIPELINE_GLOBAL_PROMPT_CONTRACT,
+    PM_PAGE_DESIGN_REVIEW_CONTRACT,
+    PM_REQUIREMENT_REVIEW_CONTRACT,
+)
+from app.services.memory_service import MemoryService, MemoryType
+from app.services.user_evolution_service import UserEvolutionService
 
 logger = logging.getLogger(__name__)
 
@@ -1834,8 +1757,9 @@ def _parse_agent_output(stage_key: str, raw_output: str) -> Dict[str, Any]:
 #   - confirm_stage / resume_from_human：用户确认 / 人工介入恢复
 #   - get_* / list_* / rollback / git_commit_pipeline 等查询和管理方法
 
-from app.ai.pipeline_eval_mixin import PipelineEvalMixin
-from app.ai.pipeline_queries_mixin import PipelineQueriesMixin
+# mixin 在类定义前经底部 import 引入（避免循环依赖），E402 是刻意为之
+from app.ai.pipeline_eval_mixin import PipelineEvalMixin  # noqa: E402
+from app.ai.pipeline_queries_mixin import PipelineQueriesMixin  # noqa: E402
 
 
 class DevPipelineManager(PipelineEvalMixin, PipelineQueriesMixin):
@@ -2185,7 +2109,7 @@ class DevPipelineManager(PipelineEvalMixin, PipelineQueriesMixin):
                         "duration_ms": test_output.get("duration_ms", 0),
                     }
                     # 追加实际测试输出到阶段 output
-                    test_summary = f"\n\n--- 实际测试执行结果 ---\n"
+                    test_summary = "\n\n--- 实际测试执行结果 ---\n"
                     test_summary += f"框架: {test_output.get('framework', 'unknown')}\n"
                     test_summary += f"结果: {'通过' if test_output.get('success') else '失败'}\n"
                     if test_output.get("tests_passed") is not None:
@@ -2202,7 +2126,7 @@ class DevPipelineManager(PipelineEvalMixin, PipelineQueriesMixin):
         if stage_key == "commit" and workspace:
             # 提取 commit message: 取 LLM 输出的第一行或前 100 字符
             output_text = parsed.get("output", "")
-            commit_lines = [l for l in output_text.split("\n") if l.strip()]
+            commit_lines = [ln for ln in output_text.split("\n") if ln.strip()]
             commit_message = commit_lines[0][:100] if commit_lines else f"Pipeline {pipeline_id} auto-commit"
             if commit_message.startswith("#"):
                 commit_message = commit_lines[1][:100] if len(commit_lines) > 1 else commit_message
@@ -2358,7 +2282,7 @@ class DevPipelineManager(PipelineEvalMixin, PipelineQueriesMixin):
             "frontend_tech": pipe_config.get("frontend_tech", ""),
             "pipeline_mode": pipe_config.get("pipeline_mode", "full"),
             "workspace_path": pipe.workspace_path or get_workspace_path(pipeline_id),
-            "use_spec_mode": _use_spec_mode if "_use_spec_mode" in dir() else False,
+            "use_spec_mode": globals().get("_use_spec_mode", False),
         }
         selected_frontend_page_path = str(pipe_config.get("selected_frontend_page_path") or "").strip()
 
@@ -3959,9 +3883,12 @@ class DevPipelineManager(PipelineEvalMixin, PipelineQueriesMixin):
         merge_strategy: str = "merge",
     ) -> Dict[str, Any]:
         """手动触发 Git 提交（pipeline 完成后）。复用 git_commit skill + _do_git_operations。"""
-        from app.ai.pipeline_skills import _write_ssh_key_via_skill, _do_git_operations, _build_auth_url
+        from app.ai.pipeline_skills import (
+            _do_git_operations,
+            _write_ssh_key_via_skill,
+            get_workspace_path,
+        )
         from app.models.models import SysGitConfig
-        from app.ai.pipeline_skills import get_workspace_path
 
         async with async_session_maker() as session:
             pipe = await self._load_pipeline(session, pipeline_id)

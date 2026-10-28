@@ -2,11 +2,11 @@
 WebSocket 测试
 测试 WebSocket 连接、消息发送和接收
 """
-import pytest
 import asyncio
 import json
+
 import httpx
-from unittest.mock import Mock, patch, AsyncMock
+import pytest
 
 # 测试配置
 BASE_URL = "http://localhost:8081"
@@ -64,10 +64,10 @@ class TestWebSocketConnection:
             async with websockets.connect(ws_url) as ws:
                 # 连接成功
                 assert ws.open is True
-                
+
                 # 发送 ping 消息
                 await ws.send(json.dumps({"type": "ping", "payload": {}}))
-                
+
                 # 等待响应（可能超时，取决于服务端实现）
                 try:
                     response = await asyncio.wait_for(ws.recv(), timeout=5.0)
@@ -93,7 +93,7 @@ class TestWebSocketMessaging:
         try:
             import websockets
             ws_url = f"{WS_URL}?token={auth_token}"
-            
+
             async with websockets.connect(ws_url) as ws:
                 # 发送消息
                 message = {
@@ -106,7 +106,7 @@ class TestWebSocketMessaging:
                     "timestamp": int(asyncio.get_event_loop().time() * 1000)
                 }
                 await ws.send(json.dumps(message))
-                
+
                 # 等待响应
                 try:
                     response = await asyncio.wait_for(ws.recv(), timeout=10.0)
@@ -115,7 +115,7 @@ class TestWebSocketMessaging:
                     assert data.get("type") in ["message.sent", "message.received", "message.complete", "error"]
                 except asyncio.TimeoutError:
                     pytest.skip("Server did not respond in time")
-                    
+
         except ImportError:
             pytest.skip("websockets library not installed")
         except Exception as e:
@@ -128,7 +128,7 @@ class TestWebSocketMessaging:
         try:
             import websockets
             ws_url = f"{WS_URL}?token={auth_token}"
-            
+
             async with websockets.connect(ws_url) as ws:
                 # 发送创建会话请求
                 message = {
@@ -139,7 +139,7 @@ class TestWebSocketMessaging:
                     "timestamp": int(asyncio.get_event_loop().time() * 1000)
                 }
                 await ws.send(json.dumps(message))
-                
+
                 # 等待响应
                 try:
                     response = await asyncio.wait_for(ws.recv(), timeout=5.0)
@@ -147,7 +147,7 @@ class TestWebSocketMessaging:
                     assert data.get("type") in ["session.created", "error"]
                 except asyncio.TimeoutError:
                     pytest.skip("Server did not respond in time")
-                    
+
         except ImportError:
             pytest.skip("websockets library not installed")
         except Exception as e:
@@ -160,7 +160,7 @@ class TestWebSocketMessaging:
         try:
             import websockets
             ws_url = f"{WS_URL}?token={auth_token}"
-            
+
             async with websockets.connect(ws_url) as ws:
                 # 发送删除会话请求
                 message = {
@@ -171,7 +171,7 @@ class TestWebSocketMessaging:
                     "timestamp": int(asyncio.get_event_loop().time() * 1000)
                 }
                 await ws.send(json.dumps(message))
-                
+
                 # 等待响应
                 try:
                     response = await asyncio.wait_for(ws.recv(), timeout=5.0)
@@ -179,7 +179,7 @@ class TestWebSocketMessaging:
                     assert data.get("type") in ["session.deleted", "error"]
                 except asyncio.TimeoutError:
                     pytest.skip("Server did not respond in time")
-                    
+
         except ImportError:
             pytest.skip("websockets library not installed")
         except Exception as e:
@@ -195,23 +195,23 @@ class TestWebSocketReconnection:
         """测试重连行为"""
         try:
             import websockets
-            
+
             # 第一次连接
             ws_url = f"{WS_URL}?token={auth_token}"
             ws1 = await websockets.connect(ws_url)
             assert ws1.open is True
-            
+
             # 关闭连接
             await ws1.close()
             assert ws1.open is False
-            
+
             # 重新连接
             ws2 = await websockets.connect(ws_url)
             assert ws2.open is True
-            
+
             # 清理
             await ws2.close()
-            
+
         except ImportError:
             pytest.skip("websockets library not installed")
         except Exception as e:
@@ -228,13 +228,13 @@ class TestWebSocketHeartbeat:
         try:
             import websockets
             ws_url = f"{WS_URL}?token={auth_token}"
-            
+
             async with websockets.connect(ws_url) as ws:
                 # 发送多个 ping
                 for i in range(3):
                     await ws.send(json.dumps({"type": "ping", "payload": {"seq": i}}))
                     await asyncio.sleep(0.5)
-                
+
                 # 收集所有响应
                 responses = []
                 try:
@@ -243,11 +243,11 @@ class TestWebSocketHeartbeat:
                         responses.append(json.loads(response))
                 except asyncio.TimeoutError:
                     pass
-                
+
                 # 验证至少收到一个响应
                 # 注意：服务端可能不回复 ping，这是正常的
                 print(f"Received {len(responses)} responses")
-                
+
         except ImportError:
             pytest.skip("websockets library not installed")
         except Exception as e:
@@ -264,11 +264,11 @@ class TestWebSocketErrorHandling:
         try:
             import websockets
             ws_url = f"{WS_URL}?token={auth_token}"
-            
+
             async with websockets.connect(ws_url) as ws:
                 # 发送无效 JSON
                 await ws.send("not a valid json")
-                
+
                 # 等待错误响应
                 try:
                     response = await asyncio.wait_for(ws.recv(), timeout=5.0)
@@ -281,7 +281,7 @@ class TestWebSocketErrorHandling:
                 except json.JSONDecodeError:
                     # 服务端可能返回非 JSON 响应
                     pass
-                    
+
         except ImportError:
             pytest.skip("websockets library not installed")
         except Exception as e:
@@ -294,7 +294,7 @@ class TestWebSocketErrorHandling:
         try:
             import websockets
             ws_url = f"{WS_URL}?token={auth_token}"
-            
+
             async with websockets.connect(ws_url) as ws:
                 # 发送没有 type 的消息
                 message = {
@@ -302,7 +302,7 @@ class TestWebSocketErrorHandling:
                     "timestamp": int(asyncio.get_event_loop().time() * 1000)
                 }
                 await ws.send(json.dumps(message))
-                
+
                 # 等待错误响应
                 try:
                     response = await asyncio.wait_for(ws.recv(), timeout=5.0)
@@ -311,7 +311,7 @@ class TestWebSocketErrorHandling:
                     assert data.get("type") in ["error", "unknown"] or "error" in str(data).lower()
                 except asyncio.TimeoutError:
                     pass
-                    
+
         except ImportError:
             pytest.skip("websockets library not installed")
         except Exception as e:
@@ -335,11 +335,11 @@ class TestWebSocketMock:
             },
             "timestamp": 1700000000000
         }
-        
+
         # 序列化
         json_str = json.dumps(message)
         assert json_str is not None
-        
+
         # 反序列化
         parsed = json.loads(json_str)
         assert parsed["type"] == "message.send"
@@ -361,7 +361,7 @@ class TestWebSocketMock:
             "session.delete",
             "session.rename"
         ]
-        
+
         for msg_type in valid_types:
             message = {"type": msg_type, "payload": {}}
             assert message["type"] in valid_types

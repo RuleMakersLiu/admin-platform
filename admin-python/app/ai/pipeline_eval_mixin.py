@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.evaluators import DEFAULT_EVAL_CRITERIA, extract_eval_scores
 from app.core.config import settings
+from app.core.database import async_session_maker
 from app.models.agent_models import DevPipeline
 
 logger = logging.getLogger(__name__)
@@ -192,9 +193,9 @@ class PipelineEvalMixin:
 
     async def _auto_judge_eval_runs(self, pipe: "DevPipeline", session: AsyncSession) -> None:
             """管线终态：对该 pipeline 关联的待评审 EvalRun 自动评审并回写。"""
-            from app.models.eval_run import EvalRun
-            from app.models.eval_golden_case import EvalGoldenCase
             from app.ai.eval_judge import extract_pipeline_output, judge_hallucination, judge_output
+            from app.models.eval_golden_case import EvalGoldenCase
+            from app.models.eval_run import EvalRun
 
             stmt = select(EvalRun).where(
                 EvalRun.pipeline_id == pipe.pipeline_id,
@@ -258,11 +259,18 @@ class PipelineEvalMixin:
             best-effort 回退 Vue2 渲染桩并静默。无 golden case 时用 DEFAULT_EVAL_CRITERIA。
             评测本身不重试、不阻塞报告——失败由调用方兜底为 error 文案。
             """
-            from app.ai.eval_judge import extract_pipeline_output, judge_output, judge_hallucination, judge_output_vision
-            from app.services.vision_eval_service import (
-                acquire_live_preview, render_pipeline_screenshot, run_e2e_assertions,
-            )
             from app.ai.e2e_expectations import derive_e2e_expectations
+            from app.ai.eval_judge import (
+                extract_pipeline_output,
+                judge_hallucination,
+                judge_output,
+                judge_output_vision,
+            )
+            from app.services.vision_eval_service import (
+                acquire_live_preview,
+                render_pipeline_screenshot,
+                run_e2e_assertions,
+            )
 
             output = extract_pipeline_output(pipe.stages_data)
             requirement = (pipe.user_request or "").strip() or stages.get("requirement", {}).get("output", "")

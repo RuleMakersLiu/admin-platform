@@ -13,11 +13,11 @@ from typing import Any, Callable, Optional
 
 from app.messaging.adapter.base import MessageAdapter, adapter_registry
 from app.messaging.schemas import (
-    ChannelType,
     ChannelConfig,
-    UnifiedMessage,
+    ChannelType,
     SendMessageRequest,
     SendMessageResponse,
+    UnifiedMessage,
     WebhookPayload,
 )
 from app.messaging.service.message_queue import MessageQueue

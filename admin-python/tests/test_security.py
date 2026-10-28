@@ -11,7 +11,6 @@ from pydantic import ValidationError
 
 from app.core.config import DEFAULT_JWT_SECRET, Settings
 
-
 # ---------- SSRF ----------
 
 def test_is_safe_git_url_allows_known_hosts():
@@ -63,6 +62,7 @@ def test_jwt_secret_validator_allows_real_secret_and_dev():
 
 def test_identity_derived_from_jwt_not_spoofable_header():
     import jwt as _jwt
+
     from app.api.flow import _jwt_claim
     from app.core.config import settings
 

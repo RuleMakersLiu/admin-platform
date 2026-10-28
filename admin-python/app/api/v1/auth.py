@@ -1,16 +1,17 @@
 """认证路由"""
-from typing import List, Any
+from typing import List
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.redis import get_gateway_redis
-from app.schemas.common import LoginRequest, LoginResponse, Response, UserInfo
+from app.models.models import SysAdminGroup, SysMenu, SysTenant
+from app.schemas.common import LoginRequest, Response
 from app.services.auth import AuthService
 from app.services.permissions import filter_menu_nodes, parse_power
-from app.models.models import SysTenant, SysMenu, SysAdminGroup
 
 router = APIRouter(prefix="/auth", tags=["认证"])
 security = HTTPBearer()

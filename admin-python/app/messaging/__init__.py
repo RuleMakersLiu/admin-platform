@@ -1,15 +1,15 @@
 """消息模块 - 简化版"""
 from app.messaging.schemas import (
-    Response,
-    Message,
+    AdapterConfig,
+    ChannelConfig,
     ChannelInfo,
+    ChannelType,
+    Message,
+    MessageType,
+    Response,
     SendMessageRequest,
     SendMessageResponse,
-    AdapterConfig,
-    ChannelType,
-    MessageType,
     UnifiedMessage,
-    ChannelConfig,
 )
 
 __all__ = [

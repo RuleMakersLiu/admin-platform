@@ -1,56 +1,55 @@
 """数据模型"""
 # 从 database 导入 Base
 from app.core.database import Base
-
+from app.models.agent import (
+    AgentCapability,
+    AgentHeartbeat,
+    AgentInfo,
+    AgentStatus,
+    AgentWorkLog,
+    AgentWorkStatus,
+)
+from app.models.agent_models import (
+    AgentBug,
+    AgentConfig,
+    AgentKnowledge,
+    AgentMemory,
+    AgentMessage,
+    AgentProject,
+    AgentSession,
+    AgentTask,
+    DevPipeline,
+    KnowledgeEdge,
+)
+from app.models.collaboration import (
+    AgentHandoff,
+    AgentReview,
+    CollaborationMetrics,
+    CollaborationRecord,
+    CollaborationStatus,
+    CollaborationType,
+)
+from app.models.eval_golden_case import EvalGoldenCase
+from app.models.eval_run import EvalRun
+from app.models.llm_usage_log import LLMUsageLog
 from app.models.models import (
     SysAdmin,
     SysAdminGroup,
     SysMenu,
     SysTenant,
 )
-from app.models.agent_models import (
-    AgentProject,
-    AgentSession,
-    AgentMessage,
-    AgentConfig,
-    AgentTask,
-    AgentBug,
-    AgentMemory,
-    AgentKnowledge,
-    KnowledgeEdge,
-    DevPipeline,
-)
+from app.models.pipeline_eval import PipelineEvalResult
 
 # 新增模型
 from app.models.task import (
-    KanbanTask,
     KanbanColumn,
-    TaskComment,
+    KanbanTask,
     TaskActivity,
-    TaskStatus,
+    TaskComment,
     TaskPriority,
+    TaskStatus,
     TaskType,
 )
-from app.models.agent import (
-    AgentInfo,
-    AgentStatus,
-    AgentHeartbeat,
-    AgentWorkLog,
-    AgentWorkStatus,
-    AgentCapability,
-)
-from app.models.collaboration import (
-    CollaborationRecord,
-    AgentHandoff,
-    AgentReview,
-    CollaborationMetrics,
-    CollaborationType,
-    CollaborationStatus,
-)
-from app.models.pipeline_eval import PipelineEvalResult
-from app.models.eval_golden_case import EvalGoldenCase
-from app.models.eval_run import EvalRun
-from app.models.llm_usage_log import LLMUsageLog
 
 __all__ = [
     # Base

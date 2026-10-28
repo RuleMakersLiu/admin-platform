@@ -2,11 +2,10 @@
 智能体状态测试
 测试智能分身的状态管理、会话管理和消息处理
 """
-import pytest
+from typing import Dict
+
 import httpx
-import asyncio
-from unittest.mock import Mock, patch, AsyncMock, MagicMock
-from typing import Dict, Optional
+import pytest
 
 # 测试配置
 BASE_URL = "http://localhost:8081"
@@ -258,20 +257,20 @@ class TestAgentSessionManagement:
     def test_session_id_generation(self):
         """测试会话 ID 生成"""
         import uuid
-        
+
         # 模拟会话 ID 生成
         session_id = f"sess_{uuid.uuid4().hex[:16]}"
-        
+
         assert session_id.startswith("sess_")
         assert len(session_id) == 21  # "sess_" (5) + 16 hex chars
 
     def test_message_id_generation(self):
         """测试消息 ID 生成"""
         import uuid
-        
+
         # 模拟消息 ID 生成
         msg_id = f"msg_{uuid.uuid4().hex[:16]}"
-        
+
         assert msg_id.startswith("msg_")
         assert len(msg_id) == 20  # "msg_" (4) + 16 hex chars
 
@@ -280,18 +279,18 @@ class TestAgentSessionManagement:
         # 模拟会话消息历史
         session_messages = []
         max_messages = 20
-        
+
         # 添加超过限制的消息
         for i in range(25):
             session_messages.append({
                 "role": "user" if i % 2 == 0 else "assistant",
                 "content": f"消息 {i}"
             })
-        
+
         # 限制消息数量
         if len(session_messages) > max_messages:
             session_messages = session_messages[-max_messages:]
-        
+
         assert len(session_messages) == max_messages
 
 
@@ -302,8 +301,7 @@ class TestAgentMessageProcessing:
     async def test_process_user_message(self):
         """测试处理用户消息"""
         # 模拟消息处理
-        message = "请帮我分析用户登录需求"
-        
+
         # 预期响应结构
         expected_response = {
             "session_id": "test_session",
@@ -312,7 +310,7 @@ class TestAgentMessageProcessing:
             "reply": "好的，我来分析用户登录需求...",
             "msg_type": "chat"
         }
-        
+
         assert expected_response["agent_type"] == AgentType.PM
         assert expected_response["msg_type"] == "chat"
         assert len(expected_response["reply"]) > 0
@@ -321,7 +319,7 @@ class TestAgentMessageProcessing:
     async def test_process_empty_message(self):
         """测试处理空消息"""
         message = ""
-        
+
         # 空消息应该被拒绝或返回错误
         is_valid = len(message.strip()) > 0
         assert is_valid is False
@@ -331,7 +329,7 @@ class TestAgentMessageProcessing:
         """测试处理长消息"""
         # 生成超长消息
         long_message = "测试消息 " * 10000
-        
+
         # 检查消息长度限制
         max_length = 10000
         is_valid = len(long_message) <= max_length

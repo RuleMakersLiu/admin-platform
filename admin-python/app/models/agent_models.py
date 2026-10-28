@@ -3,9 +3,9 @@ import time
 from decimal import Decimal
 from typing import Optional
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import BigInteger, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
-from pgvector.sqlalchemy import Vector
 
 from app.core.database import Base
 

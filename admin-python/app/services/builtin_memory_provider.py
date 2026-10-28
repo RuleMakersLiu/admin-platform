@@ -3,9 +3,9 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
+from app.core.database import async_session_maker
 from app.services.memory_provider import MemoryProvider
 from app.services.memory_service import MemoryService, MemoryType
-from app.core.database import async_session_maker
 
 logger = logging.getLogger(__name__)
 

@@ -7,7 +7,7 @@
   - Token 统计：记录每次调用的 token 使用量
 """
 import uuid
-from abc import ABC, abstractmethod
+from abc import ABC
 from typing import AsyncGenerator, Optional
 
 from app.ai.attachments import process_attachments
@@ -264,6 +264,7 @@ class AgentFactory:
     async def load_llm_from_db(cls, db):
         """从数据库加载默认 LLM 配置"""
         from sqlalchemy import select
+
         from app.models.models import SysLlmConfig
 
         result = await db.execute(

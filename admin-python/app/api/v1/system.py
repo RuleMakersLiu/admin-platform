@@ -4,14 +4,13 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select, delete
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.core.redis import get_gateway_redis
 from app.models.models import (
-    ProjectTenantScope,
     SysAdmin,
     SysAdminGroup,
     SysAdminTenant,
@@ -20,7 +19,7 @@ from app.models.models import (
     SysMenu,
     SysTenant,
 )
-from app.schemas.common import PaginatedResult, Response
+from app.schemas.common import Response
 from app.services.permissions import parse_power, serialize_power
 
 router = APIRouter(prefix="/system", tags=["系统管理"])

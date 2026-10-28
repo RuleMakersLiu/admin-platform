@@ -1,12 +1,12 @@
 """工作流服务 - 核心业务逻辑"""
 import time
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.agent_models import AgentMessage, AgentProject, AgentSession
+from app.models.agent_models import AgentSession
 
 
 class WorkflowStage(str, Enum):

@@ -5,7 +5,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.eval_judge import (
@@ -121,8 +121,8 @@ async def create_from_pipeline(
 ):
     """从一条已跑完的 pipeline 一键生成 Golden case：input_spec 取 user_request（+ 参考产物供人工对照），
     expected_criteria 默认 DEFAULT_EVAL_CRITERIA（可覆盖）。把人工认定的「好/坏」产物沉淀为回归基线。"""
-    from app.models.agent_models import DevPipeline
     from app.ai.evaluators import DEFAULT_EVAL_CRITERIA
+    from app.models.agent_models import DevPipeline
 
     pipe = (await db.execute(
         select(DevPipeline).where(

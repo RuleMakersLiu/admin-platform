@@ -1,4 +1,9 @@
-from app.services.permissions import has_permission, normalize_permission, parse_power, serialize_power
+from app.services.permissions import (
+    has_permission,
+    normalize_permission,
+    parse_power,
+    serialize_power,
+)
 
 
 def test_normalize_permission_supports_legacy_underscore_keys():

@@ -1,7 +1,6 @@
 """frontend_scaffold 模板渲染测试（Spec → antd-vue 代码）。"""
 from app.ai.frontend_scaffold import render_spec_to_code_files
 
-
 _SPEC = {
     "pages": [{
         "path": "src/views/product/List.vue",

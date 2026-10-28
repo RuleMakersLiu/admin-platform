@@ -1,20 +1,17 @@
 """智能体状态API路由"""
+import json
 import time
 import uuid
-import json
-from typing import Optional, List
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, func, and_, or_
 
 from app.api.deps import get_db
 from app.api.v1.auth import get_current_user
+from app.models.agent import AgentHeartbeat, AgentInfo, AgentStatus, AgentWorkLog, AgentWorkStatus
 from app.schemas.common import Response
-from app.models.agent import (
-    AgentInfo, AgentStatus, AgentHeartbeat, AgentWorkLog,
-    AgentWorkStatus
-)
 
 router = APIRouter(prefix="/agents", tags=["智能体状态"])
 
@@ -31,27 +28,27 @@ async def list_agents(
 ):
     """获取智能体列表"""
     tenant_id = user.get("tenantId")
-    
+
     query = select(AgentInfo).where(
         AgentInfo.tenant_id == tenant_id,
         AgentInfo.is_deleted == 0,
     )
-    
+
     if agent_type:
         query = query.where(AgentInfo.agent_type == agent_type)
     if status:
         query = query.where(AgentInfo.status == status)
-    
+
     query = query.order_by(AgentInfo.agent_type, AgentInfo.create_time)
-    
+
     result = await db.execute(query)
     agents = result.scalars().all()
-    
+
     # 获取每个智能体的实时状态
     agents_data = []
     for agent in agents:
         agent_dict = agent.to_dict()
-        
+
         # 获取实时状态
         status_result = await db.execute(
             select(AgentStatus)
@@ -60,14 +57,14 @@ async def list_agents(
             .limit(1)
         )
         latest_status = status_result.scalar_one_or_none()
-        
+
         if latest_status:
             agent_dict["currentStatus"] = latest_status.to_dict()
         else:
             agent_dict["currentStatus"] = None
-        
+
         agents_data.append(agent_dict)
-    
+
     return Response(data={
         "total": len(agents_data),
         "list": agents_data,
@@ -82,7 +79,7 @@ async def get_agent(
 ):
     """获取智能体详情"""
     tenant_id = user.get("tenantId")
-    
+
     result = await db.execute(
         select(AgentInfo)
         .where(
@@ -91,12 +88,12 @@ async def get_agent(
         )
     )
     agent = result.scalar_one_or_none()
-    
+
     if not agent:
         return Response(code=404, message="智能体不存在")
-    
+
     agent_dict = agent.to_dict()
-    
+
     # 获取实时状态
     status_result = await db.execute(
         select(AgentStatus)
@@ -105,7 +102,7 @@ async def get_agent(
         .limit(1)
     )
     agent_dict["currentStatus"] = status_result.scalar_one_or_none()
-    
+
     # 获取最近工作日志
     logs_result = await db.execute(
         select(AgentWorkLog)
@@ -114,7 +111,7 @@ async def get_agent(
         .limit(10)
     )
     agent_dict["recentLogs"] = [log.to_dict() for log in logs_result.scalars().all()]
-    
+
     return Response(data=agent_dict)
 
 
@@ -126,10 +123,10 @@ async def get_agent_types_overview(
 ):
     """获取各类型智能体概览"""
     tenant_id = user.get("tenantId")
-    
+
     # 定义智能体类型
     agent_types = ["PM", "PJM", "BE", "FE", "QA", "RPT"]
-    
+
     overview = []
     for agent_type in agent_types:
         # 获取该类型的智能体信息
@@ -142,7 +139,7 @@ async def get_agent_types_overview(
             )
         )
         agents = result.scalars().all()
-        
+
         type_data = {
             "agentType": agent_type,
             "name": get_agent_type_name(agent_type),
@@ -153,7 +150,7 @@ async def get_agent_types_overview(
             "offlineAgents": 0,
             "agents": [],
         }
-        
+
         for agent in agents:
             # 获取状态
             status_result = await db.execute(
@@ -163,9 +160,9 @@ async def get_agent_types_overview(
                 .limit(1)
             )
             latest_status = status_result.scalar_one_or_none()
-            
+
             work_status = latest_status.work_status if latest_status else AgentWorkStatus.OFFLINE.value
-            
+
             if work_status == AgentWorkStatus.IDLE.value:
                 type_data["idleAgents"] += 1
             elif work_status == AgentWorkStatus.WORKING.value:
@@ -174,7 +171,7 @@ async def get_agent_types_overview(
                 type_data["errorAgents"] += 1
             else:
                 type_data["offlineAgents"] += 1
-            
+
             type_data["agents"].append({
                 "agentId": agent.agent_id,
                 "name": agent.name,
@@ -182,9 +179,9 @@ async def get_agent_types_overview(
                 "currentTaskId": latest_status.current_task_id if latest_status else None,
                 "progress": latest_status.progress if latest_status else 0,
             })
-        
+
         overview.append(type_data)
-    
+
     return Response(data=overview)
 
 
@@ -210,8 +207,7 @@ async def get_agent_status(
     db: AsyncSession = Depends(get_db),
 ):
     """获取智能体实时状态"""
-    tenant_id = user.get("tenantId")
-    
+
     result = await db.execute(
         select(AgentStatus)
         .where(AgentStatus.agent_id == agent_id)
@@ -219,10 +215,10 @@ async def get_agent_status(
         .limit(1)
     )
     status = result.scalar_one_or_none()
-    
+
     if not status:
         return Response(code=404, message="状态不存在")
-    
+
     return Response(data=status.to_dict())
 
 
@@ -239,7 +235,7 @@ async def update_agent_status(
 ):
     """更新智能体状态"""
     tenant_id = user.get("tenantId")
-    
+
     result = await db.execute(
         select(AgentStatus)
         .where(AgentStatus.agent_id == agent_id)
@@ -247,7 +243,7 @@ async def update_agent_status(
         .limit(1)
     )
     status = result.scalar_one_or_none()
-    
+
     if not status:
         # 创建新状态记录
         # 先获取agent信息
@@ -255,7 +251,7 @@ async def update_agent_status(
             select(AgentInfo).where(AgentInfo.agent_id == agent_id)
         )
         agent = agent_result.scalar_one_or_none()
-        
+
         status = AgentStatus(
             status_id=f"st_{uuid.uuid4().hex[:12]}",
             agent_id=agent_id,
@@ -282,15 +278,15 @@ async def update_agent_status(
             update_data["progress"] = progress
         if progress_message is not None:
             update_data["progress_message"] = progress_message
-        
+
         await db.execute(
             update(AgentStatus)
             .where(AgentStatus.status_id == status.status_id)
             .values(**update_data)
         )
-    
+
     await db.commit()
-    
+
     return Response(message="状态更新成功")
 
 
@@ -307,13 +303,13 @@ async def agent_heartbeat(
 ):
     """智能体心跳"""
     tenant_id = user.get("tenantId")
-    
+
     # 获取agent信息
     agent_result = await db.execute(
         select(AgentInfo).where(AgentInfo.agent_id == agent_id)
     )
     agent = agent_result.scalar_one_or_none()
-    
+
     # 记录心跳
     heartbeat = AgentHeartbeat(
         heartbeat_id=f"hb_{uuid.uuid4().hex[:12]}",
@@ -327,7 +323,7 @@ async def agent_heartbeat(
         tenant_id=tenant_id,
     )
     db.add(heartbeat)
-    
+
     # 更新实时状态
     status_result = await db.execute(
         select(AgentStatus)
@@ -336,7 +332,7 @@ async def agent_heartbeat(
         .limit(1)
     )
     agent_status = status_result.scalar_one_or_none()
-    
+
     if agent_status:
         await db.execute(
             update(AgentStatus)
@@ -362,9 +358,9 @@ async def agent_heartbeat(
             tenant_id=tenant_id,
         )
         db.add(new_status)
-    
+
     await db.commit()
-    
+
     return Response(message="心跳记录成功")
 
 
@@ -383,10 +379,9 @@ async def get_agent_work_logs(
     db: AsyncSession = Depends(get_db),
 ):
     """获取智能体工作日志"""
-    tenant_id = user.get("tenantId")
-    
+
     query = select(AgentWorkLog).where(AgentWorkLog.agent_id == agent_id)
-    
+
     if project_id:
         query = query.where(AgentWorkLog.project_id == project_id)
     if task_id:
@@ -395,18 +390,18 @@ async def get_agent_work_logs(
         query = query.where(AgentWorkLog.action == action)
     if level:
         query = query.where(AgentWorkLog.level == level)
-    
+
     # 获取总数
     count_query = select(func.count()).select_from(query.subquery())
     total = (await db.execute(count_query)).scalar()
-    
+
     # 分页
     query = query.order_by(AgentWorkLog.create_time.desc())
     query = query.offset((page - 1) * page_size).limit(page_size)
-    
+
     result = await db.execute(query)
     logs = result.scalars().all()
-    
+
     return Response(data={
         "total": total,
         "page": page,
@@ -434,13 +429,13 @@ async def create_agent_work_log(
 ):
     """创建工作日志"""
     tenant_id = user.get("tenantId")
-    
+
     # 获取agent信息
     agent_result = await db.execute(
         select(AgentInfo).where(AgentInfo.agent_id == agent_id)
     )
     agent = agent_result.scalar_one_or_none()
-    
+
     log = AgentWorkLog(
         log_id=f"log_{uuid.uuid4().hex[:12]}",
         agent_id=agent_id,
@@ -458,10 +453,10 @@ async def create_agent_work_log(
         model_used=model_used,
         tenant_id=tenant_id,
     )
-    
+
     db.add(log)
     await db.commit()
-    
+
     return Response(data=log.to_dict(), message="日志创建成功")
 
 
@@ -474,21 +469,20 @@ async def get_batch_agent_status(
     db: AsyncSession = Depends(get_db),
 ):
     """批量获取智能体状态"""
-    tenant_id = user.get("tenantId")
-    
+
     result = await db.execute(
         select(AgentStatus)
         .where(AgentStatus.agent_id.in_(agent_ids))
         .order_by(AgentStatus.update_time.desc())
     )
     statuses = result.scalars().all()
-    
+
     # 按agent_id分组，取最新的
     status_map = {}
     for status in statuses:
         if status.agent_id not in status_map:
             status_map[status.agent_id] = status.to_dict()
-    
+
     return Response(data=status_map)
 
 
@@ -499,8 +493,7 @@ async def get_project_agents_status(
     db: AsyncSession = Depends(get_db),
 ):
     """获取项目相关智能体状态"""
-    tenant_id = user.get("tenantId")
-    
+
     # 获取项目相关的智能体状态
     result = await db.execute(
         select(AgentStatus)
@@ -508,14 +501,14 @@ async def get_project_agents_status(
         .order_by(AgentStatus.agent_type, AgentStatus.update_time.desc())
     )
     statuses = result.scalars().all()
-    
+
     # 按类型分组
     status_by_type = {}
     for status in statuses:
         if status.agent_type not in status_by_type:
             status_by_type[status.agent_type] = []
         status_by_type[status.agent_type].append(status.to_dict())
-    
+
     # 获取统计
     stats = {
         "total": len(statuses),
@@ -524,7 +517,7 @@ async def get_project_agents_status(
         "error": sum(1 for s in statuses if s.work_status == AgentWorkStatus.ERROR.value),
         "offline": sum(1 for s in statuses if s.work_status == AgentWorkStatus.OFFLINE.value),
     }
-    
+
     return Response(data={
         "statuses": status_by_type,
         "statistics": stats,

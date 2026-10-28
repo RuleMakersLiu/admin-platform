@@ -3,8 +3,6 @@
 使用 python-telegram-bot 库或直接 HTTP API 与 Telegram 交互。
 支持文本、图片、文件、位置等消息类型的收发。
 """
-import hashlib
-import hmac
 import logging
 from typing import Any, Optional
 
@@ -12,16 +10,15 @@ import httpx
 
 from app.messaging.adapter.base import MessageAdapter
 from app.messaging.schemas import (
-    ChannelType,
     ChannelConfig,
-    UnifiedMessage,
-    UnifiedAttachment,
-    UnifiedLocation,
-    UnifiedContact,
-    MessageType,
+    ChannelType,
     MessageStatus,
+    MessageType,
     SendMessageRequest,
     SendMessageResponse,
+    UnifiedAttachment,
+    UnifiedLocation,
+    UnifiedMessage,
     WebhookPayload,
 )
 

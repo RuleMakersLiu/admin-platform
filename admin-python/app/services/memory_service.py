@@ -3,11 +3,10 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import and_, desc, func, or_, select
+from sqlalchemy import desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent_models import AgentMemory
-from app.schemas.common import PaginatedResult
 
 
 class MemoryType:

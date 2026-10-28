@@ -7,16 +7,15 @@
 - 项目分析：analyze_project 拉取源码→LLM 提炼结构化知识→写库；含 Project Skill 生成与确认
 - 上下文工程：semantic_search（向量+BM25）、get_relevant_context（项目知识+语义检索）、embedding 回填
 """
-import time
-import uuid
-import json
 import hashlib
+import json
 import logging
 import re
+import time
+import uuid
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select, update, delete, func, and_, or_
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import and_, delete, func, or_, select, update
 
 from app.core.config import settings
 from app.core.database import async_session_maker
@@ -1282,7 +1281,7 @@ class KnowledgeService:
             tags.pop()
 
         content_parts = [
-            f"# 流水线交付知识\n",
+            "# 流水线交付知识\n",
             f"- pipeline_id: {pipeline_id}",
             f"- frontend_project: {project_name} ({project_id or '-'})",
             f"- request_classification: {request_classification}",

@@ -1,9 +1,10 @@
 """消息模块数据模式"""
 import time
-from typing import Optional, List, Dict, Any
+from enum import Enum
+from typing import Any, Dict, List, Optional
+
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
-from enum import Enum
 
 
 class ChannelType(str, Enum):

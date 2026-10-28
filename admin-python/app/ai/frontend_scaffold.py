@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List
+from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +137,6 @@ def _tpl_search_bar(comp: dict) -> str:
 
 
 def _tpl_data_table(comp: dict) -> str:
-    cols = comp.get("columns") or []
     row_actions = comp.get("row_actions") or []
     toolbar = comp.get("toolbar") or []
     pagination = comp.get("pagination", True)
@@ -233,7 +232,6 @@ def _form_items(fields: List[dict]) -> str:
         name = f.get("name", "")
         label = f.get("label", name)
         inp = f.get("input", "text")
-        required = "required" if f.get("required") else ""
         placeholder = f.get("placeholder", f"请输入{label}")
 
         if inp == "number":
@@ -302,7 +300,6 @@ def _state_data_table(comp: dict) -> List[str]:
 def _methods_data_table(comp: dict) -> List[str]:
     has_create = "create" in (comp.get("toolbar") or [])
     has_edit = "edit" in (comp.get("row_actions") or [])
-    has_delete = "delete" in (comp.get("row_actions") or [])
     methods = [
         "const fetchList = async () => {\n"
         "  loading.value = true\n"

@@ -1,8 +1,9 @@
 """知识库管理 API"""
+from typing import List, Optional
+
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
-from typing import Optional, List
 
 from app.core.config import settings
 from app.core.deps import get_current_user

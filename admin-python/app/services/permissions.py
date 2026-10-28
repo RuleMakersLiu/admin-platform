@@ -7,7 +7,6 @@ also supporting the common admin-system convention: module:resource:action.
 import json
 from typing import Any, Iterable, List, Sequence, Set
 
-
 SUPER_PERMISSION = "*"
 
 

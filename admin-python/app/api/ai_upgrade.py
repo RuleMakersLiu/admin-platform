@@ -22,9 +22,10 @@ async def get_upgrade_status():
     """获取最近一次升级分析状态"""
     try:
         # 从知识库查询最近的升级报告
+        from sqlalchemy import select
+
         from app.core.database import async_session_maker
         from app.models.agent_models import AgentKnowledge
-        from sqlalchemy import select
 
         async with async_session_maker() as session:
             result = await session.execute(
@@ -55,9 +56,10 @@ async def get_upgrade_status():
 async def get_upgrade_history():
     """获取升级分析历史"""
     try:
+        from sqlalchemy import select
+
         from app.core.database import async_session_maker
         from app.models.agent_models import AgentKnowledge
-        from sqlalchemy import select
 
         async with async_session_maker() as session:
             result = await session.execute(

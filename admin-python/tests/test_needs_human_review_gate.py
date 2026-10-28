@@ -6,9 +6,8 @@ Covers:
 - _run_stage_review: 子智能体评审关卡（注入假 judge，验 passed/feedback 推导）
 """
 import asyncio
-from types import SimpleNamespace
 
-from app.ai import flow_manager, eval_judge
+from app.ai import eval_judge, flow_manager
 
 
 def _run(coro):

@@ -1,6 +1,6 @@
 """Test configuration and fixtures for integration tests"""
-import pytest
 import httpx
+import pytest
 
 # Base URL for the running server
 BASE_URL = "http://localhost:8080"

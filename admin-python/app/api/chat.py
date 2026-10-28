@@ -1,14 +1,20 @@
 """流式聊天 API - SSE + WebSocket"""
 import json
 import logging
-import uuid
 from typing import Optional
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    Depends,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from pydantic import BaseModel, Field
 
-from app.ai.agents import AgentService, AgentType
+from app.ai.agents import AgentService
 from app.core.config import settings
 from app.core.deps import get_current_user
 

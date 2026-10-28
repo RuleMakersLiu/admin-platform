@@ -557,7 +557,7 @@ class SkillManager:
         if not name:
             return "Skill name is required."
         if len(name) > 64:
-            return f"Skill name exceeds 64 characters."
+            return "Skill name exceeds 64 characters."
         if not re.match(r'^[a-z0-9][a-z0-9._-]*$', name):
             return f"Invalid skill name '{name}'. Use lowercase, hyphens, dots, underscores."
         return None

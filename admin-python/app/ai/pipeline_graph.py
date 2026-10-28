@@ -17,17 +17,17 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any, Dict, List, Optional, TypedDict
 
-from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.types import interrupt, Command, Send
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command, Send, interrupt
 
 from app.ai.agents import AgentService, AgentType
 from app.ai.model_router import model_router
-from app.models.agent_models import DevPipeline
-from app.services.memory_service import MemoryService, MemoryType
-from app.services.memory_manager import memory_manager
-from app.services.builtin_memory_provider import BuiltinMemoryProvider
 from app.core.database import async_session_maker
+from app.models.agent_models import DevPipeline
+from app.services.builtin_memory_provider import BuiltinMemoryProvider
+from app.services.memory_manager import memory_manager
+from app.services.memory_service import MemoryService, MemoryType
 
 _builtin_memory = BuiltinMemoryProvider()
 _builtin_memory.initialize(session_id="", tenant_id=1)
@@ -333,8 +333,8 @@ def _parse_output(stage_key: str, raw: str) -> Dict[str, Any]:
 
     if stage_key == "code_review":
         result["review_passed"] = "PASS" in raw and "FAIL" not in raw
-        suggestions = [l.strip() for l in raw.split("\n")
-                       if l.strip().startswith(("- ", "* ", "改进", "建议", "修复", "问题"))][:10]
+        suggestions = [ln.strip() for ln in raw.split("\n")
+                       if ln.strip().startswith(("- ", "* ", "改进", "建议", "修复", "问题"))][:10]
         if suggestions:
             result["fix_suggestions"] = "\n".join(suggestions)
 
@@ -342,8 +342,8 @@ def _parse_output(stage_key: str, raw: str) -> Dict[str, Any]:
         has_fail = "失败" in raw or "FAIL" in raw or "critical" in raw.lower()
         result["tests_passed"] = not has_fail
         if has_fail:
-            bugs = [l.strip() for l in raw.split("\n")
-                    if any(kw in l.lower() for kw in ["bug", "失败", "fail", "error", "critical", "major"])][:10]
+            bugs = [ln.strip() for ln in raw.split("\n")
+                    if any(kw in ln.lower() for kw in ["bug", "失败", "fail", "error", "critical", "major"])][:10]
             result["bug_details"] = "\n".join(bugs) if bugs else raw[:500]
 
     return result

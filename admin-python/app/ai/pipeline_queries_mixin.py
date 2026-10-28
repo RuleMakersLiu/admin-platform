@@ -4,14 +4,15 @@
 """
 import json
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+import time
+from typing import Any, Dict, List
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
-from app.core.config import settings
+from app.ai.pipeline_helpers import _is_existing_feature_change_request
+from app.ai.pipeline_project_context import get_frontend_page_candidates_for_requirement
 from app.core.database import async_session_maker
 from app.models.agent_models import DevPipeline
-from app.ai.pipeline_skills import get_workspace_path
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,9 @@ class PipelineQueriesMixin:
 
     def _parse_stages(self, pipe: DevPipeline) -> Dict[str, Any]:
             """把 pipe.stages_data JSON 反序列化成 dict；缺失则回退初始化。"""
+            # flow_manager 名字经局部 import 取，避免模块级循环依赖（flow_manager 底部 import 本 mixin）
+            from app.ai.flow_manager import _init_stages
+
             if pipe.stages_data:
                 return json.loads(pipe.stages_data)
             return _init_stages()
@@ -73,6 +77,8 @@ class PipelineQueriesMixin:
 
     async def list_intervention_pipelines(self, tenant_id: int) -> List[Dict[str, Any]]:
             """列出租户内所有 needs_human 流水线（供开发人员介入队列）。"""
+            from app.ai.flow_manager import STAGE_NAMES, PipelineStatus
+
             async with async_session_maker() as session:
                 stmt = select(DevPipeline).where(
                     DevPipeline.tenant_id == tenant_id,
@@ -104,6 +110,8 @@ class PipelineQueriesMixin:
             对 frontend_contract_review 模式下的 prototype + 现有功能改造 + 未选页面的场景，
             会现场计算页面候选并塞进 structured_output。
             """
+            from app.ai.flow_manager import PipelineStatus
+
             async with async_session_maker() as session:
                 pipe = await self._load_pipeline(session, pipeline_id)
                 status = self._to_status_dict(pipe)
@@ -164,6 +172,8 @@ class PipelineQueriesMixin:
 
     async def get_pipeline_artifact(self, pipeline_id: str) -> Dict[str, Any]:
             """取对外暴露的产物视图（预览/契约/前端文件/审查/报告）。"""
+            from app.ai.flow_manager import _build_pipeline_artifact
+
             async with async_session_maker() as session:
                 pipe = await self._load_pipeline(session, pipeline_id)
                 stages = self._parse_stages(pipe)

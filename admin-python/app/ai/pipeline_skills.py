@@ -4,11 +4,9 @@
 通过 skill_registry 注册，flow_manager 按阶段调用。
 """
 import asyncio
-import json
 import logging
 import os
 import shutil
-import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -557,6 +555,7 @@ async def git_commit(
     git_config = None
     if git_config_id and db_session:
         from sqlalchemy import select
+
         from app.models.models import SysGitConfig
         result = await db_session.execute(
             select(SysGitConfig).where(SysGitConfig.id == git_config_id)
@@ -565,6 +564,7 @@ async def git_commit(
 
     if not git_config and db_session:
         from sqlalchemy import select
+
         from app.models.models import SysGitConfig
         result = await db_session.execute(
             select(SysGitConfig).where(

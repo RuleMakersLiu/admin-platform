@@ -1,5 +1,4 @@
 """API Integration Tests for Agent System - Running against live server"""
-import pytest
 import httpx
 
 

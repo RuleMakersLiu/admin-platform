@@ -1,9 +1,9 @@
 """激活体验API测试"""
-import asyncio
 import json
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from httpx import AsyncClient, ASGITransport
-from unittest.mock import patch, AsyncMock
+from httpx import ASGITransport, AsyncClient
 
 from app.main import app
 from app.services.activation_service import activation_service
@@ -25,7 +25,7 @@ async def test_warmup():
         base_url="http://test"
     ) as client:
         response = await client.post("/api/v1/activation/warmup")
-        
+
         assert response.status_code == 200
         data = response.json()
         assert data["code"] == 200
@@ -46,7 +46,7 @@ async def test_start_activation():
                 "userName": "测试用户"
             }
         )
-        
+
         assert response.status_code == 200
         data = response.json()
         assert data["code"] == 200
@@ -63,7 +63,7 @@ async def test_get_templates():
         base_url="http://test"
     ) as client:
         response = await client.get("/api/v1/activation/templates")
-        
+
         assert response.status_code == 200
         data = response.json()
         assert data["code"] == 200
@@ -80,17 +80,17 @@ async def test_activation_chat_non_stream():
         tenant_id=1,
         user_name="测试用户"
     )
-    
+
     with patch.object(
-        activation_service.client, 
-        'ainvoke', 
+        activation_service.client,
+        'ainvoke',
         new_callable=AsyncMock
     ) as mock_invoke:
         # 模拟AI响应
         class MockMessage:
             content = "这是测试响应"
         mock_invoke.return_value = MockMessage()
-        
+
         async with AsyncClient(
             transport=ASGITransport(app=app),
             base_url="http://test",
@@ -104,7 +104,7 @@ async def test_activation_chat_non_stream():
                     "useStream": False
                 }
             )
-            
+
             assert response.status_code == 200
             data = response.json()
             assert "reply" in data["data"]
@@ -119,9 +119,9 @@ async def test_activation_chat_stream():
         tenant_id=1,
         user_name="测试用户"
     )
-    
+
     with patch.object(
-        activation_service.client, 
+        activation_service.client,
         'astream'
     ) as mock_stream:
         # 模拟流式响应
@@ -130,9 +130,9 @@ async def test_activation_chat_stream():
             for chunk in chunks:
                 yield f'data: {json.dumps({"type": "chunk", "content": chunk, "done": False})}\n\n'
             yield f'data: {json.dumps({"type": "done", "done": True})}\n\n'
-        
+
         mock_stream.return_value = mock_generator()
-        
+
         async with AsyncClient(
             transport=ASGITransport(app=app),
             base_url="http://test",
@@ -146,10 +146,10 @@ async def test_activation_chat_stream():
                     "useStream": True
                 }
             )
-            
+
             assert response.status_code == 200
             assert "text/event-stream" in response.headers["content-type"]
-            
+
             # 验证响应内容
             content = response.text
             assert "data:" in content
@@ -165,7 +165,7 @@ async def test_complete_activation():
         tenant_id=1,
         user_name="测试用户"
     )
-    
+
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test"
@@ -178,7 +178,7 @@ async def test_complete_activation():
                 "feedback": "体验很好！"
             }
         )
-        
+
         assert response.status_code == 200
         data = response.json()
         assert data["code"] == 200
@@ -195,7 +195,7 @@ async def test_get_activation_status():
         tenant_id=1,
         user_name="测试用户"
     )
-    
+
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test"
@@ -203,7 +203,7 @@ async def test_get_activation_status():
         response = await client.get(
             f"/api/v1/activation/status/{session.activation_id}"
         )
-        
+
         assert response.status_code == 200
         data = response.json()
         assert data["code"] == 200
@@ -228,7 +228,7 @@ async def test_invalid_activation_id():
             }
         )
         assert response.status_code == 404
-        
+
         # 测试完成
         response = await client.post(
             "/api/v1/activation/complete",
@@ -239,7 +239,7 @@ async def test_invalid_activation_id():
         )
         assert response.status_code == 200
         assert response.json()["code"] == 500
-        
+
         # 测试状态
         response = await client.get("/api/v1/activation/status/invalid_id")
         assert response.status_code == 404

@@ -7,10 +7,9 @@ import re
 from typing import Any, Dict, List, Optional
 
 from app.ai.pipeline_helpers import (
-    _is_frontend_page_path,
+    _coerce_string_list,
     _has_new_page_structure_signal,
     _is_existing_feature_change_request,
-    _coerce_string_list,
 )
 
 
@@ -29,7 +28,7 @@ def _is_known_support_page_name(name: str) -> bool:
 
 
 def _page_name_tokens(name: str) -> List[str]:
-    original = re.sub(r"[`'\"""『』（）()\[\]【】]", "", name or "")
+    original = re.sub(r"[`'\""r"『』（）()\[\]【】]", "", name or "")
     text = original
     text = re.sub(r"(页面|页|列表|详情|表单|管理|配置|审核|创建|新建|编辑)", " ", text)
     tokens = [

@@ -10,11 +10,11 @@ from abc import ABC, abstractmethod
 from typing import Any, Optional
 
 from app.messaging.schemas import (
-    ChannelType,
     ChannelConfig,
-    UnifiedMessage,
+    ChannelType,
     SendMessageRequest,
     SendMessageResponse,
+    UnifiedMessage,
     WebhookPayload,
 )
 

@@ -1,6 +1,7 @@
 import json
-import pytest
 from unittest.mock import Mock
+
+import pytest
 
 from app.ai.flow_manager import _normalize_stream_chunk
 from app.api import flow

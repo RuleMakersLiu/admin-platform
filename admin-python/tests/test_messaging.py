@@ -1,14 +1,14 @@
 """多渠道消息模块测试"""
+from app.messaging.adapter.base import adapter_registry
 from app.messaging.schemas import (
-    UnifiedMessage,
-    UnifiedAttachment,
-    ChannelType,
-    MessageType,
-    MessageStatus,
-    SendMessageRequest,
     ChannelConfig,
+    ChannelType,
+    MessageStatus,
+    MessageType,
+    SendMessageRequest,
+    UnifiedAttachment,
+    UnifiedMessage,
 )
-from app.messaging.adapter.base import MessageAdapter, adapter_registry
 
 
 class TestUnifiedMessage:

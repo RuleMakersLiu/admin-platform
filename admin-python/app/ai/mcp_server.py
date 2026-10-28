@@ -14,13 +14,11 @@ MCP Tools:
 import asyncio
 import json
 import logging
-import sys
-from typing import Optional
 
 from mcp.server import Server
-from mcp.server.stdio import stdio_server
 from mcp.server.sse import SseServerTransport
-from mcp.types import Tool, TextContent, CallToolResult
+from mcp.server.stdio import stdio_server
+from mcp.types import TextContent, Tool
 
 logger = logging.getLogger(__name__)
 
@@ -233,7 +231,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
 
         elif name == "stream_chat":
-            from app.ai.agents import AgentService, AgentType
+            from app.ai.agents import AgentService
             agent_service = AgentService()
             session_id = arguments.get("session_id", "")
             if not session_id:

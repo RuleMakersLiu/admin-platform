@@ -2,14 +2,15 @@
 import asyncio
 import json
 import logging
+from typing import Any, Dict, List, Optional, Set
 
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import Response as FastAPIResponse, StreamingResponse
+from fastapi.responses import Response as FastAPIResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, List, Any, Set
 
-from app.ai.flow_manager import pipeline_manager, STAGE_DEFINITIONS, DEFAULT_STAGE_PROMPTS
+from app.ai.flow_manager import DEFAULT_STAGE_PROMPTS, STAGE_DEFINITIONS, pipeline_manager
 from app.core.config import settings
 from app.core.deps import get_current_user
 
@@ -551,6 +552,7 @@ async def start_backend_sandbox(pipeline_id: str):
     前置：admin-python 镜像含 JDK+maven（rebuild 后），mysql-sandbox 服务可达。
     """
     import os
+
     from app.services.backend_runner_service import backend_runner_service
 
     try:
@@ -663,9 +665,9 @@ async def upload_code_files(pipeline_id: str, http_request: Request):
     上传后用户点「人工通过并继续」即可用修复后的代码继续流水线。
     """
     import os
+
     from app.ai.pipeline_skills import get_workspace_path
 
-    tenant_id = _get_tenant_id(http_request)
     form = await http_request.form()
     files = form.getlist("files")
     if not files:
@@ -706,6 +708,7 @@ async def save_code_files(pipeline_id: str, req: SaveCodeRequest, http_request: 
     保存后点「人工通过并继续」即用修改后的代码继续流水线。
     """
     import os as _os
+
     from app.ai.pipeline_skills import get_workspace_path as _gwp
 
     _get_tenant_id(http_request)
@@ -888,7 +891,6 @@ async def git_commit_pipeline(
     pipeline_id: str, req: GitCommitRequest, http_request: Request
 ):
     """手动触发 Git 提交（pipeline 完成后用）。支持自动合并到目标分支 + 冲突自动解决。"""
-    tenant_id = _get_tenant_id(http_request)
     try:
         data = await pipeline_manager.git_commit_pipeline(
             pipeline_id,
@@ -946,7 +948,9 @@ async def list_pipeline_skills():
 async def update_skill_config(pipeline_id: str, request: Request):
     """更新 Pipeline 的 Skill 配置"""
     import json as json_mod
+
     from sqlalchemy import select
+
     from app.core.database import async_session_maker
     from app.models.agent_models import DevPipeline
 
@@ -1016,9 +1020,10 @@ async def get_default_prompts():
 @router.get("/projects/{project_code}/prompts")
 async def get_project_prompts(project_code: str):
     """获取项目的自定义 prompt"""
+    from sqlalchemy import select
+
     from app.core.database import async_session_maker
     from app.models.agent_models import AgentProject
-    from sqlalchemy import select
 
     async with async_session_maker() as session:
         result = await session.execute(
@@ -1040,10 +1045,12 @@ class UpdatePromptsRequest(BaseModel):
 @router.put("/projects/{project_code}/prompts")
 async def update_project_prompts(project_code: str, request: UpdatePromptsRequest):
     """更新项目的自定义 prompt"""
+    import time
+
+    from sqlalchemy import select
+
     from app.core.database import async_session_maker
     from app.models.agent_models import AgentProject
-    from sqlalchemy import select, update
-    import time
 
     async with async_session_maker() as session:
         result = await session.execute(
@@ -1113,9 +1120,10 @@ async def rebuild_project_knowledge_graph(
 @router.get("/projects/{project_id}/knowledge")
 async def get_project_knowledge_api(project_id: str):
     """获取项目知识库"""
-    from app.models.agent_models import ProjectKnowledge
-    from app.core.database import async_session_maker
     from sqlalchemy import select
+
+    from app.core.database import async_session_maker
+    from app.models.agent_models import ProjectKnowledge
 
     async with async_session_maker() as session:
         result = await session.execute(

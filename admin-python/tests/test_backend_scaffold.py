@@ -1,11 +1,9 @@
 """Phase 4b 增量一：后端工程脚手架兜底 + Java Dockerfile / 探测的单测。"""
-from pathlib import Path
 
 import pytest
 
 from app.ai import backend_scaffold as bs
 from app.ai.pipeline_skills import _detect_project_type, _generate_dockerfile
-
 
 # ---------- is_java_backend ----------
 

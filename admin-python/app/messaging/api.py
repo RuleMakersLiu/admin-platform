@@ -3,15 +3,16 @@ import hashlib
 import hmac
 import logging
 import time
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPBearer
 
 from app.api.v1.auth import get_current_user
 from app.messaging.schemas import (
     ChannelType,
+    Response,
     SendMessageRequest,
     WebhookPayload,
-    Response,
 )
 from app.messaging.service.message_router import get_message_router
 
@@ -30,8 +31,8 @@ def _verify_discord_signature(body: bytes, signature: str, timestamp: str,
         logger.warning("Discord webhook: 签名或公钥未配置，跳过验证")
         return True
     try:
-        from nacl.signing import VerifyKey
         from nacl.exceptions import BadSignatureError
+        from nacl.signing import VerifyKey
         verify_key = VerifyKey(bytes.fromhex(public_key))
         message = timestamp.encode() + body
         verify_key.verify(message, bytes.fromhex(signature))

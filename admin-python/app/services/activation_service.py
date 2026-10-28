@@ -3,13 +3,11 @@ import asyncio
 import json
 import logging
 import time
-from typing import AsyncGenerator, Dict, List, Optional
-from datetime import datetime
 import uuid
+from typing import AsyncGenerator, Dict, List, Optional
 
 from app.ai.glm_provider import ChatGLM
 from app.core.config import settings
-from app.core.redis import get_redis_client
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +30,7 @@ class ActivationSession:
         self.started_at = int(time.time() * 1000)
         self.last_activity = self.started_at
         self.messages: List[Dict] = []
-    
+
     def to_dict(self) -> dict:
         return {
             "activationId": self.activation_id,
@@ -48,11 +46,11 @@ class ActivationSession:
 
 class ActivationService:
     """激活体验服务"""
-    
+
     # 缓存键前缀
     CACHE_PREFIX = "activation:"
     SESSION_TTL = 1800  # 30分钟
-    
+
     # 演示模板
     DEMO_TEMPLATES = [
         {
@@ -104,12 +102,12 @@ class ActivationService:
             "icon": "💻",
         },
     ]
-    
+
     def __init__(self):
         self._client: Optional[ChatGLM] = None
         self._sessions: Dict[str, ActivationSession] = {}
         self._warmup_done = False
-    
+
     @property
     def client(self) -> ChatGLM:
         """获取GLM客户端（懒加载）"""
@@ -121,12 +119,12 @@ class ActivationService:
                 temperature=0.7,
             )
         return self._client
-    
+
     async def warmup(self) -> bool:
         """预热AI连接（减少首字延迟）"""
         if self._warmup_done:
             return True
-        
+
         try:
             # 发送一个简单请求来预热连接
             start_time = time.time()
@@ -140,7 +138,7 @@ class ActivationService:
         except Exception as e:
             logger.warning(f"⚠️ AI连接预热失败: {e}")
             return False
-    
+
     def _get_system_prompt(self, user_name: str) -> str:
         """获取系统提示词"""
         return f"""你是{user_name}的AI助手，负责帮助用户快速了解和使用这个管理系统。
@@ -173,7 +171,7 @@ class ActivationService:
         """开始激活流程"""
         # 生成激活ID
         activation_id = f"act_{uuid.uuid4().hex[:12]}"
-        
+
         # 创建会话
         session = ActivationSession(
             activation_id=activation_id,
@@ -181,26 +179,26 @@ class ActivationService:
             tenant_id=tenant_id,
             user_name=user_name,
         )
-        
+
         # 缓存会话
         self._sessions[activation_id] = session
-        
+
         # 并行预热AI连接
         asyncio.create_task(self.warmup())
-        
+
         logger.info(f"🚀 激活流程启动: {activation_id}, 用户: {user_id}")
         return session
-    
+
     def get_welcome_message(self, user_name: str) -> str:
         """获取欢迎消息"""
         return f"""👋 你好，{user_name}！
 
 欢迎来到智能管理系统！我是你的AI助手，可以帮助你：
 
-📋 **任务管理** - 创建、分配和跟踪任务  
-🐛 **Bug管理** - 报告和追踪问题  
-📊 **项目概览** - 查看项目进度和状态  
-🤖 **智能对话** - 代码审查、文档生成等  
+📋 **任务管理** - 创建、分配和跟踪任务
+🐛 **Bug管理** - 报告和追踪问题
+📊 **项目概览** - 查看项目进度和状态
+🤖 **智能对话** - 代码审查、文档生成等
 
 💡 **快速开始**：
 - 点击下方模板快速体验
@@ -216,13 +214,13 @@ class ActivationService:
             "如何查看项目进度？",
             "AI能帮我做什么？",
         ]
-    
+
     async def get_templates(self) -> tuple[List[dict], List[str]]:
         """获取演示模板"""
         templates = self.DEMO_TEMPLATES
         categories = list(set(t["category"] for t in templates))
         return templates, categories
-    
+
     async def chat_stream(
         self,
         activation_id: str,
@@ -233,30 +231,30 @@ class ActivationService:
         if not session:
             yield f"data: {json.dumps({'error': '会话不存在'})}\n\n"
             return
-        
+
         # 更新会话状态
         session.status = "chatting"
         session.message_count += 1
         session.last_activity = int(time.time() * 1000)
-        
+
         # 构建消息历史
         messages = [
             {"role": "system", "content": self._get_system_prompt(session.user_name)},
         ]
-        
+
         # 添加历史消息（最近5轮）
         for msg in session.messages[-10:]:
             messages.append(msg)
-        
+
         # 添加当前消息
         messages.append({"role": "user", "content": message})
         session.messages.append({"role": "user", "content": message})
-        
+
         try:
             # 调用GLM-5（流式）
             start_time = time.time()
             full_content = ""
-            
+
             # 使用真正的流式API
             async for chunk in self.client.astream(messages):
                 if chunk.startswith("data: "):
@@ -269,10 +267,10 @@ class ActivationService:
                         elif data.get("type") == "done":
                             elapsed = time.time() - start_time
                             logger.info(f"⏱️ AI响应耗时: {elapsed:.2f}秒")
-                            
+
                             # 保存AI回复
                             session.messages.append({"role": "assistant", "content": full_content})
-                            
+
                             # 发送完成标记（带耗时信息）
                             done_data = json.dumps({
                                 "type": "done",
@@ -283,14 +281,14 @@ class ActivationService:
                             break
                     except json.JSONDecodeError:
                         continue
-            
+
         except Exception as e:
             logger.error(f"❌ AI对话失败: {e}")
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
-        
+
         finally:
             session.status = "ready"
-    
+
     async def complete_activation(
         self,
         activation_id: str,
@@ -301,26 +299,16 @@ class ActivationService:
         session = self._sessions.get(activation_id)
         if not session:
             return {"status": "error", "message": "会话不存在"}
-        
+
         session.status = "completed"
-        
+
         # 记录激活数据
-        activation_data = {
-            "activationId": activation_id,
-            "userId": session.user_id,
-            "tenantId": session.tenant_id,
-            "messageCount": session.message_count,
-            "duration": int(time.time() * 1000) - session.started_at,
-            "rating": rating,
-            "feedback": feedback,
-            "completedAt": int(time.time() * 1000),
-        }
-        
+
         logger.info(f"✅ 激活完成: {activation_id}, 消息数: {session.message_count}")
-        
+
         # 清理会话
         del self._sessions[activation_id]
-        
+
         return {
             "status": "completed",
             "message": "激活完成，欢迎使用系统！",
@@ -330,7 +318,7 @@ class ActivationService:
                 "探索更多AI功能",
             ],
         }
-    
+
     def get_session(self, activation_id: str) -> Optional[ActivationSession]:
         """获取会话"""
         return self._sessions.get(activation_id)

@@ -1,18 +1,17 @@
 """任务管理API路由"""
+import json
 import time
 import uuid
-import json
-from typing import Optional, List
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Query, Body
+from fastapi import APIRouter, Body, Depends, Query
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, func, and_, or_
 
 from app.api.deps import get_db
 from app.api.v1.auth import get_current_user
+from app.models.task import KanbanTask, TaskActivity, TaskStatus
 from app.schemas.common import Response
-from app.models.task import KanbanTask, TaskActivity, TaskStatus, TaskPriority, TaskType
-from app.models.agent import AgentWorkLog
 
 router = APIRouter(prefix="/tasks", tags=["任务管理"])
 
@@ -34,12 +33,12 @@ async def list_tasks(
 ):
     """获取任务列表"""
     tenant_id = user.get("tenantId")
-    
+
     query = select(KanbanTask).where(
         KanbanTask.tenant_id == tenant_id,
         KanbanTask.is_deleted == 0,
     )
-    
+
     if project_id:
         query = query.where(KanbanTask.project_id == project_id)
     if status:
@@ -57,18 +56,18 @@ async def list_tasks(
                 KanbanTask.description.ilike(f"%{keyword}%"),
             )
         )
-    
+
     # 获取总数
     count_query = select(func.count()).select_from(query.subquery())
     total = (await db.execute(count_query)).scalar()
-    
+
     # 分页
     query = query.order_by(KanbanTask.priority, KanbanTask.create_time.desc())
     query = query.offset((page - 1) * page_size).limit(page_size)
-    
+
     result = await db.execute(query)
     tasks = result.scalars().all()
-    
+
     return Response(data={
         "total": total,
         "page": page,
@@ -96,7 +95,7 @@ async def create_task(
     """创建任务"""
     tenant_id = user.get("tenantId")
     admin_id = user.get("adminId")
-    
+
     task = KanbanTask(
         task_id=f"task_{uuid.uuid4().hex[:12]}",
         project_id=project_id,
@@ -115,11 +114,11 @@ async def create_task(
         estimated_hours=estimated_hours,
         tenant_id=tenant_id,
     )
-    
+
     db.add(task)
     await db.commit()
     await db.refresh(task)
-    
+
     # 记录活动
     activity = TaskActivity(
         activity_id=f"act_{uuid.uuid4().hex[:12]}",
@@ -133,7 +132,7 @@ async def create_task(
     )
     db.add(activity)
     await db.commit()
-    
+
     return Response(data=task.to_dict(), message="任务创建成功")
 
 
@@ -145,7 +144,7 @@ async def get_task(
 ):
     """获取任务详情"""
     tenant_id = user.get("tenantId")
-    
+
     result = await db.execute(
         select(KanbanTask)
         .where(
@@ -155,12 +154,12 @@ async def get_task(
         )
     )
     task = result.scalar_one_or_none()
-    
+
     if not task:
         return Response(code=404, message="任务不存在")
-    
+
     task_dict = task.to_dict()
-    
+
     # 获取活动历史
     activities_result = await db.execute(
         select(TaskActivity)
@@ -169,7 +168,7 @@ async def get_task(
         .limit(50)
     )
     task_dict["activities"] = [a.to_dict() for a in activities_result.scalars().all()]
-    
+
     return Response(data=task_dict)
 
 
@@ -193,7 +192,7 @@ async def update_task(
     """更新任务"""
     tenant_id = user.get("tenantId")
     admin_id = user.get("adminId")
-    
+
     result = await db.execute(
         select(KanbanTask)
         .where(
@@ -202,14 +201,14 @@ async def update_task(
         )
     )
     task = result.scalar_one_or_none()
-    
+
     if not task:
         return Response(code=404, message="任务不存在")
-    
+
     # 构建更新数据
     update_data = {"update_time": int(time.time() * 1000)}
     changes = []
-    
+
     if title is not None and title != task.title:
         changes.append(("title", task.title, title))
         update_data["title"] = title
@@ -243,16 +242,16 @@ async def update_task(
     if progress is not None:
         if 0 <= progress <= 100:
             update_data["progress"] = progress
-    
+
     if not update_data:
         return Response(data=task.to_dict(), message="没有需要更新的内容")
-    
+
     await db.execute(
         update(KanbanTask)
         .where(KanbanTask.task_id == task_id)
         .values(**update_data)
     )
-    
+
     # 记录活动
     for field_name, old_value, new_value in changes:
         activity = TaskActivity(
@@ -268,12 +267,12 @@ async def update_task(
             tenant_id=tenant_id,
         )
         db.add(activity)
-    
+
     await db.commit()
-    
+
     # 获取更新后的任务
     await db.refresh(task)
-    
+
     return Response(data=task.to_dict(), message="任务更新成功")
 
 
@@ -286,7 +285,7 @@ async def delete_task(
     """删除任务"""
     tenant_id = user.get("tenantId")
     admin_id = user.get("adminId")
-    
+
     result = await db.execute(
         select(KanbanTask)
         .where(
@@ -295,16 +294,16 @@ async def delete_task(
         )
     )
     task = result.scalar_one_or_none()
-    
+
     if not task:
         return Response(code=404, message="任务不存在")
-    
+
     await db.execute(
         update(KanbanTask)
         .where(KanbanTask.task_id == task_id)
         .values(is_deleted=1, update_time=int(time.time() * 1000))
     )
-    
+
     # 记录活动
     activity = TaskActivity(
         activity_id=f"act_{uuid.uuid4().hex[:12]}",
@@ -317,7 +316,7 @@ async def delete_task(
     )
     db.add(activity)
     await db.commit()
-    
+
     return Response(message="任务删除成功")
 
 
@@ -334,7 +333,7 @@ async def update_task_status(
     """更新任务状态"""
     tenant_id = user.get("tenantId")
     admin_id = user.get("adminId")
-    
+
     result = await db.execute(
         select(KanbanTask)
         .where(
@@ -343,34 +342,33 @@ async def update_task_status(
         )
     )
     task = result.scalar_one_or_none()
-    
+
     if not task:
         return Response(code=404, message="任务不存在")
-    
+
     old_status = task.status
-    old_column_id = task.column_id
-    
+
     update_data = {
         "status": status,
         "column_id": status,
         "update_time": int(time.time() * 1000),
     }
-    
+
     # 如果完成，设置结束时间和进度100%
     if status == TaskStatus.DONE.value and old_status != TaskStatus.DONE.value:
         update_data["end_time"] = int(time.time() * 1000)
         update_data["progress"] = 100
-    
+
     # 如果开始进行，设置开始时间
     if status == TaskStatus.IN_PROGRESS.value and old_status == TaskStatus.TODO.value:
         update_data["start_time"] = int(time.time() * 1000)
-    
+
     await db.execute(
         update(KanbanTask)
         .where(KanbanTask.task_id == task_id)
         .values(**update_data)
     )
-    
+
     # 记录活动
     activity = TaskActivity(
         activity_id=f"act_{uuid.uuid4().hex[:12]}",
@@ -386,7 +384,7 @@ async def update_task_status(
     )
     db.add(activity)
     await db.commit()
-    
+
     return Response(message="状态更新成功")
 
 
@@ -400,7 +398,7 @@ async def assign_task(
     """分配任务"""
     tenant_id = user.get("tenantId")
     admin_id = user.get("adminId")
-    
+
     result = await db.execute(
         select(KanbanTask)
         .where(
@@ -409,18 +407,18 @@ async def assign_task(
         )
     )
     task = result.scalar_one_or_none()
-    
+
     if not task:
         return Response(code=404, message="任务不存在")
-    
+
     old_assignee = task.assignee
-    
+
     await db.execute(
         update(KanbanTask)
         .where(KanbanTask.task_id == task_id)
         .values(assignee=assignee, update_time=int(time.time() * 1000))
     )
-    
+
     # 记录活动
     activity = TaskActivity(
         activity_id=f"act_{uuid.uuid4().hex[:12]}",
@@ -436,7 +434,7 @@ async def assign_task(
     )
     db.add(activity)
     await db.commit()
-    
+
     return Response(message="任务分配成功")
 
 
@@ -450,7 +448,7 @@ async def get_task_statistics(
 ):
     """获取项目任务统计"""
     tenant_id = user.get("tenantId")
-    
+
     # 总数和各状态统计
     result = await db.execute(
         select(
@@ -465,7 +463,7 @@ async def get_task_statistics(
         .group_by(KanbanTask.status)
     )
     status_counts = {row.status: row.count for row in result.all()}
-    
+
     # 按类型统计
     type_result = await db.execute(
         select(
@@ -480,7 +478,7 @@ async def get_task_statistics(
         .group_by(KanbanTask.task_type)
     )
     type_counts = {row.task_type: row.count for row in type_result.all()}
-    
+
     # 按优先级统计
     priority_result = await db.execute(
         select(
@@ -495,7 +493,7 @@ async def get_task_statistics(
         .group_by(KanbanTask.priority)
     )
     priority_counts = {row.priority: row.count for row in priority_result.all()}
-    
+
     # 按分配者统计
     assignee_result = await db.execute(
         select(
@@ -510,9 +508,9 @@ async def get_task_statistics(
         .group_by(KanbanTask.assignee)
     )
     assignee_counts = {row.assignee: row.count for row in assignee_result.all() if row.assignee}
-    
+
     total = sum(status_counts.values())
-    
+
     return Response(data={
         "total": total,
         "byStatus": status_counts,
@@ -535,7 +533,7 @@ async def batch_update_status(
     """批量更新任务状态"""
     tenant_id = user.get("tenantId")
     admin_id = user.get("adminId")
-    
+
     await db.execute(
         update(KanbanTask)
         .where(
@@ -548,7 +546,7 @@ async def batch_update_status(
             update_time=int(time.time() * 1000),
         )
     )
-    
+
     # 记录活动
     for task_id in task_ids:
         activity = TaskActivity(
@@ -562,9 +560,9 @@ async def batch_update_status(
             tenant_id=tenant_id,
         )
         db.add(activity)
-    
+
     await db.commit()
-    
+
     return Response(message=f"成功更新{len(task_ids)}个任务状态")
 
 
@@ -578,7 +576,7 @@ async def batch_assign(
     """批量分配任务"""
     tenant_id = user.get("tenantId")
     admin_id = user.get("adminId")
-    
+
     await db.execute(
         update(KanbanTask)
         .where(
@@ -590,7 +588,7 @@ async def batch_assign(
             update_time=int(time.time() * 1000),
         )
     )
-    
+
     # 记录活动
     for task_id in task_ids:
         activity = TaskActivity(
@@ -604,9 +602,9 @@ async def batch_assign(
             tenant_id=tenant_id,
         )
         db.add(activity)
-    
+
     await db.commit()
-    
+
     return Response(message=f"成功分配{len(task_ids)}个任务")
 
 
@@ -620,7 +618,7 @@ async def get_task_dependencies(
 ):
     """获取任务依赖"""
     tenant_id = user.get("tenantId")
-    
+
     result = await db.execute(
         select(KanbanTask)
         .where(
@@ -629,19 +627,19 @@ async def get_task_dependencies(
         )
     )
     task = result.scalar_one_or_none()
-    
+
     if not task or not task.dependencies:
         return Response(data={"dependencies": []})
-    
+
     dep_ids = json.loads(task.dependencies)
-    
+
     # 获取依赖任务详情
     dep_result = await db.execute(
         select(KanbanTask)
         .where(KanbanTask.task_id.in_(dep_ids))
     )
     dep_tasks = dep_result.scalars().all()
-    
+
     return Response(data={
         "dependencies": [t.to_dict() for t in dep_tasks],
     })
@@ -656,7 +654,7 @@ async def add_task_dependency(
 ):
     """添加任务依赖"""
     tenant_id = user.get("tenantId")
-    
+
     result = await db.execute(
         select(KanbanTask)
         .where(
@@ -665,22 +663,22 @@ async def add_task_dependency(
         )
     )
     task = result.scalar_one_or_none()
-    
+
     if not task:
         return Response(code=404, message="任务不存在")
-    
+
     # 获取当前依赖
     current_deps = json.loads(task.dependencies) if task.dependencies else []
-    
+
     if depends_on_task_id in current_deps:
         return Response(code=400, message="该依赖已存在")
-    
+
     # 检查是否会造成循环依赖
     if depends_on_task_id == task_id:
         return Response(code=400, message="不能依赖自身")
-    
+
     current_deps.append(depends_on_task_id)
-    
+
     await db.execute(
         update(KanbanTask)
         .where(KanbanTask.task_id == task_id)
@@ -690,7 +688,7 @@ async def add_task_dependency(
         )
     )
     await db.commit()
-    
+
     return Response(message="依赖添加成功")
 
 
@@ -703,7 +701,7 @@ async def remove_task_dependency(
 ):
     """移除任务依赖"""
     tenant_id = user.get("tenantId")
-    
+
     result = await db.execute(
         select(KanbanTask)
         .where(
@@ -712,17 +710,17 @@ async def remove_task_dependency(
         )
     )
     task = result.scalar_one_or_none()
-    
+
     if not task or not task.dependencies:
         return Response(code=404, message="依赖不存在")
-    
+
     current_deps = json.loads(task.dependencies)
-    
+
     if depends_on_task_id not in current_deps:
         return Response(code=404, message="依赖不存在")
-    
+
     current_deps.remove(depends_on_task_id)
-    
+
     await db.execute(
         update(KanbanTask)
         .where(KanbanTask.task_id == task_id)
@@ -732,5 +730,5 @@ async def remove_task_dependency(
         )
     )
     await db.commit()
-    
+
     return Response(message="依赖移除成功")

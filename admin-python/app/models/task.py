@@ -1,14 +1,11 @@
 """任务管理模型 - 扩展版本"""
 import time
 from decimal import Decimal
-from typing import Optional, List
-
-from sqlalchemy import (
-    BigInteger, Integer, Numeric, String, Text, Boolean,
-    ForeignKey, Enum as SQLEnum, Index
-)
-from sqlalchemy.orm import Mapped, mapped_column, relationship
 from enum import Enum
+from typing import Optional
+
+from sqlalchemy import BigInteger, ForeignKey, Index, Integer, Numeric, String, Text
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 
@@ -49,55 +46,55 @@ class KanbanTask(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     task_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    
+
     # 关联
     project_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("agent_project.id"), index=True)
     session_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
     parent_task_id: Mapped[Optional[str]] = mapped_column(String(64))
-    
+
     # 基本信息
     task_code: Mapped[Optional[str]] = mapped_column(String(64))
     title: Mapped[str] = mapped_column(String(255))
     description: Mapped[Optional[str]] = mapped_column(Text)
-    
+
     # 分类
     task_type: Mapped[str] = mapped_column(String(32), default=TaskType.FEATURE.value)
     status: Mapped[str] = mapped_column(String(32), default=TaskStatus.TODO.value, index=True)
     priority: Mapped[str] = mapped_column(String(16), default=TaskPriority.P2.value)
-    
+
     # 看板列
     column_id: Mapped[str] = mapped_column(String(32), default="todo", index=True)
     swimlane_id: Mapped[Optional[str]] = mapped_column(String(32))
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
-    
+
     # 分配
     assignee: Mapped[Optional[str]] = mapped_column(String(32), index=True)
     reporter: Mapped[Optional[str]] = mapped_column(String(32))
-    
+
     # 时间相关
     estimated_hours: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 1))
     actual_hours: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 1))
     progress: Mapped[int] = mapped_column(Integer, default=0)
-    
+
     start_time: Mapped[Optional[int]] = mapped_column(BigInteger)
     due_time: Mapped[Optional[int]] = mapped_column(BigInteger)
     end_time: Mapped[Optional[int]] = mapped_column(BigInteger)
-    
+
     # 依赖和标签
     dependencies: Mapped[Optional[str]] = mapped_column(Text)  # JSON array of task_ids
     tags: Mapped[Optional[str]] = mapped_column(String(500))
-    
+
     # 验收标准
     acceptance_criteria: Mapped[Optional[str]] = mapped_column(Text)
-    
+
     # 统计
     comment_count: Mapped[int] = mapped_column(Integer, default=0)
     attachment_count: Mapped[int] = mapped_column(Integer, default=0)
     subtask_count: Mapped[int] = mapped_column(Integer, default=0)
-    
+
     # 多租户
     tenant_id: Mapped[int] = mapped_column(BigInteger, index=True)
-    
+
     # 审计
     create_time: Mapped[int] = mapped_column(BigInteger, default=lambda: int(time.time() * 1000))
     update_time: Mapped[int] = mapped_column(BigInteger, default=lambda: int(time.time() * 1000), onupdate=lambda: int(time.time() * 1000))
@@ -147,25 +144,25 @@ class KanbanColumn(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     column_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
-    
+
     project_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("agent_project.id"), index=True)
-    
+
     # 列配置
     name: Mapped[str] = mapped_column(String(64))
     color: Mapped[Optional[str]] = mapped_column(String(16))
     icon: Mapped[Optional[str]] = mapped_column(String(32))
-    
+
     # 状态映射
     status: Mapped[str] = mapped_column(String(32))
     wip_limit: Mapped[Optional[int]] = mapped_column(Integer)  # Work In Progress 限制
-    
+
     # 排序
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
-    
+
     # 是否系统列（不可删除）
     is_system: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[int] = mapped_column(Integer, default=1)
-    
+
     tenant_id: Mapped[int] = mapped_column(BigInteger, index=True)
     create_time: Mapped[int] = mapped_column(BigInteger, default=lambda: int(time.time() * 1000))
     update_time: Mapped[int] = mapped_column(BigInteger, default=lambda: int(time.time() * 1000))
@@ -193,22 +190,22 @@ class TaskComment(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     comment_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    
+
     task_id: Mapped[str] = mapped_column(String(64), index=True)
     project_id: Mapped[int] = mapped_column(BigInteger, index=True)
-    
+
     # 评论内容
     content: Mapped[str] = mapped_column(Text)
     author: Mapped[str] = mapped_column(String(32))
     author_type: Mapped[str] = mapped_column(String(32))  # user, agent
-    
+
     # 回复
     parent_comment_id: Mapped[Optional[str]] = mapped_column(String(64))
     reply_to: Mapped[Optional[str]] = mapped_column(String(32))  # 被回复者
-    
+
     # 附件
     attachments: Mapped[Optional[str]] = mapped_column(Text)  # JSON array
-    
+
     tenant_id: Mapped[int] = mapped_column(BigInteger, index=True)
     create_time: Mapped[int] = mapped_column(BigInteger, default=lambda: int(time.time() * 1000))
     is_deleted: Mapped[int] = mapped_column(Integer, default=0)
@@ -234,23 +231,23 @@ class TaskActivity(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     activity_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    
+
     task_id: Mapped[str] = mapped_column(String(64), index=True)
     project_id: Mapped[int] = mapped_column(BigInteger, index=True)
-    
+
     # 活动类型
     activity_type: Mapped[str] = mapped_column(String(32))  # created, updated, status_changed, assigned, commented
     actor: Mapped[str] = mapped_column(String(32))
     actor_type: Mapped[str] = mapped_column(String(32))  # user, agent
-    
+
     # 变更详情
     field_name: Mapped[Optional[str]] = mapped_column(String(64))
     old_value: Mapped[Optional[str]] = mapped_column(Text)
     new_value: Mapped[Optional[str]] = mapped_column(Text)
-    
+
     # 关联
     related_id: Mapped[Optional[str]] = mapped_column(String(64))  # 关联的 comment_id 等
-    
+
     tenant_id: Mapped[int] = mapped_column(BigInteger, index=True)
     create_time: Mapped[int] = mapped_column(BigInteger, default=lambda: int(time.time() * 1000))
 

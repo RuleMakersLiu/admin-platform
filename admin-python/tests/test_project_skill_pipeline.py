@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from app.ai.flow_manager import (
+    DEFAULT_STAGE_PROMPTS,
     _build_auto_repair_summary,
     _build_pipeline_artifact,
     _build_pipeline_skill_snapshot,
@@ -17,7 +18,6 @@ from app.ai.flow_manager import (
     _should_pause_for_stage,
     _validate_page_design_frontend_coverage,
     _validate_project_skill_ready,
-    DEFAULT_STAGE_PROMPTS,
 )
 from app.ai.pipeline_skills import file_cleaner, file_reader, file_writer
 from app.services.knowledge_service import (

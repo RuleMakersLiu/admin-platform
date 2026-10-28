@@ -2,12 +2,12 @@
 import json
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
-from sqlalchemy import and_, desc, func, or_, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.agent_models import AgentBug, AgentProject, AgentTask
+from app.models.agent_models import AgentBug, AgentProject
 from app.schemas.common import PaginatedResult
 
 

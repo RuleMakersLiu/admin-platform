@@ -10,18 +10,18 @@ from app.api.v1.auth import get_current_user
 from app.schemas.common import (
     ChatRequest,
     ChatResponse,
+    CreateBugRequest,
     CreateProjectRequest,
     CreateSessionRequest,
     CreateTaskRequest,
-    CreateBugRequest,
-    UpdateStatusRequest,
     Response,
     SessionItem,
     SessionListResponse,
+    UpdateStatusRequest,
 )
+from app.services.bug_service import BugService
 from app.services.project_service import ProjectService
 from app.services.task_service import TaskService
-from app.services.bug_service import BugService
 
 router = APIRouter(prefix="/agent", tags=["智能分身"])
 
@@ -106,7 +106,6 @@ async def list_projects(
     page_size: int = Query(20, ge=1, le=100),
 ):
     """获取项目列表"""
-    admin_id = user.get("adminId")
     tenant_id = user.get("tenantId")
     is_super = user.get("isSuper")
 

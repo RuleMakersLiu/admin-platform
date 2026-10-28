@@ -3,7 +3,6 @@
 使用飞书开放平台 API 与飞书交互。
 支持文本、富文本、卡片消息、文件等。
 """
-import base64
 import hashlib
 import hmac
 import logging
@@ -14,14 +13,14 @@ import httpx
 
 from app.messaging.adapter.base import MessageAdapter
 from app.messaging.schemas import (
-    ChannelType,
     ChannelConfig,
-    UnifiedMessage,
-    UnifiedAttachment,
-    MessageType,
+    ChannelType,
     MessageStatus,
+    MessageType,
     SendMessageRequest,
     SendMessageResponse,
+    UnifiedAttachment,
+    UnifiedMessage,
     WebhookPayload,
 )
 
@@ -306,7 +305,6 @@ class FeishuAdapter(MessageAdapter):
 
     def _build_message_body(self, request: SendMessageRequest) -> dict:
         """构建飞书消息体"""
-        import json
 
         if request.message_type == MessageType.TEXT:
             return {"text": request.content}
@@ -373,7 +371,7 @@ class FeishuAdapter(MessageAdapter):
             import json
             try:
                 content = json.loads(content)
-            except:
+            except Exception:
                 content = {"text": content}
 
         text_content = content.get("text", "")
@@ -426,7 +424,7 @@ class FeishuAdapter(MessageAdapter):
             import json
             try:
                 content = json.loads(content)
-            except:
+            except Exception:
                 content = {"text": content}
 
         text_content = content.get("text", "")

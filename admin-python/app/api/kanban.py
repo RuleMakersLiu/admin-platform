@@ -1,17 +1,17 @@
 """看板API路由"""
+import json
 import time
 import uuid
-from typing import Optional, List
-import json
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, func, and_, or_
 
 from app.api.deps import get_db
 from app.api.v1.auth import get_current_user
+from app.models.task import KanbanColumn, KanbanTask, TaskActivity, TaskComment, TaskStatus
 from app.schemas.common import Response
-from app.models.task import KanbanTask, KanbanColumn, TaskComment, TaskActivity, TaskStatus
 
 router = APIRouter(prefix="/kanban", tags=["看板管理"])
 
@@ -26,7 +26,7 @@ async def get_kanban_board(
 ):
     """获取项目看板数据"""
     tenant_id = user.get("tenantId")
-    
+
     # 获取列配置
     columns_result = await db.execute(
         select(KanbanColumn)
@@ -39,7 +39,7 @@ async def get_kanban_board(
         .order_by(KanbanColumn.sort_order)
     )
     columns = columns_result.scalars().all()
-    
+
     # 如果没有列配置，创建默认列
     if not columns:
         default_columns = [
@@ -65,7 +65,7 @@ async def get_kanban_board(
         await db.commit()
         for col in columns:
             await db.refresh(col)
-    
+
     # 获取任务
     tasks_result = await db.execute(
         select(KanbanTask)
@@ -77,7 +77,7 @@ async def get_kanban_board(
         .order_by(KanbanTask.column_id, KanbanTask.sort_order)
     )
     tasks = tasks_result.scalars().all()
-    
+
     # 按列分组任务
     tasks_by_column = {}
     for task in tasks:
@@ -85,7 +85,7 @@ async def get_kanban_board(
         if col_id not in tasks_by_column:
             tasks_by_column[col_id] = []
         tasks_by_column[col_id].append(task.to_dict())
-    
+
     # 组装看板数据
     board_data = {
         "columns": [col.to_dict() for col in columns],
@@ -96,7 +96,7 @@ async def get_kanban_board(
             "inProgressTasks": sum(1 for t in tasks if t.status == TaskStatus.IN_PROGRESS.value),
         }
     }
-    
+
     return Response(data=board_data)
 
 
@@ -120,7 +120,7 @@ async def create_kanban_task(
     """创建看板任务"""
     tenant_id = user.get("tenantId")
     admin_id = user.get("adminId")
-    
+
     task = KanbanTask(
         task_id=f"task_{uuid.uuid4().hex[:12]}",
         project_id=project_id,
@@ -137,11 +137,11 @@ async def create_kanban_task(
         acceptance_criteria=acceptance_criteria,
         tenant_id=tenant_id,
     )
-    
+
     db.add(task)
     await db.commit()
     await db.refresh(task)
-    
+
     # 记录活动
     activity = TaskActivity(
         activity_id=f"act_{uuid.uuid4().hex[:12]}",
@@ -155,7 +155,7 @@ async def create_kanban_task(
     )
     db.add(activity)
     await db.commit()
-    
+
     return Response(data=task.to_dict(), message="任务创建成功")
 
 
@@ -170,20 +170,20 @@ async def move_kanban_task(
     """移动任务到新列"""
     tenant_id = user.get("tenantId")
     admin_id = user.get("adminId")
-    
+
     # 获取任务
     result = await db.execute(
         select(KanbanTask)
         .where(KanbanTask.task_id == task_id, KanbanTask.tenant_id == tenant_id)
     )
     task = result.scalar_one_or_none()
-    
+
     if not task:
         return Response(code=404, message="任务不存在")
-    
+
     old_column_id = task.column_id
     old_status = task.status
-    
+
     # 更新任务
     update_data = {
         "column_id": column_id,
@@ -192,13 +192,13 @@ async def move_kanban_task(
     }
     if sort_order is not None:
         update_data["sort_order"] = sort_order
-    
+
     await db.execute(
         update(KanbanTask)
         .where(KanbanTask.task_id == task_id)
         .values(**update_data)
     )
-    
+
     # 如果移动到done列，更新完成时间
     if column_id == "done" and old_column_id != "done":
         await db.execute(
@@ -206,7 +206,7 @@ async def move_kanban_task(
             .where(KanbanTask.task_id == task_id)
             .values(end_time=int(time.time() * 1000), progress=100)
         )
-    
+
     # 记录活动
     activity = TaskActivity(
         activity_id=f"act_{uuid.uuid4().hex[:12]}",
@@ -222,7 +222,7 @@ async def move_kanban_task(
     )
     db.add(activity)
     await db.commit()
-    
+
     return Response(message="任务移动成功")
 
 
@@ -236,24 +236,24 @@ async def assign_kanban_task(
     """分配任务"""
     tenant_id = user.get("tenantId")
     admin_id = user.get("adminId")
-    
+
     result = await db.execute(
         select(KanbanTask)
         .where(KanbanTask.task_id == task_id, KanbanTask.tenant_id == tenant_id)
     )
     task = result.scalar_one_or_none()
-    
+
     if not task:
         return Response(code=404, message="任务不存在")
-    
+
     old_assignee = task.assignee
-    
+
     await db.execute(
         update(KanbanTask)
         .where(KanbanTask.task_id == task_id)
         .values(assignee=assignee, update_time=int(time.time() * 1000))
     )
-    
+
     # 记录活动
     activity = TaskActivity(
         activity_id=f"act_{uuid.uuid4().hex[:12]}",
@@ -269,7 +269,7 @@ async def assign_kanban_task(
     )
     db.add(activity)
     await db.commit()
-    
+
     return Response(message="任务分配成功")
 
 
@@ -282,26 +282,26 @@ async def update_task_progress(
 ):
     """更新任务进度"""
     tenant_id = user.get("tenantId")
-    
+
     if progress < 0 or progress > 100:
         return Response(code=400, message="进度必须在0-100之间")
-    
+
     result = await db.execute(
         select(KanbanTask)
         .where(KanbanTask.task_id == task_id, KanbanTask.tenant_id == tenant_id)
     )
     task = result.scalar_one_or_none()
-    
+
     if not task:
         return Response(code=404, message="任务不存在")
-    
+
     await db.execute(
         update(KanbanTask)
         .where(KanbanTask.task_id == task_id)
         .values(progress=progress, update_time=int(time.time() * 1000))
     )
     await db.commit()
-    
+
     return Response(message="进度更新成功")
 
 
@@ -313,16 +313,16 @@ async def get_kanban_task(
 ):
     """获取任务详情"""
     tenant_id = user.get("tenantId")
-    
+
     result = await db.execute(
         select(KanbanTask)
         .where(KanbanTask.task_id == task_id, KanbanTask.tenant_id == tenant_id)
     )
     task = result.scalar_one_or_none()
-    
+
     if not task:
         return Response(code=404, message="任务不存在")
-    
+
     # 获取评论
     comments_result = await db.execute(
         select(TaskComment)
@@ -334,7 +334,7 @@ async def get_kanban_task(
         .limit(20)
     )
     comments = comments_result.scalars().all()
-    
+
     # 获取活动
     activities_result = await db.execute(
         select(TaskActivity)
@@ -343,7 +343,7 @@ async def get_kanban_task(
         .limit(20)
     )
     activities = activities_result.scalars().all()
-    
+
     return Response(data={
         **task.to_dict(),
         "comments": [c.to_dict() for c in comments],
@@ -359,14 +359,14 @@ async def delete_kanban_task(
 ):
     """删除任务"""
     tenant_id = user.get("tenantId")
-    
+
     await db.execute(
         update(KanbanTask)
         .where(KanbanTask.task_id == task_id, KanbanTask.tenant_id == tenant_id)
         .values(is_deleted=1, update_time=int(time.time() * 1000))
     )
     await db.commit()
-    
+
     return Response(message="任务删除成功")
 
 
@@ -385,17 +385,17 @@ async def add_task_comment(
     """添加任务评论"""
     tenant_id = user.get("tenantId")
     admin_id = user.get("adminId")
-    
+
     # 获取任务以获取project_id
     result = await db.execute(
         select(KanbanTask)
         .where(KanbanTask.task_id == task_id, KanbanTask.tenant_id == tenant_id)
     )
     task = result.scalar_one_or_none()
-    
+
     if not task:
         return Response(code=404, message="任务不存在")
-    
+
     comment = TaskComment(
         comment_id=f"cmt_{uuid.uuid4().hex[:12]}",
         task_id=task_id,
@@ -408,16 +408,16 @@ async def add_task_comment(
         attachments=json.dumps(attachments) if attachments else None,
         tenant_id=tenant_id,
     )
-    
+
     db.add(comment)
-    
+
     # 更新评论数
     await db.execute(
         update(KanbanTask)
         .where(KanbanTask.task_id == task_id)
         .values(comment_count=KanbanTask.comment_count + 1)
     )
-    
+
     # 记录活动
     activity = TaskActivity(
         activity_id=f"act_{uuid.uuid4().hex[:12]}",
@@ -431,7 +431,7 @@ async def add_task_comment(
     )
     db.add(activity)
     await db.commit()
-    
+
     return Response(data=comment.to_dict(), message="评论添加成功")
 
 
@@ -448,7 +448,7 @@ async def create_column(
 ):
     """创建看板列"""
     tenant_id = user.get("tenantId")
-    
+
     # 获取最大排序值
     result = await db.execute(
         select(func.max(KanbanColumn.sort_order))
@@ -459,7 +459,7 @@ async def create_column(
         )
     )
     max_order = result.scalar() or 0
-    
+
     column = KanbanColumn(
         column_id=f"col_{uuid.uuid4().hex[:8]}",
         project_id=project_id,
@@ -471,11 +471,11 @@ async def create_column(
         is_system=0,
         tenant_id=tenant_id,
     )
-    
+
     db.add(column)
     await db.commit()
     await db.refresh(column)
-    
+
     return Response(data=column.to_dict(), message="列创建成功")
 
 
@@ -491,19 +491,19 @@ async def update_column(
 ):
     """更新看板列"""
     tenant_id = user.get("tenantId")
-    
+
     result = await db.execute(
         select(KanbanColumn)
         .where(KanbanColumn.column_id == column_id, KanbanColumn.tenant_id == tenant_id)
     )
     column = result.scalar_one_or_none()
-    
+
     if not column:
         return Response(code=404, message="列不存在")
-    
+
     if column.is_system:
         return Response(code=400, message="系统列不可修改")
-    
+
     update_data = {"update_time": int(time.time() * 1000)}
     if name is not None:
         update_data["name"] = name
@@ -513,14 +513,14 @@ async def update_column(
         update_data["wip_limit"] = wip_limit
     if is_active is not None:
         update_data["is_active"] = 1 if is_active else 0
-    
+
     await db.execute(
         update(KanbanColumn)
         .where(KanbanColumn.column_id == column_id)
         .values(**update_data)
     )
     await db.commit()
-    
+
     return Response(message="列更新成功")
 
 
@@ -532,19 +532,19 @@ async def delete_column(
 ):
     """删除看板列"""
     tenant_id = user.get("tenantId")
-    
+
     result = await db.execute(
         select(KanbanColumn)
         .where(KanbanColumn.column_id == column_id, KanbanColumn.tenant_id == tenant_id)
     )
     column = result.scalar_one_or_none()
-    
+
     if not column:
         return Response(code=404, message="列不存在")
-    
+
     if column.is_system:
         return Response(code=400, message="系统列不可删除")
-    
+
     # 检查是否有任务
     task_result = await db.execute(
         select(func.count())
@@ -555,17 +555,17 @@ async def delete_column(
         )
     )
     task_count = task_result.scalar()
-    
+
     if task_count > 0:
         return Response(code=400, message=f"该列下还有{task_count}个任务，请先移动任务")
-    
+
     await db.execute(
         update(KanbanColumn)
         .where(KanbanColumn.column_id == column_id)
         .values(is_deleted=1, update_time=int(time.time() * 1000))
     )
     await db.commit()
-    
+
     return Response(message="列删除成功")
 
 
@@ -578,7 +578,7 @@ async def reorder_columns(
 ):
     """重新排序列"""
     tenant_id = user.get("tenantId")
-    
+
     for item in column_orders:
         await db.execute(
             update(KanbanColumn)
@@ -589,7 +589,7 @@ async def reorder_columns(
             )
             .values(sort_order=item["sortOrder"], update_time=int(time.time() * 1000))
         )
-    
+
     await db.commit()
-    
+
     return Response(message="列排序更新成功")

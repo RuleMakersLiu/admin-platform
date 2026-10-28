@@ -3,19 +3,16 @@
 每日自动搜索 Top 10 AI 前沿技术，分析是否可应用于本项目，
 生成升级建议，并保存到知识库供流水线 Agent 参考。
 """
-import json
 import logging
 import time
 import uuid
 from datetime import datetime
-from typing import Dict, List, Any, Optional
-
-from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Any, Dict, List
 
 from app.ai.agents import AgentService, AgentType
+from app.core.database import async_session_maker
 from app.models.agent_models import AgentKnowledge
 from app.services.memory_service import MemoryService, MemoryType
-from app.core.database import async_session_maker
 
 logger = logging.getLogger(__name__)
 

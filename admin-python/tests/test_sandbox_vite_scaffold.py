@@ -1,5 +1,4 @@
 """Phase 4a：无项目快照时从生成代码脚手架 Vue3 vite 宿主 + import shim 的离线单测。"""
-from pathlib import Path
 
 from app.services.sandbox_preview_service import SandboxPreviewService
 

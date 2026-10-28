@@ -2,7 +2,7 @@
 import time
 from typing import Optional
 
-from sqlalchemy import BigInteger, Boolean, Integer, Numeric, String, Text
+from sqlalchemy import BigInteger, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base

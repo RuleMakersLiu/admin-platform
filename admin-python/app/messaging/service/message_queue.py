@@ -16,7 +16,7 @@ from typing import Any, Callable, Optional
 import redis.asyncio as redis
 
 from app.core.config import settings
-from app.messaging.schemas import UnifiedMessage, ChannelType
+from app.messaging.schemas import ChannelType, UnifiedMessage
 
 logger = logging.getLogger(__name__)
 
@@ -249,7 +249,6 @@ class MessageQueue:
         )
 
         pending_messages = []
-        current_time = int(time.time() * 1000)
 
         for item in pending:
             msg_id = item["message_id"]

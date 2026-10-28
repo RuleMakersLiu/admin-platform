@@ -5,18 +5,18 @@
 返回空，不阻塞主流程。git clone 走 sandbox_security（剔除 admin 凭据 + 非 root 降权 /
 容器隔离），SSRF 由 _is_safe_git_url 拦截。
 """
+import logging
 import os
 import re
-import logging
 from typing import Any, Dict, List, Tuple
 
+from app.ai.pipeline_helpers import (
+    _is_existing_feature_change_request,
+    _is_frontend_page_path,
+)
+from app.ai.skills import SkillStatus, skill_registry
 from app.core.config import settings
 from app.core.database import async_session_maker
-from app.ai.skills import SkillStatus, skill_registry
-from app.ai.pipeline_helpers import (
-    _is_frontend_page_path,
-    _is_existing_feature_change_request,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -437,8 +437,9 @@ async def _fetch_project_files_from_git(project_id: str) -> Dict[str, str]:
     克隆走沙箱安全原语（剔除 admin 凭据 + 非 root 降权 / 容器隔离），失败返回 {}。
     """
     """从 Generator 获取项目 Git 地址，浅克隆并读取关键文件"""
-    import httpx
     import tempfile
+
+    import httpx
 
     tmp_dir = ""
     try:

@@ -1,7 +1,6 @@
 """token_budget + context-length 错误处理单测（A1：防上下文超窗失败）。"""
-from app.ai.token_budget import estimate_tokens, model_input_window, trim_message_for_window
-from app.ai.glm_provider import MODEL_INPUT_WINDOWS
 from app.ai.flow_manager import _is_context_length_error, _is_retriable_error
+from app.ai.token_budget import estimate_tokens, model_input_window, trim_message_for_window
 
 
 def test_estimate_tokens():

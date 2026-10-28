@@ -129,6 +129,7 @@ def test_run_sandboxed_timeout_kills_and_raises():
 def test_docker_run_argv_shape():
     """_docker_run_argv 组装正确的 docker run 标志：network/user/volumes-from/cwd/env/HOME 覆盖/image/args。"""
     import socket as _socket
+
     from app.services.sandbox_security import _docker_run_argv
     argv = _docker_run_argv(
         ["mvn", "-B", "package"],
@@ -187,7 +188,7 @@ def test_decode_exit():
 def test_spawn_sandboxed_service_process_mode_returns_process_handle():
     """process 模式（默认）：spawn_sandboxed_service 包 spawn_sandboxed 返回 ProcessHandle，
     returncode 随进程退出翻转；acleanup 对已退出进程幂等。"""
-    from app.services.sandbox_security import spawn_sandboxed_service, ProcessHandle
+    from app.services.sandbox_security import ProcessHandle, spawn_sandboxed_service
 
     async def _run():
         h = await spawn_sandboxed_service([PY, "-c", "pass"], cwd="/tmp", name="ignored-in-process-mode")

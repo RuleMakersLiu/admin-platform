@@ -1,19 +1,19 @@
 """API路由汇总"""
 from fastapi import APIRouter
 
-from app.api.v1 import activation, agent, auth, system, tenant
+from app.api.agents import router as agents_router
+from app.api.ai_upgrade import router as ai_upgrade_router
+from app.api.chat import router as chat_router
+from app.api.eval_golden import metrics_router as eval_metrics_router
+from app.api.eval_golden import router as eval_golden_router
 from app.api.flow import router as flow_router
 from app.api.kanban import router as kanban_router
-from app.api.agents import router as agents_router
-from app.api.tasks import router as tasks_router
-from app.api.ai_upgrade import router as ai_upgrade_router
 from app.api.knowledge import router as knowledge_router
-from app.api.skills import router as skills_router
-from app.api.chat import router as chat_router
-from app.api.eval_golden import router as eval_golden_router
-from app.api.eval_golden import metrics_router as eval_metrics_router
-from app.messaging.api import router as messaging_router
 from app.api.metrics import router as metrics_router
+from app.api.skills import router as skills_router
+from app.api.tasks import router as tasks_router
+from app.api.v1 import activation, agent, auth, system, tenant
+from app.messaging.api import router as messaging_router
 
 api_router = APIRouter()
 

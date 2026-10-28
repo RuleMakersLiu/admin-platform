@@ -1,16 +1,16 @@
 """FastAPI 应用入口"""
 import asyncio
-import os
-from contextlib import asynccontextmanager
 import logging
+import os
+import time
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import api_router
 from app.core.config import settings
-from app.core.database import ensure_runtime_schema, init_db
+from app.core.database import ensure_runtime_schema
 
 # 不可信子进程降权到 uid 1500（见 app.services.sandbox_security），需写 root 创建的工作区目录
 # （/data/pipelines、/tmp）。umask=0 → root 创建的目录 0777 / 文件 0666（世界可写），
@@ -32,7 +32,6 @@ async def _daily_ai_upgrade_task():
     while True:
         try:
             # 等到凌晨 2 点
-            now = asyncio.get_event_loop().time()
             import datetime
             dt = datetime.datetime.now()
             target = dt.replace(hour=2, minute=5, second=0, microsecond=0)
@@ -74,8 +73,8 @@ async def _usage_flush_task():
     while True:
         try:
             await asyncio.sleep(30)
-            from app.core.database import async_session_maker
             from app.ai.model_router import model_router
+            from app.core.database import async_session_maker
             async with async_session_maker() as session:
                 flushed = await model_router.flush_usage(session)
                 if flushed:
@@ -90,10 +89,11 @@ async def _usage_flush_task():
 async def _pipeline_watchdog_task():
     """僵尸流水线 watchdog：每 5 分钟扫描 running 状态的 pipeline，
     超过 2 小时未更新的标记为 failed（防止 LLM 卡死/进程崩溃导致僵尸）。"""
-    from sqlalchemy import select, update, text
+    from sqlalchemy import select, update
+
+    from app.ai.flow_manager import PipelineStatus
     from app.core.database import async_session_maker
     from app.models.agent_models import DevPipeline
-    from app.ai.flow_manager import PipelineStatus
     while True:
         try:
             await asyncio.sleep(300)
@@ -128,8 +128,8 @@ async def _pipeline_watchdog_task():
 async def _sandbox_reaper_task():
     """后台任务：周期回收空闲超时的沙箱进程（前端 vite 预览 / 后端 java 服务），
     释放进程与端口，防止长跑泄漏（pipeline 未显式 stop 时兜底）。"""
-    from app.services.sandbox_preview_service import sandbox_preview_service
     from app.services.backend_runner_service import backend_runner_service
+    from app.services.sandbox_preview_service import sandbox_preview_service
     ttl = settings.pipeline_sandbox_idle_ttl
     while True:
         try:
@@ -186,6 +186,7 @@ async def lifespan(app: FastAPI):
     # 从 DB sys_llm_config 加载默认 LLM 配置，覆盖 .env 默认值（让 UI /system/llm 配的模型真正生效）
     try:
         from sqlalchemy import select as _select
+
         from app.core.database import async_session_maker as _asm
         from app.models.models import SysLlmConfig as _Cfg
         async with _asm() as session:
@@ -279,11 +280,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# API 限流（slowapi）——防暴力/滥用
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
-from slowapi.middleware import SlowAPIMiddleware
+# API 限流（slowapi）——防暴力/滥用（在 app 实例化后导入装配，E402 刻意为之）
+from slowapi import Limiter, _rate_limit_exceeded_handler  # noqa: E402
+from slowapi.errors import RateLimitExceeded  # noqa: E402
+from slowapi.middleware import SlowAPIMiddleware  # noqa: E402
+from slowapi.util import get_remote_address  # noqa: E402
 
 limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
 app.state.limiter = limiter

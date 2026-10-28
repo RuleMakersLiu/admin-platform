@@ -1,17 +1,5 @@
 """服务层"""
 from app.services.auth import AuthService
-from app.services.project_service import (
-    ProjectPriority,
-    ProjectService,
-    ProjectStatus,
-)
-from app.services.task_service import (
-    AgentType as TaskAgentType,
-    TaskPriority,
-    TaskService,
-    TaskStatus,
-    TaskType,
-)
 from app.services.bug_service import (
     BugPriority,
     BugService,
@@ -20,11 +8,29 @@ from app.services.bug_service import (
 )
 from app.services.memory_service import (
     AgentType as MemoryAgentType,
+)
+from app.services.memory_service import (
     MemoryService,
     MemoryType,
 )
+from app.services.project_service import (
+    ProjectPriority,
+    ProjectService,
+    ProjectStatus,
+)
+from app.services.task_service import (
+    AgentType as TaskAgentType,
+)
+from app.services.task_service import (
+    TaskPriority,
+    TaskService,
+    TaskStatus,
+    TaskType,
+)
 from app.services.workflow_service import (
     AgentType as WorkflowAgentType,
+)
+from app.services.workflow_service import (
     MessageType,
     WorkflowService,
     WorkflowStage,

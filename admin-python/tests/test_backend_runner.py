@@ -1,5 +1,4 @@
 """Phase 4b-2：后端沙箱 runner 的逻辑单测（mock 句柄，不打真实 mvn/java/container）。"""
-from pathlib import Path
 
 import pytest
 
