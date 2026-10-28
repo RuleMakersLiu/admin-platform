@@ -89,10 +89,7 @@ jobs:
           cache-dependency-path: ${{ matrix.module }}/go.sum
       - run: go build ./...
       - run: go vet ./...
-      # TODO: go test 尚未在无基础设施环境验证过（部分用例可能依赖 redis/docker），
-      # 先设 continue-on-error 收集信号，验证通过后改为强制
       - run: go test ./...
-        continue-on-error: true
 
 # 说明：e2e-tests（Playwright）依赖整套基础设施起容器，暂不入 CI，
 # 后续可用 docker compose 起 pg/redis 后纳入 nightly。
